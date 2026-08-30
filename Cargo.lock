@@ -3778,6 +3778,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mareforge-playtest"
+version = "0.1.0"
+dependencies = [
+ "mareforge-client",
+ "mareforge-server",
+]
+
+[[package]]
 name = "mareforge-protocol"
 version = "0.1.0"
 dependencies = [
@@ -3797,7 +3805,9 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "chrono",
+ "crossbeam-channel",
  "lightyear",
+ "mareforge-client",
  "mareforge-domain-combat",
  "mareforge-domain-crafting",
  "mareforge-domain-economy",

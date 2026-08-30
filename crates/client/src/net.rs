@@ -59,29 +59,55 @@ pub struct MyShip(pub Option<u32>);
 #[derive(Resource, Debug, Clone, Copy, Default)]
 pub struct KnownShipKind(pub Option<ShipKind>);
 
+/// Configuração de rede injetada pelos testes. Quando ausente, o plugin usa
+/// UDP e a identidade persistente normal do client.
+#[derive(Resource, Default)]
+pub struct ClientNetOverride(pub Option<NetConfig>);
+
+/// Identidade usada no `ClientHello` dos testes. Quando ausente, o client
+/// continua lendo `MAREFORGE_IDENTITY`/`~/.mareforge/identity`.
+#[derive(Resource, Default)]
+pub struct ClientIdentity(pub Option<String>);
+
+/// Input fixo usado pelos testes para dirigir um client simulado pelo canal
+/// de rede real, em vez de depender do teclado.
+#[derive(Resource, Default)]
+pub struct ShipInputOverride(pub Option<ShipInput>);
+
 pub struct ClientNetPlugin;
 
 impl Plugin for ClientNetPlugin {
     fn build(&self, app: &mut App) {
-        // Id único por processo: dois clients na mesma máquina não podem
-        // disputar o mesmo client_id no netcode (o servidor rejeita duplicado).
-        let client_id = u64::from(std::process::id());
-        let auth = Authentication::Manual {
-            server_addr: SERVER_ADDR,
-            client_id,
-            private_key: Key::default(),
-            protocol_id: 0,
-        };
-        let net_config = NetConfig::Netcode {
-            auth,
-            io: IoConfig {
-                transport: ClientTransport::UdpSocket(CLIENT_ADDR),
-                ..default()
-            },
-            config: NetcodeConfig::default(),
-        };
+        let net_config = app
+            .world()
+            .get_resource::<ClientNetOverride>()
+            .and_then(|override_config| override_config.0.clone())
+            .unwrap_or_else(|| {
+                // Id único por processo: dois clients na mesma máquina não podem
+                // disputar o mesmo client_id no netcode (o servidor rejeita duplicado).
+                let client_id = u64::from(std::process::id());
+                let auth = Authentication::Manual {
+                    server_addr: SERVER_ADDR,
+                    client_id,
+                    private_key: Key::default(),
+                    protocol_id: 0,
+                };
+                NetConfig::Netcode {
+                    auth,
+                    io: IoConfig {
+                        transport: ClientTransport::UdpSocket(CLIENT_ADDR),
+                        ..default()
+                    },
+                    config: NetcodeConfig::default(),
+                }
+            });
+        app.init_resource::<ClientNetOverride>();
+        app.init_resource::<ClientIdentity>();
+        app.init_resource::<ShipInputOverride>();
         app.init_resource::<MyShip>();
         app.init_resource::<KnownShipKind>();
+        app.init_resource::<crate::nodes::KnownNodes>();
+        app.init_resource::<crate::market::KnownCatalog>();
         app.add_plugins(ClientPlugins::new(ClientConfig {
             shared: shared_config(),
             net: net_config,
@@ -348,9 +374,10 @@ fn log_connecting() {
 fn send_hello_on_connect(
     mut connect: EventReader<ConnectEvent>,
     mut connection_manager: ResMut<ConnectionManager>,
+    identity: Res<ClientIdentity>,
 ) {
     for _ in connect.read() {
-        let token = identity_token();
+        let token = identity.0.clone().unwrap_or_else(identity_token);
         info!("conectado; enviando ClientHello com identidade");
         let _ = connection_manager.send_message::<ReliableChannel, _>(&ClientHello::current(token));
     }
@@ -359,17 +386,25 @@ fn send_hello_on_connect(
 /// Intenção de navegação local — o servidor valida e aplica (Pilar 4).
 fn send_ship_input(
     keys: Res<ButtonInput<KeyCode>>,
+    override_input: Res<ShipInputOverride>,
     mut connection_manager: ResMut<ConnectionManager>,
 ) {
-    // Dev tooling (PRD §39): MAREFORGE_AUTOSAIL=1 segura o W sozinho.
-    let autosail = std::env::var_os("MAREFORGE_AUTOSAIL").is_some();
-    let throttle = if keys.pressed(KeyCode::KeyW) || autosail {
-        1.0
-    } else {
-        0.0
+    let input = match override_input.0 {
+        Some(input) => input,
+        None => {
+            // Dev tooling (PRD §39): MAREFORGE_AUTOSAIL=1 segura o W sozinho.
+            let autosail = std::env::var_os("MAREFORGE_AUTOSAIL").is_some();
+            let throttle = if keys.pressed(KeyCode::KeyW) || autosail {
+                1.0
+            } else {
+                0.0
+            };
+            let turn =
+                (keys.pressed(KeyCode::KeyA) as i32 - keys.pressed(KeyCode::KeyD) as i32) as f32;
+            ShipInput { throttle, turn }
+        }
     };
-    let turn = (keys.pressed(KeyCode::KeyA) as i32 - keys.pressed(KeyCode::KeyD) as i32) as f32;
-    let _ = connection_manager.send_message::<UnreliableChannel, _>(&ShipInput { throttle, turn });
+    let _ = connection_manager.send_message::<UnreliableChannel, _>(&input);
 }
 
 /// Comando de tiro (PRD §19): Q = bordo esquerdo, E = bordo direito.

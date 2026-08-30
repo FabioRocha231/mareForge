@@ -278,20 +278,34 @@ pub fn advance_snapshot_clock(accumulator: &mut f64, delta_secs: f64) -> u32 {
     due
 }
 
+/// Transporte alternativo para testes: o plugin usa UDP em produção e pode
+/// ser trocado antes do build por canais locais do lightyear.
+#[derive(Resource, Default)]
+pub struct ServerTransportOverride(pub Vec<ServerTransport>);
+
 pub struct ServerNetPlugin;
 
 impl Plugin for ServerNetPlugin {
     fn build(&self, app: &mut App) {
-        let net_config = NetConfig::Netcode {
-            io: IoConfig {
-                transport: ServerTransport::UdpSocket(SERVER_ADDR),
-                ..default()
-            },
-            config: NetcodeConfig::default(),
-        };
+        let overridden = app
+            .world()
+            .get_resource::<ServerTransportOverride>()
+            .filter(|overrides| !overrides.0.is_empty())
+            .map(|overrides| overrides.0.clone())
+            .unwrap_or_else(|| vec![ServerTransport::UdpSocket(SERVER_ADDR)]);
+        let net_configs = overridden
+            .into_iter()
+            .map(|transport| NetConfig::Netcode {
+                io: IoConfig {
+                    transport,
+                    ..default()
+                },
+                config: NetcodeConfig::default(),
+            })
+            .collect::<Vec<_>>();
         app.add_plugins(ServerPlugins::new(ServerConfig {
             shared: shared_config(),
-            net: vec![net_config],
+            net: net_configs,
             ..default()
         }));
         app.add_plugins(bevy::state::app::StatesPlugin);
