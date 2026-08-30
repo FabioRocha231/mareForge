@@ -24,8 +24,8 @@ use mareforge_domain_items::{
     CargoHold, Custody, EquipmentStats, ItemCatalog, ItemDefinition, ItemInstance, ItemKind,
 };
 use mareforge_domain_ships::{
-    compute_ship_stats, step_motion, EquippedComponents, MotionInput, MotionTuning, ShipMotion,
-    ShipStats,
+    compute_ship_stats, step_motion, EquippedComponents, MotionInput, MotionTuning, ShipKind,
+    ShipMotion, ShipStats,
 };
 use mareforge_domain_world::{GatheringPolicy, RiskPolicy, WorldMap};
 use mareforge_protocol::{
@@ -33,16 +33,24 @@ use mareforge_protocol::{
     CraftResult, CreateSellOrder, FireBroadside, GatherNode, GatherResult, LootResult, LootWreck,
     MarketResult, NodeUpdated, NodesSnapshot, OrdersSnapshot, ProjectileState, RecipesSnapshot,
     ServerWelcome, ShipDestroyed, ShipInput, ShipState, StorageDepositAll, StorageWithdrawAll,
-    WalletUpdated, WorldSnapshot, WreckRemoved, WreckSpawned, ZoneChanged, PROTOCOL_VERSION,
+    WalletUpdated, WorldSnapshot, WreckState, ZoneChanged, PROTOCOL_VERSION,
 };
 use mareforge_shared::ids::{
-    DestructionEventId, ItemDefinitionId, ItemInstanceId, ShipInstanceId, WreckId, ZoneId,
+    CharacterId, DestructionEventId, ItemDefinitionId, ItemInstanceId, ShipInstanceId, WreckId,
+    ZoneId,
 };
 use smallvec::SmallVec;
 use tracing::{info, warn};
 
 pub const SERVER_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 5000);
 const SIM_HZ: f64 = 30.0;
+/// Frequência de snapshots de rede (ADR-0008): 20 Hz — MENOR que a simulação
+/// (30 Hz, FixedUpdate). A cadência é explícita em [`advance_snapshot_clock`].
+pub const SNAPSHOT_HZ: f64 = 20.0;
+/// Janela de graça pós-desconexão (MF-035): o navio fica no mar, vulnerável;
+/// reconnect dentro da janela reassume o controle. Não é fuga de PvP — é o
+/// oposto: 60s de casco parado e exposto.
+pub const DISCONNECT_GRACE_SECS: u64 = 60;
 
 /// Canal confiável (handshake, tiro, ciclo de wreck e loot).
 #[derive(Channel)]
@@ -229,6 +237,27 @@ pub struct ServerGatherPolicy(pub GatheringPolicy);
 /// (Pilar 3). O mapa fixa em teste que este ponto é Protected.
 pub const DEV_SPAWN: (f32, f32) = (-560.0, 0.0);
 
+/// Relógio do snapshot de rede (ADR-0008, MF-032): acumula o tempo simulado
+/// e dispara o envio na cadência de [`SNAPSHOT_HZ`] (20 Hz), independente do
+/// tick de 30 Hz. Sem arredondar para 15 ou 30: 3s = 90 ticks = 60 snapshots.
+#[derive(Resource, Default)]
+pub struct SnapshotClock {
+    accumulator: f64,
+}
+
+/// Avança o acumulador e devolve quantos snapshots venceram (>= 1 = enviar).
+/// Pura e testável: a prova temporal do MF-032 chega aqui sem ECS.
+pub fn advance_snapshot_clock(accumulator: &mut f64, delta_secs: f64) -> u32 {
+    *accumulator += delta_secs;
+    let period = 1.0 / SNAPSHOT_HZ;
+    let mut due = 0;
+    while *accumulator >= period {
+        *accumulator -= period;
+        due += 1;
+    }
+    due
+}
+
 pub struct ServerNetPlugin;
 
 impl Plugin for ServerNetPlugin {
@@ -255,9 +284,14 @@ impl Plugin for ServerNetPlugin {
         app.insert_resource(ServerWorldMap(WorldMap::vertical_slice()));
         app.insert_resource(ServerRiskPolicy(RiskPolicy::default()));
         app.insert_resource(ServerGatherPolicy(GatheringPolicy::default()));
-        app.insert_resource(crate::market::ServerMarket::new());
+        app.init_resource::<SnapshotClock>();
         app.init_resource::<Metrics>();
         app.init_resource::<crate::nodes::NodeIdCounter>();
+        // Persistência (MF-033/034): o store nasce do ambiente (Postgres de
+        // produção, arquivo de dev, ou nenhum) e amarra mercado e navios.
+        let store = crate::persist::store_from_env();
+        app.insert_resource(store.clone());
+        app.insert_resource(crate::market::ServerMarket::with_store(store.0.clone()));
         let dev_items = DevItems::new();
         app.insert_resource(crate::crafting::DevShips::new());
         app.insert_resource(crate::crafting::DevRecipes::new(&dev_items));
@@ -285,8 +319,6 @@ impl Plugin for ServerNetPlugin {
         app.register_message::<AssignShip>(ChannelDirection::ServerToClient);
         app.register_message::<WorldSnapshot>(ChannelDirection::ServerToClient);
         app.register_message::<ShipDestroyed>(ChannelDirection::ServerToClient);
-        app.register_message::<WreckSpawned>(ChannelDirection::ServerToClient);
-        app.register_message::<WreckRemoved>(ChannelDirection::ServerToClient);
         app.register_message::<LootResult>(ChannelDirection::ServerToClient);
         app.register_message::<ZoneChanged>(ChannelDirection::ServerToClient);
         app.register_message::<NodesSnapshot>(ChannelDirection::ServerToClient);
@@ -302,6 +334,8 @@ impl Plugin for ServerNetPlugin {
         app.add_systems(Startup, crate::nodes::spawn_dev_nodes.after(start_server));
         app.add_systems(Startup, crate::market::load_state.after(start_server));
         app.add_systems(Update, crate::market::save_state);
+        // (Bevy 0.15 implementa tuplas de sistemas até 15 elementos — o
+        // tick do A1 é grande demais para uma tupla só: duas rodadas.)
         app.add_systems(
             FixedUpdate,
             (
@@ -313,15 +347,13 @@ impl Plugin for ServerNetPlugin {
                 crate::nodes::handle_gather,
                 crate::crafting::handle_craft,
                 crate::market::handle_storage,
-                crate::market::handle_sell,
-                crate::market::handle_buy,
-                crate::market::handle_cancel,
-                simulate_and_snapshot,
-                world_status,
-                expire_wrecks,
-                crate::nodes::respawn_nodes,
             ),
         );
+        // Ordem importa: snapshots veem o estado JÁ simulado deste tick.
+        app.add_systems(FixedUpdate, (simulate_world, send_snapshots).chain());
+        app.add_systems(FixedUpdate, (expire_ship_grace, expire_wrecks));
+        app.add_systems(FixedUpdate, world_status);
+        app.add_systems(FixedUpdate, crate::nodes::respawn_nodes);
     }
 }
 
@@ -330,15 +362,20 @@ fn start_server(mut commands: Commands) {
     info!(addr = %SERVER_ADDR, "mareforge server listening");
 }
 
-/// Navio autoritativo: a única cópia do estado que vale (Pilar 4).
+/// Navio autoritativo: a única cópia do estado que vale (Pilar 4). O dono é
+/// um [`CharacterId`] persistente (MF-035); `client_id` é o transporte da
+/// sessão atual (`None` = dono offline, navio em janela de graça).
 #[derive(Component)]
 pub struct ServerShip {
     pub ship_id: u32,
-    pub client_id: ClientId,
-    /// Id numérico do dono (para janelas exclusivas de wreck).
-    pub client_num: u64,
+    /// Sessão atual (`None` durante a janela de graça pós-desconexão).
+    pub client_id: Option<ClientId>,
+    /// Dono persistente — carteira, storage, orders e janelas de wreck.
+    pub character: CharacterId,
     /// Instância do casco (localização `ShipCargo` do porão referencia este id).
     pub ship_instance: ShipInstanceId,
+    /// Tipo do casco (persistência e reconstrução de stats, MF-034/035).
+    pub kind: ShipKind,
     pub input: ShipInput,
     pub hp: u32,
     pub hold: CargoHold,
@@ -351,6 +388,15 @@ pub struct ServerShip {
     pub zone: Option<ZoneId>,
 }
 
+/// Dono desconectado; o navio fica no mar por [`DISCONNECT_GRACE_SECS`],
+/// vulnerável (MF-035). Reconnect dentro da janela reassume; expirou, o
+/// navio é retirado do mundo e persistido (política pós-janela é a âncora
+/// no store — a decisão final de mundo persistido é do próximo capítulo).
+#[derive(Component)]
+pub struct GraceWindow {
+    pub since: Instant,
+}
+
 #[derive(Component)]
 pub struct ServerProjectile(pub Projectile);
 
@@ -361,7 +407,9 @@ pub struct ServerWreck {
     pub wreck_num: u32,
     pub wreck_id: WreckId,
     pub chest: WreckChest,
-    pub exclusive_looter: Option<u64>,
+    /// Personagem com direito exclusivo de saque na janela inicial (MF-035:
+    /// o killer é o personagem, não a conexão).
+    pub exclusive_looter: Option<CharacterId>,
     pub spawned_at: Instant,
     pub x: f32,
     pub y: f32,
@@ -395,16 +443,13 @@ pub(crate) fn spawn_ship_for(
     dev: &DevItems,
     dev_ships: &crate::crafting::DevShips,
     map: &WorldMap,
-    kind: mareforge_domain_ships::ShipKind,
-    client_id: ClientId,
+    kind: ShipKind,
+    client_id: Option<ClientId>,
+    character: CharacterId,
     carry: Vec<Custody>,
 ) -> u32 {
     let ship_id = ship_ids.0;
     ship_ids.0 += 1;
-    let client_num = match client_id {
-        ClientId::Netcode(n) => n,
-        _ => 0,
-    };
     let definition = dev_ships.definition(kind).clone();
     let stats = compute_ship_stats(
         &definition,
@@ -417,7 +462,7 @@ pub(crate) fn spawn_ship_for(
     // Carga dev (PRD §39): mercadoria de teste para o loop econômico —
     // afundou, a carga vai pro wreck e muda de dono. Só o merchant de
     // dev respawn nasce semeado; navios construídos migram a carga real.
-    if kind == mareforge_domain_ships::ShipKind::SmallMerchant {
+    if kind == ShipKind::SmallMerchant {
         hold.insert(
             &dev.catalog,
             ItemInstance::new_resource(ItemInstanceId::new(), dev.timber, 15),
@@ -438,8 +483,9 @@ pub(crate) fn spawn_ship_for(
     commands.spawn((ServerShip {
         ship_id,
         client_id,
-        client_num,
+        character,
         ship_instance,
+        kind,
         input: ShipInput {
             throttle: 0.0,
             turn: 0.0,
@@ -451,6 +497,60 @@ pub(crate) fn spawn_ship_for(
         motion: ShipMotion {
             x: DEV_SPAWN.0,
             y: DEV_SPAWN.1,
+            ..ShipMotion::default()
+        },
+        tuning: MotionTuning::default(),
+        zone,
+    },));
+    ship_id
+}
+
+/// Recria um navio a partir do registro persistido (MF-035: reconnect pós-
+/// janela de graça = mesmos casco, HP, posição e carga embarcada). A zona
+/// vem do mapa na posição salva; fora do mar declarado, `None` (fail-closed
+/// no combate até tocar águas conhecidas de novo).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn restore_ship_from_record(
+    commands: &mut Commands,
+    ship_ids: &mut ShipIdCounter,
+    dev: &DevItems,
+    dev_ships: &crate::crafting::DevShips,
+    map: &WorldMap,
+    record: crate::persist::ShipRecord,
+) -> u32 {
+    let ship_id = ship_ids.0;
+    ship_ids.0 += 1;
+    let definition = dev_ships.definition(record.kind).clone();
+    let stats = compute_ship_stats(
+        &definition,
+        &EquippedComponents::default(),
+        &ItemCatalog::default(),
+    )
+    .expect("stats de navio sem equipamento não podem falhar");
+    let mut hold = CargoHold::new(record.ship_instance, stats.cargo_capacity);
+    if !record.cargo.is_empty() {
+        hold.take_all(&dev.catalog, record.cargo)
+            .expect("carga restaurada cabe: era do mesmo casco");
+    }
+    let zone = map.zone_at(record.x, record.y).ok().map(|z| z.id);
+    commands.spawn((ServerShip {
+        ship_id,
+        client_id: None,
+        character: record.character,
+        ship_instance: record.ship_instance,
+        kind: record.kind,
+        input: ShipInput {
+            throttle: 0.0,
+            turn: 0.0,
+        },
+        hp: record.hp.min(stats.max_hp),
+        hold,
+        battery: BroadsideBattery::default(),
+        stats,
+        motion: ShipMotion {
+            x: record.x,
+            y: record.y,
+            heading: record.heading,
             ..ShipMotion::default()
         },
         tuning: MotionTuning::default(),
@@ -478,23 +578,37 @@ fn handle_connections(
     mut commands: Commands,
     mut connect: EventReader<ConnectEvent>,
     mut disconnect: EventReader<DisconnectEvent>,
-    ships: Query<(Entity, &ServerShip)>,
+    mut ships: Query<(Entity, &mut ServerShip)>,
 ) {
     for connection in connect.read() {
         info!(client = ?connection.client_id, "client conectado; aguardando ClientHello");
     }
     for event in disconnect.read() {
         info!(client = ?event.client_id, "client desconectado");
-        for (entity, ship) in &ships {
-            if ship.client_id == event.client_id {
-                commands.entity(entity).despawn();
-                info!(ship_id = ship.ship_id, "navio do client removido do mundo");
+        for (entity, mut ship) in &mut ships {
+            if ship.client_id == Some(event.client_id) {
+                // MF-035: a conexão caiu, o personagem não. O navio fica no
+                // mar por DISCONNECT_GRACE_SECS, PARADO e VULNERÁVEL —
+                // logout não é fuga de PvP (o casco é um alvo parado na
+                // janela). O dono pode reassumir com o mesmo token.
+                ship.client_id = None;
+                ship.input = ShipInput {
+                    throttle: 0.0,
+                    turn: 0.0,
+                };
+                commands.entity(entity).insert(GraceWindow {
+                    since: Instant::now(),
+                });
+                warn!(ship_id = ship.ship_id, "navio em janela de graça");
             }
         }
     }
 }
 
-/// Handshake (ADR-0011): só spawna navio para hello com versão atual.
+/// Handshake (ADR-0011) + identidade persistente (MF-035). O token do
+/// `ClientHello` resolve o CharacterId; a sessão pode ser nova, mas a
+/// carteira, o storage, as orders e o navio (na janela de graça ou
+/// persistido no store) são do personagem.
 // System Bevy: params são injeção de dependência, não assinatura.
 #[allow(clippy::too_many_arguments)]
 fn handle_hello(
@@ -505,8 +619,9 @@ fn handle_hello(
     dev_ships: Res<crate::crafting::DevShips>,
     dev_recipes: Res<crate::crafting::DevRecipes>,
     mut market: ResMut<crate::market::ServerMarket>,
+    store: Res<crate::persist::StoreHandle>,
     map: Res<ServerWorldMap>,
-    ships: Query<&ServerShip>,
+    mut ships: Query<(Entity, &mut ServerShip)>,
     nodes: Query<&crate::nodes::ServerNode>,
     mut ship_ids: ResMut<ShipIdCounter>,
 ) {
@@ -530,22 +645,108 @@ fn handle_hello(
             );
             continue;
         }
+        // Fail-closed (§69): hello sem token não vira identidade anônima.
+        let token = hello.identity.trim();
+        if token.is_empty() {
+            warn!(client = ?client_id, "hello sem identidade; recusado");
+            let _ = connection_manager.send_message::<ReliableChannel, _>(
+                client_id,
+                &ServerWelcome {
+                    protocol_version: PROTOCOL_VERSION,
+                    accepted: false,
+                },
+            );
+            continue;
+        }
+        let character = market.character(token);
 
-        let already_has_ship = ships.iter().any(|ship| ship.client_id == client_id);
-        if already_has_ship {
+        // Reassumir um navio vivo nesta sessão? (hello duplicado)
+        if let Some((_, ship)) = ships
+            .iter()
+            .find(|(_, ship)| ship.character == character && ship.client_id == Some(client_id))
+        {
+            info!(ship_id = ship.ship_id, "hello duplicado ignorado");
+            continue;
+        }
+        // Reassumir o navio em janela de graça (reconnect, MF-035).
+        if let Some((entity, mut ship)) = ships
+            .iter_mut()
+            .find(|(_, ship)| ship.character == character && ship.client_id.is_none())
+        {
+            ship.client_id = Some(client_id);
+            commands.entity(entity).remove::<GraceWindow>();
+            let ship_id = ship.ship_id;
+            let position = (ship.motion.x, ship.motion.y);
+            let _ = connection_manager.send_message::<ReliableChannel, _>(
+                client_id,
+                &ServerWelcome {
+                    protocol_version: PROTOCOL_VERSION,
+                    accepted: true,
+                },
+            );
+            let _ = connection_manager
+                .send_message::<ReliableChannel, _>(client_id, &AssignShip { ship_id });
+            if let Some(zone) = zone_changed_for(&map.0, ship_id, position.0, position.1) {
+                let _ = connection_manager.send_message::<ReliableChannel, _>(client_id, &zone);
+            }
+            send_initial_world(
+                &mut connection_manager,
+                &dev,
+                &dev_recipes,
+                &nodes,
+                &market,
+                &map,
+                &ships,
+                client_id,
+                character,
+            );
+            info!(ship_id, "sessão reassumida dentro da janela de graça");
+            continue;
+        }
+        // Personagem já conectado por OUTRA sessão: recusa explícita.
+        if ships.iter().any(|(_, ship)| ship.character == character) {
+            warn!(client = ?client_id, "personagem já em mar; hello ignorado");
             continue;
         }
 
-        let ship_id = spawn_ship_for(
-            &mut commands,
-            &mut ship_ids,
-            &dev,
-            &dev_ships,
-            &map.0,
-            mareforge_domain_ships::ShipKind::SmallMerchant,
-            client_id,
-            Vec::new(),
-        );
+        // Navio novo: restaura o persistido (pós-janela, MF-034/035) ou
+        // nasce na doca da Serra.
+        let restored = store
+            .0
+            .as_ref()
+            .and_then(|store| store.load_ship(character).ok().flatten());
+        let (ship_id, position) = match restored {
+            Some(record) => {
+                let position = (record.x, record.y);
+                let ship_id = restore_ship_from_record(
+                    &mut commands,
+                    &mut ship_ids,
+                    &dev,
+                    &dev_ships,
+                    &map.0,
+                    record,
+                );
+                info!(
+                    ship_id,
+                    "navio restaurado do store (personagem volta ao mar)"
+                );
+                (ship_id, position)
+            }
+            None => {
+                let ship_id = spawn_ship_for(
+                    &mut commands,
+                    &mut ship_ids,
+                    &dev,
+                    &dev_ships,
+                    &map.0,
+                    ShipKind::SmallMerchant,
+                    Some(client_id),
+                    character,
+                    Vec::new(),
+                );
+                (ship_id, DEV_SPAWN)
+            }
+        };
         let _ = connection_manager.send_message::<ReliableChannel, _>(
             client_id,
             &ServerWelcome {
@@ -555,43 +756,59 @@ fn handle_hello(
         );
         let _ = connection_manager
             .send_message::<ReliableChannel, _>(client_id, &AssignShip { ship_id });
-        if let Some(zone) = zone_changed_for(&map.0, ship_id, DEV_SPAWN.0, DEV_SPAWN.1) {
+        if let Some(zone) = zone_changed_for(&map.0, ship_id, position.0, position.1) {
             let _ = connection_manager.send_message::<ReliableChannel, _>(client_id, &zone);
         }
-        // Estado inicial do mundo: nodes (MF-018) e receitas (MF-021/022).
-        // Depois deste hello, o client só recebe deltas.
-        let _ = connection_manager.send_message::<ReliableChannel, _>(
-            client_id,
-            &crate::nodes::nodes_snapshot(&nodes, &dev.catalog),
-        );
-        let _ = connection_manager
-            .send_message::<ReliableChannel, _>(client_id, &dev_recipes.snapshot(&dev.catalog));
-        // Economia (MF-023..026): catálogo de itens, carteira (o primeiro
-        // toque semeia o bootstrap dev, §48) e o quadro de orders atual.
-        let _ = connection_manager.send_message::<ReliableChannel, _>(
-            client_id,
-            &crate::market::catalog_snapshot(&dev.catalog),
-        );
-        let client_num = match client_id {
-            ClientId::Netcode(n) => n,
-            _ => 0,
-        };
-        let character = market.character(client_num);
-        let _ = connection_manager.send_message::<ReliableChannel, _>(
-            client_id,
-            &WalletUpdated {
-                gold: market.balance(character).0,
-            },
-        );
-        crate::market::broadcast_orders(
+        send_initial_world(
             &mut connection_manager,
+            &dev,
+            &dev_recipes,
+            &nodes,
             &market,
-            &dev.catalog,
-            &map.0,
+            &map,
             &ships,
+            client_id,
+            character,
         );
         info!(client = ?client_id, ship_id, "navio autoritativo criado");
     }
+}
+
+/// Pacote de estado inicial pós-hello: nodes, receitas, catálogo, carteira
+/// e quadro de orders. Depois disto, o client só recebe deltas.
+#[allow(clippy::too_many_arguments)]
+fn send_initial_world(
+    connection_manager: &mut ConnectionManager,
+    dev: &DevItems,
+    dev_recipes: &crate::crafting::DevRecipes,
+    nodes: &Query<&crate::nodes::ServerNode>,
+    market: &crate::market::ServerMarket,
+    map: &ServerWorldMap,
+    ships: &Query<(Entity, &mut ServerShip)>,
+    client_id: ClientId,
+    character: CharacterId,
+) {
+    let _ = connection_manager.send_message::<ReliableChannel, _>(
+        client_id,
+        &crate::nodes::nodes_snapshot(nodes, &dev.catalog),
+    );
+    let _ = connection_manager
+        .send_message::<ReliableChannel, _>(client_id, &dev_recipes.snapshot(&dev.catalog));
+    let _ = connection_manager.send_message::<ReliableChannel, _>(
+        client_id,
+        &crate::market::catalog_snapshot(&dev.catalog),
+    );
+    let _ = connection_manager.send_message::<ReliableChannel, _>(
+        client_id,
+        &WalletUpdated {
+            gold: market.balance(character).0,
+        },
+    );
+    let viewers: Vec<(Option<ClientId>, CharacterId)> = ships
+        .iter()
+        .map(|(_, ship)| (ship.client_id, ship.character))
+        .collect();
+    crate::market::broadcast_orders(connection_manager, market, &dev.catalog, &map.0, &viewers);
 }
 
 /// Último input vence; validação/clamp acontece dentro do modelo puro.
@@ -602,7 +819,7 @@ fn handle_input(
     for event in input_events.read() {
         let client_id = event.from();
         for mut ship in &mut ships {
-            if ship.client_id == client_id {
+            if ship.client_id == Some(client_id) {
                 let incoming = *event.message();
                 if ship.input != incoming {
                     info!(
@@ -635,7 +852,10 @@ fn handle_fire(
     for event in fire_events.read() {
         let client_id = event.from();
         let side = event.message().side;
-        let Some(mut ship) = ships.iter_mut().find(|ship| ship.client_id == client_id) else {
+        let Some(mut ship) = ships
+            .iter_mut()
+            .find(|ship| ship.client_id == Some(client_id))
+        else {
             continue;
         };
         match map.0.zone_at(ship.motion.x, ship.motion.y) {
@@ -704,7 +924,10 @@ fn handle_loot(
         let client_id = event.from();
         let wreck_num = event.message().wreck_id;
 
-        let Some(mut ship) = ships.iter_mut().find(|ship| ship.client_id == client_id) else {
+        let Some(mut ship) = ships
+            .iter_mut()
+            .find(|ship| ship.client_id == Some(client_id))
+        else {
             continue;
         };
         let Some((wreck_entity, mut wreck)) = wrecks
@@ -726,7 +949,7 @@ fn handle_loot(
         if !can_loot(
             elapsed,
             &wreck_policy.0,
-            ship.client_num,
+            ship.character,
             wreck.exclusive_looter,
         ) {
             info!(wreck_num, "janela exclusiva do killer ainda ativa");
@@ -788,12 +1011,8 @@ fn handle_loot(
                 // primeiro saque venceu fica visível para o resto do tick.
                 wreck.chest.drain();
                 commands.entity(wreck_entity).despawn();
-                let _ = connection_manager.send_message_to_target::<ReliableChannel, _>(
-                    &WreckRemoved {
-                        wreck_id: wreck_num,
-                    },
-                    NetworkTarget::All,
-                );
+                // WreckRemoved não existe mais (MF-031): o client percebe a
+                // remoção pela ausência no próximo snapshot (TTL visual).
                 let _ = connection_manager.send_message::<ReliableChannel, _>(
                     client_id,
                     &LootResult {
@@ -820,10 +1039,12 @@ fn handle_loot(
     }
 }
 
-/// O tick autoritativo: move navios e projéteis, resolve impactos, destrói
-/// com resolução de loot, e transmite o snapshot do mundo.
+/// Simulação autoritativa (30 Hz): move navios e projéteis, resolve
+/// impactos e destruição com resolução de loot (MF-013). O snapshot de rede
+/// é OUTRO sistema ([`send_snapshots`], 20 Hz) — cadências separadas
+/// (ADR-0008, MF-032), recorte por AOI (ADR-0009, MF-031).
 #[allow(clippy::too_many_arguments)]
-fn simulate_and_snapshot(
+fn simulate_world(
     mut commands: Commands,
     mut connection_manager: ResMut<ConnectionManager>,
     mut counter: ResMut<crate::plugin::TickCounter>,
@@ -841,11 +1062,6 @@ fn simulate_and_snapshot(
     mut projectiles: Query<(Entity, &mut ServerProjectile)>,
 ) {
     let dt = time.delta_secs();
-    let mut snapshot = WorldSnapshot {
-        tick: u64::from(counter.0),
-        ships: Vec::with_capacity(ships.iter().count()),
-        projectiles: Vec::with_capacity(projectiles.iter().count()),
-    };
 
     // 1. Física dos navios + geografia de risco (MF-017).
     for (_, mut ship) in &mut ships {
@@ -857,7 +1073,6 @@ fn simulate_and_snapshot(
             motion,
             tuning: motion_tuning,
             battery,
-            hold,
             zone,
             ..
         } = ship.as_mut();
@@ -886,14 +1101,16 @@ fn simulate_and_snapshot(
                         tier = ?found.tier,
                         "navio cruzou uma fronteira"
                     );
-                    let _ = connection_manager.send_message::<ReliableChannel, _>(
-                        *client_id,
-                        &ZoneChanged {
-                            ship_id: *ship_id,
-                            tier: found.tier,
-                            zone_name: found.name.to_string(),
-                        },
-                    );
+                    if let Some(client_id) = client_id {
+                        let _ = connection_manager.send_message::<ReliableChannel, _>(
+                            *client_id,
+                            &ZoneChanged {
+                                ship_id: *ship_id,
+                                tier: found.tier,
+                                zone_name: found.name.to_string(),
+                            },
+                        );
+                    }
                 }
             }
             Err(_) => {
@@ -903,18 +1120,6 @@ fn simulate_and_snapshot(
                 }
             }
         }
-
-        let cargo_weight = hold
-            .used_weight(&dev.catalog)
-            .expect("porão só contém definições do catálogo");
-        snapshot.ships.push(ShipState {
-            ship_id: *ship_id,
-            x: motion.x,
-            y: motion.y,
-            heading: motion.heading,
-            speed: motion.speed,
-            cargo_weight,
-        });
     }
 
     // 2. Projéteis: avançam, expiram, colidem (decisão imutável primeiro).
@@ -932,12 +1137,6 @@ fn simulate_and_snapshot(
             expired.push(projectile_entity);
             continue;
         }
-        snapshot.projectiles.push(ProjectileState {
-            projectile_id: projectile.0.projectile_id,
-            x: projectile.0.x,
-            y: projectile.0.y,
-            heading: projectile.0.heading,
-        });
 
         for (ship_id, (x, y)) in &ship_positions {
             if *ship_id == projectile.0.owner_ship_id {
@@ -996,17 +1195,11 @@ fn simulate_and_snapshot(
                 DamageOutcome::Destroyed => {
                     metrics.ships_destroyed += 1;
                     info!(ship_id = target_ship_id, damage, "SHIP DESTROYED");
-                    let _ = connection_manager.send_message_to_target::<ReliableChannel, _>(
-                        &ShipDestroyed {
-                            ship_id: target_ship_id,
-                        },
-                        NetworkTarget::All,
-                    );
-
                     // Full loot (§22-§25): casco é perda total; parte da carga
                     // sobrevive e vira wreck. Equipamento entra quando existir
                     // (MF-021) — hoje a lista vem vazia.
                     let victim_client_id = ship.client_id;
+                    let victim_character = ship.character;
                     let victim_x = ship.motion.x;
                     let victim_y = ship.motion.y;
                     let cargo: Vec<ItemInstance> = ship
@@ -1015,14 +1208,38 @@ fn simulate_and_snapshot(
                         .iter()
                         .map(|custody| custody.instance.clone())
                         .collect();
-                    Some((entity, victim_client_id, victim_x, victim_y, cargo))
+                    Some((
+                        entity,
+                        victim_client_id,
+                        victim_character,
+                        victim_x,
+                        victim_y,
+                        cargo,
+                    ))
                 }
             }
         };
 
-        let Some((entity, victim_client_id, victim_x, victim_y, cargo)) = sinking else {
+        let Some((entity, victim_client_id, victim_character, victim_x, victim_y, cargo)) = sinking
+        else {
             continue;
         };
+
+        // ShipDestroyed é recortado por AOI (MF-031): só quem enxerga a
+        // vítima fica sabendo do naufrágio (o próprio dono sempre vê).
+        let audience: Vec<ClientId> = ships
+            .iter()
+            .filter(|(_, witness)| {
+                crate::aoi::is_visible((victim_x, victim_y), (witness.motion.x, witness.motion.y))
+            })
+            .filter_map(|(_, witness)| witness.client_id)
+            .collect();
+        let _ = connection_manager.send_message_to_target::<ReliableChannel, _>(
+            &ShipDestroyed {
+                ship_id: target_ship_id,
+            },
+            NetworkTarget::Only(audience),
+        );
 
         let destruction = DestructionEventId::new();
         let outcome = resolve_ship_destruction(destruction, &[], &cargo, &loot_policy.0);
@@ -1046,7 +1263,7 @@ fn simulate_and_snapshot(
             let exclusive = ships
                 .iter()
                 .find(|(_, candidate)| candidate.ship_id == killer_ship_id)
-                .map(|(_, candidate)| candidate.client_num);
+                .map(|(_, candidate)| candidate.character);
             commands.spawn((ServerWreck {
                 wreck_num,
                 wreck_id,
@@ -1056,15 +1273,8 @@ fn simulate_and_snapshot(
                 x: victim_x,
                 y: victim_y,
             },));
-            let _ = connection_manager.send_message_to_target::<ReliableChannel, _>(
-                &WreckSpawned {
-                    wreck_id: wreck_num,
-                    x: victim_x,
-                    y: victim_y,
-                    stack_count: outcome.wreck_items.len() as u32,
-                },
-                NetworkTarget::All,
-            );
+            // WreckSpawned não existe mais (MF-031): o wreck aparece no
+            // snapshot de quem o enxerga, com o mesmo recorte de AOI.
             info!(
                 wreck_num,
                 x = victim_x,
@@ -1077,38 +1287,107 @@ fn simulate_and_snapshot(
         // Dev respawn (PRD §39): conveniência de teste — o loop do
         // vertical slice não pode matar a sessão do jogador. A regra
         // definitiva de reconstrução é o Dock (PRD §38, Phase 7).
-        let new_ship_id = spawn_ship_for(
-            &mut commands,
-            &mut ship_ids,
-            &dev,
-            &dev_ships,
-            &map.0,
-            mareforge_domain_ships::ShipKind::SmallMerchant,
-            victim_client_id,
-            Vec::new(),
-        );
-        let _ = connection_manager.send_message::<ReliableChannel, _>(
-            victim_client_id,
-            &AssignShip {
-                ship_id: new_ship_id,
-            },
-        );
-        if let Some(zone) = zone_changed_for(&map.0, new_ship_id, DEV_SPAWN.0, DEV_SPAWN.1) {
-            let _ = connection_manager.send_message::<ReliableChannel, _>(victim_client_id, &zone);
+        if let Some(victim_client_id) = victim_client_id {
+            let new_ship_id = spawn_ship_for(
+                &mut commands,
+                &mut ship_ids,
+                &dev,
+                &dev_ships,
+                &map.0,
+                ShipKind::SmallMerchant,
+                Some(victim_client_id),
+                victim_character,
+                Vec::new(),
+            );
+            let _ = connection_manager.send_message::<ReliableChannel, _>(
+                victim_client_id,
+                &AssignShip {
+                    ship_id: new_ship_id,
+                },
+            );
+            if let Some(zone) = zone_changed_for(&map.0, new_ship_id, DEV_SPAWN.0, DEV_SPAWN.1) {
+                let _ =
+                    connection_manager.send_message::<ReliableChannel, _>(victim_client_id, &zone);
+            }
+            info!(client = ?victim_client_id, new_ship_id, "dev respawn (PRD §39)");
         }
-        info!(client = ?victim_client_id, new_ship_id, "dev respawn (PRD §39)");
     }
 
     for entity in expired {
         commands.entity(entity).despawn();
     }
 
-    if !snapshot.ships.is_empty() || !snapshot.projectiles.is_empty() {
-        let _ = connection_manager
-            .send_message_to_target::<UnreliableChannel, _>(&snapshot, NetworkTarget::All);
+    counter.0 += 1;
+}
+
+/// Snapshot de rede a 20 Hz (ADR-0008, MF-032) — a simulação corre a 30 Hz;
+/// o relógio ([`SnapshotClock`]) decide se ESTE tick transmite. O estado do
+/// mundo é coletado uma vez e recortado por destinatário via AOI
+/// (ADR-0009, MF-031): cada cliente recebe o SEU mundo.
+#[allow(clippy::too_many_arguments)]
+fn send_snapshots(
+    mut connection_manager: ResMut<ConnectionManager>,
+    counter: Res<crate::plugin::TickCounter>,
+    mut clock: ResMut<SnapshotClock>,
+    dev: Res<DevItems>,
+    time: Res<Time>,
+    ships: Query<(Entity, &mut ServerShip)>,
+    projectiles: Query<(Entity, &mut ServerProjectile)>,
+    wrecks: Query<&ServerWreck>,
+) {
+    if advance_snapshot_clock(&mut clock.accumulator, f64::from(time.delta_secs())) == 0 {
+        return;
     }
 
-    counter.0 += 1;
+    let wreck_states: Vec<WreckState> = wrecks
+        .iter()
+        .map(|wreck| WreckState {
+            wreck_id: wreck.wreck_num,
+            x: wreck.x,
+            y: wreck.y,
+            stack_count: wreck.chest.items().len() as u32,
+        })
+        .collect();
+    let ship_states: Vec<ShipState> = ships
+        .iter()
+        .map(|(_, ship)| ShipState {
+            ship_id: ship.ship_id,
+            x: ship.motion.x,
+            y: ship.motion.y,
+            heading: ship.motion.heading,
+            speed: ship.motion.speed,
+            cargo_weight: ship
+                .hold
+                .used_weight(&dev.catalog)
+                .expect("porão só contém definições do catálogo"),
+        })
+        .collect();
+    let projectile_states: Vec<ProjectileState> = projectiles
+        .iter()
+        .map(|(_, projectile)| ProjectileState {
+            projectile_id: projectile.0.projectile_id,
+            x: projectile.0.x,
+            y: projectile.0.y,
+            heading: projectile.0.heading,
+        })
+        .collect();
+
+    for (_, viewer) in ships.iter() {
+        let Some(client_id) = viewer.client_id else {
+            continue; // navio fantasma (grace): ninguém para receber
+        };
+        let snapshot = crate::aoi::build_snapshot(
+            u64::from(counter.0),
+            (viewer.motion.x, viewer.motion.y),
+            &ship_states,
+            &projectile_states,
+            &wreck_states,
+        );
+        let _ = connection_manager.send_message_to_target::<UnreliableChannel, _>(
+            &snapshot,
+            NetworkTarget::Single(client_id),
+        );
+    }
 }
 
 /// Telemetria de mundo (PRD §72/§71): posição, zona e o pulso econômico
@@ -1155,10 +1434,57 @@ fn world_status(
     }
 }
 
+/// Fim da janela de graça (MF-035): dono não voltou. O navio sai do mundo e
+/// é ancorado no store (casco, HP, posição e carga embarcada) — o próximo
+/// hello do personagem restaura esse registro. NÃO vira wreck: não houve
+/// naufrágio, e persistir E dropar duplicaria a carga. A política final de
+/// "mundo persistido com dono offline" é decisão do próximo capítulo.
+fn expire_ship_grace(
+    mut commands: Commands,
+    store: Res<crate::persist::StoreHandle>,
+    ships: Query<(Entity, &ServerShip, &GraceWindow)>,
+) {
+    for (entity, ship, grace) in &ships {
+        if grace.since.elapsed() < Duration::from_secs(DISCONNECT_GRACE_SECS) {
+            continue;
+        }
+        if let Some(store) = store.0.as_ref() {
+            let record = crate::persist::ShipRecord {
+                ship_instance: ship.ship_instance,
+                character: ship.character,
+                kind: ship.kind,
+                hp: ship.hp,
+                x: ship.motion.x,
+                y: ship.motion.y,
+                heading: ship.motion.heading,
+                cargo: ship.hold.items().to_vec(),
+            };
+            match store.save_ship(&record) {
+                Ok(()) => info!(
+                    ship_id = ship.ship_id,
+                    x = ship.motion.x,
+                    y = ship.motion.y,
+                    "navio persistido no store (fim da janela de graça)"
+                ),
+                Err(error) => warn!(
+                    error = %error,
+                    ship_id = ship.ship_id,
+                    "falha ao persistir navio; ele some do mundo"
+                ),
+            }
+        }
+        commands.entity(entity).despawn();
+        info!(
+            ship_id = ship.ship_id,
+            "janela de graça expirou; navio deixou o mar"
+        );
+    }
+}
+
 /// Wrecks expirados somem do mar (PRD §26: 5 minutos; tuning no recurso).
+/// Sem broadcast (MF-031): cada client percebe pela ausência no snapshot.
 fn expire_wrecks(
     mut commands: Commands,
-    mut connection_manager: ResMut<ConnectionManager>,
     wreck_policy: Res<ServerWreckPolicy>,
     wrecks: Query<(Entity, &ServerWreck)>,
 ) {
@@ -1168,13 +1494,51 @@ fn expire_wrecks(
                 wreck_num = wreck.wreck_num,
                 "wreck expirou e afundou de vez"
             );
-            let _ = connection_manager.send_message_to_target::<ReliableChannel, _>(
-                &WreckRemoved {
-                    wreck_id: wreck.wreck_num,
-                },
-                NetworkTarget::All,
-            );
             commands.entity(entity).despawn();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// MF-032 (ADR-0008): 3 segundos de simulação a 30 Hz = 90 ticks e
+    /// ~60 snapshots a 20 Hz. O relógio é o acoplador entre os dois — e a
+    /// tolerância é mínima (±1), só o essencial para aritmética de ponto
+    /// flutuante em 1/30 e 1/20.
+    #[test]
+    fn snapshot_clock_beats_at_20hz_over_a_30hz_tick() {
+        let mut accumulator = 0.0f64;
+        let mut snapshots = 0u32;
+        let mut ticks = 0u32;
+        while ticks < 90 {
+            snapshots += advance_snapshot_clock(&mut accumulator, 1.0 / SIM_HZ);
+            ticks += 1;
+        }
+        assert_eq!(ticks, 90);
+        assert!(
+            (60i32 - snapshots as i32).abs() <= 1,
+            "esperado ~60 snapshots em 3s, veio {snapshots}"
+        );
+    }
+
+    /// Simulação e snapshot não são a mesma cadência: há ticks de 30 Hz em
+    /// que NENHUM snapshot vence (30/20 = 1,5 — alterna 2 e 1 ticks).
+    #[test]
+    fn not_every_simulation_tick_sends_a_snapshot() {
+        let mut accumulator = 0.0f64;
+        let due: Vec<u32> = (0..30)
+            .map(|_| advance_snapshot_clock(&mut accumulator, 1.0 / SIM_HZ))
+            .collect();
+        let sent = due.iter().sum::<u32>();
+        assert!(
+            (20i32 - sent as i32).abs() <= 1,
+            "30 ticks de simulação devem gerar ~20 snapshots, veio {sent}"
+        );
+        assert!(
+            due.contains(&0),
+            "deve haver tick sem snapshot (30 Hz ≠ 20 Hz)"
+        );
     }
 }

@@ -3699,6 +3699,7 @@ dependencies = [
  "mareforge-domain-world",
  "mareforge-protocol",
  "mareforge-shared",
+ "uuid",
 ]
 
 [[package]]
@@ -3806,8 +3807,11 @@ dependencies = [
  "serde",
  "serde_json",
  "smallvec",
+ "sqlx",
+ "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

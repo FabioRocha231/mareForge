@@ -1,18 +1,30 @@
 //! Visual dos navios e projéteis replicados (PRD MF-006/009). Cada estado do
 //! snapshot tem uma entidade visual aqui; o client faz lerp suave entre
 //! snapshots. Sem predição local — a verdade é o servidor (Pilar 4).
+//!
+//! AOI (MF-031): entidades que SAEM do snapshot não somem na hora — ficam
+//! como last-known-state por [`STALE_VISUAL_TTL`] segundos e só então o
+//! visual sai. Wrecks chegam pelo snapshot (protocolo v8), com o mesmo TTL.
 
 use std::collections::HashSet;
+use std::time::Instant;
 
 use bevy::ecs::prelude::*;
 use bevy::prelude::*;
 use lightyear::prelude::ClientReceiveMessage;
-use mareforge_protocol::{ProjectileState, ShipState, WorldSnapshot, WreckSpawned};
+use mareforge_protocol::{ProjectileState, ShipState, WorldSnapshot};
+
+/// Quanto tempo um visual sobrevive sem aparecer no snapshot (ADR-0009:
+/// last-known-state até expirar). Curto de propósito: é máscara de pop do
+/// AOI, não verdade sobre o mundo.
+pub const STALE_VISUAL_TTL: f32 = 2.0;
+
 /// Entidade visual de um navio autoritativo. `target` é o último estado
 /// autoritativo conhecido (alvo do lerp visual).
 #[derive(Component)]
 pub struct ShipVisual {
     pub target: ShipState,
+    pub last_seen: Instant,
 }
 
 /// Navios que já afundaram: snapshots em voo não podem ressuscitá-los.
@@ -46,6 +58,7 @@ pub fn upsert_ship_visuals(
         for (_, mut visual) in existing.iter_mut() {
             if visual.target.ship_id == state.ship_id {
                 visual.target = *state;
+                visual.last_seen = Instant::now();
                 updated = true;
                 break;
             }
@@ -68,7 +81,10 @@ pub fn upsert_ship_visuals(
         };
         let material = materials.add(color);
         commands.spawn((
-            ShipVisual { target: *state },
+            ShipVisual {
+                target: *state,
+                last_seen: Instant::now(),
+            },
             Mesh2d(hull),
             MeshMaterial2d(material),
             Transform::from_xyz(state.x, state.y, 0.0),
@@ -78,6 +94,25 @@ pub fn upsert_ship_visuals(
             mine = is_mine,
             "navio visível no horizonte"
         );
+    }
+}
+
+/// Last-known-state (MF-031): visual que parou de aparecer no snapshot
+/// permanece por TTL curto e depois sai — sem pop brusco na fronteira do AOI.
+pub fn expire_stale_visuals(
+    mut commands: Commands,
+    ships: Query<(Entity, &ShipVisual)>,
+    wrecks: Query<(Entity, &WreckVisual)>,
+) {
+    for (entity, visual) in &ships {
+        if visual.last_seen.elapsed().as_secs_f32() > STALE_VISUAL_TTL {
+            commands.entity(entity).despawn();
+        }
+    }
+    for (entity, visual) in &wrecks {
+        if visual.last_seen.elapsed().as_secs_f32() > STALE_VISUAL_TTL {
+            commands.entity(entity).despawn();
+        }
     }
 }
 
@@ -175,24 +210,46 @@ fn apply_lerp(transform: &mut Transform, x: &f32, y: &f32, heading: &f32, factor
 }
 
 /// Destroço flutuando no mar (PRD §26): carga esperando um saqueador.
+/// Aparece/desaparece pelo snapshot AOI (protocolo v8) com TTL visual.
 #[derive(Component)]
 pub struct WreckVisual {
     pub wreck_num: u32,
+    pub last_seen: Instant,
 }
 
-pub fn spawn_wreck_visuals(
+/// Wrecks vindos do snapshot do destinatário (MF-031): upsert de visuais e
+/// reconstrução do `KnownWrecks` (o saque do client usa as posições).
+pub fn upsert_wreck_visuals(
     mut commands: Commands,
-    mut spawned: EventReader<ClientReceiveMessage<WreckSpawned>>,
+    mut snapshot_events: EventReader<ClientReceiveMessage<WorldSnapshot>>,
+    mut known: ResMut<crate::net::KnownWrecks>,
+    mut existing: Query<(Entity, &mut WreckVisual)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
-    for event in spawned.read() {
-        let wreck = event.message();
+    let Some(event) = snapshot_events.read().last() else {
+        return;
+    };
+    known.0.clear();
+    for wreck in &event.message().wrecks {
+        known.0.insert(wreck.wreck_id, Vec2::new(wreck.x, wreck.y));
+        let mut updated = false;
+        for (_, mut visual) in existing.iter_mut() {
+            if visual.wreck_num == wreck.wreck_id {
+                visual.last_seen = Instant::now();
+                updated = true;
+                break;
+            }
+        }
+        if updated {
+            continue;
+        }
         let debris = meshes.add(Rectangle::new(14.0, 14.0));
         let soaked_wood = materials.add(Color::srgb(0.38, 0.27, 0.16));
         commands.spawn((
             WreckVisual {
                 wreck_num: wreck.wreck_id,
+                last_seen: Instant::now(),
             },
             Mesh2d(debris),
             MeshMaterial2d(soaked_wood),

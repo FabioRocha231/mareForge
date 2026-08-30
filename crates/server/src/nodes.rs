@@ -138,7 +138,10 @@ pub fn handle_gather(
         let client_id = event.from();
         let node_num = event.message().node_id;
 
-        let Some(mut ship) = ships.iter_mut().find(|ship| ship.client_id == client_id) else {
+        let Some(mut ship) = ships
+            .iter_mut()
+            .find(|ship| ship.client_id == Some(client_id))
+        else {
             continue;
         };
         let Some(mut server_node) = nodes

@@ -142,12 +142,13 @@ impl Default for WreckPolicy {
 }
 
 /// Quem pode saquear agora. `requester`/`exclusive_looter` são chaves opacas
-/// do dono (o servidor usa o id numérico do client).
+/// do dono (MF-035: o servidor amarra com `CharacterId` — a janela é do
+/// personagem, não da sessão/conexão).
 pub fn can_loot(
     elapsed_secs: f32,
     policy: &WreckPolicy,
-    requester: u64,
-    exclusive_looter: Option<u64>,
+    requester: mareforge_shared::ids::CharacterId,
+    exclusive_looter: Option<mareforge_shared::ids::CharacterId>,
 ) -> bool {
     match exclusive_looter {
         Some(killer) if elapsed_secs < policy.exclusive_window_secs => requester == killer,
@@ -321,15 +322,18 @@ mod tests {
 
     #[test]
     fn wreck_window_is_exclusive_to_killer_then_ffa() {
+        use mareforge_shared::ids::CharacterId;
         let policy = WreckPolicy::default();
+        let killer = CharacterId::new();
+        let other = CharacterId::new();
 
         // Dentro da janela: só o killer.
-        assert!(can_loot(10.0, &policy, 1, Some(1)));
-        assert!(!can_loot(10.0, &policy, 2, Some(1)));
+        assert!(can_loot(10.0, &policy, killer, Some(killer)));
+        assert!(!can_loot(10.0, &policy, other, Some(killer)));
         // Janela passou: free-for-all.
-        assert!(can_loot(50.0, &policy, 2, Some(1)));
+        assert!(can_loot(50.0, &policy, other, Some(killer)));
         // Sem exclusivo: qualquer um.
-        assert!(can_loot(1.0, &policy, 2, None));
+        assert!(can_loot(1.0, &policy, other, None));
     }
 
     #[test]

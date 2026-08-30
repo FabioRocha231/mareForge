@@ -222,7 +222,7 @@ pub fn handle_craft(
         let recipe_num = event.message().recipe_id;
         let Some((ship_entity, mut ship)) = ships
             .iter_mut()
-            .find(|(_, ship)| ship.client_id == client_id)
+            .find(|(_, ship)| ship.client_id == Some(client_id))
         else {
             continue;
         };
@@ -348,7 +348,8 @@ fn build_ship_for_job(
             .expect("can_construct validou os ingredientes");
     }
 
-    let victim_client_id = old_ship.client_id;
+    let owner_client = old_ship.client_id;
+    let owner_character = old_ship.character;
     let old_ship_id = old_ship.ship_id;
     commands.entity(old_entity).despawn();
     metrics.ships_constructed += 1;
@@ -359,17 +360,21 @@ fn build_ship_for_job(
         dev_ships,
         map,
         job.kind,
-        victim_client_id,
+        owner_client,
+        owner_character,
         cargo,
     );
-    let _ = connection_manager.send_message::<ReliableChannel, _>(
-        victim_client_id,
-        &AssignShip {
-            ship_id: new_ship_id,
-        },
-    );
-    if let Some(zone) = crate::net::zone_changed_for(map, new_ship_id, DEV_SPAWN.0, DEV_SPAWN.1) {
-        let _ = connection_manager.send_message::<ReliableChannel, _>(victim_client_id, &zone);
+    if let Some(client_id) = owner_client {
+        let _ = connection_manager.send_message::<ReliableChannel, _>(
+            client_id,
+            &AssignShip {
+                ship_id: new_ship_id,
+            },
+        );
+        if let Some(zone) = crate::net::zone_changed_for(map, new_ship_id, DEV_SPAWN.0, DEV_SPAWN.1)
+        {
+            let _ = connection_manager.send_message::<ReliableChannel, _>(client_id, &zone);
+        }
     }
     info!(
         old_ship_id,

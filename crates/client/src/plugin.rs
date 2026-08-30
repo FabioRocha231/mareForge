@@ -5,8 +5,8 @@ use crate::market::{send_market_input, MarketPlugin};
 use crate::net::ClientNetPlugin;
 use crate::nodes::NodePlugin;
 use crate::ship::{
-    lerp_projectile_visuals, lerp_ship_visuals, spawn_wreck_visuals, update_cargo_readout,
-    upsert_projectile_visuals, upsert_ship_visuals, CargoReadout,
+    expire_stale_visuals, lerp_projectile_visuals, lerp_ship_visuals, update_cargo_readout,
+    upsert_projectile_visuals, upsert_ship_visuals, upsert_wreck_visuals, CargoReadout,
 };
 use crate::zone::ZonePlugin;
 
@@ -30,7 +30,8 @@ impl Plugin for ClientPlugin {
                     lerp_ship_visuals,
                     upsert_projectile_visuals,
                     lerp_projectile_visuals,
-                    spawn_wreck_visuals,
+                    upsert_wreck_visuals,
+                    expire_stale_visuals,
                     update_cargo_readout,
                     crate::ship::follow_camera,
                     send_craft_input,

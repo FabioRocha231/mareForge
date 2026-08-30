@@ -21,7 +21,7 @@ use mareforge_protocol::{
     CraftResult, CreateSellOrder, FireBroadside, GatherNode, GatherResult, LootResult, LootWreck,
     MarketResult, NodeUpdated, NodesSnapshot, OrdersSnapshot, RecipesSnapshot, ServerWelcome,
     ShipDestroyed, ShipInput, StorageDepositAll, StorageWithdrawAll, WalletUpdated, WorldSnapshot,
-    WreckRemoved, WreckSpawned, ZoneChanged, PROTOCOL_VERSION,
+    ZoneChanged, PROTOCOL_VERSION,
 };
 
 pub const SERVER_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 5000);
@@ -101,8 +101,6 @@ impl Plugin for ClientNetPlugin {
         app.register_message::<AssignShip>(ChannelDirection::ServerToClient);
         app.register_message::<WorldSnapshot>(ChannelDirection::ServerToClient);
         app.register_message::<ShipDestroyed>(ChannelDirection::ServerToClient);
-        app.register_message::<WreckSpawned>(ChannelDirection::ServerToClient);
-        app.register_message::<WreckRemoved>(ChannelDirection::ServerToClient);
         app.register_message::<LootResult>(ChannelDirection::ServerToClient);
         app.register_message::<ZoneChanged>(ChannelDirection::ServerToClient);
         app.register_message::<NodesSnapshot>(ChannelDirection::ServerToClient);
@@ -132,16 +130,61 @@ impl Plugin for ClientNetPlugin {
             (
                 handle_handshake,
                 handle_ship_destroyed,
-                handle_wreck_lifecycle,
+                reset_on_disconnect,
                 handle_loot_result,
             ),
         );
     }
 }
 
-/// Wrecks conhecidos pelo client (posições para saque e visuais).
+/// Wrecks conhecidos pelo client (posições para saque e visuais). A fonte
+/// agora é o snapshot AOI (MF-031) — `ship.rs` reconstrói a cada quadro.
 #[derive(Resource, Debug, Default)]
 pub struct KnownWrecks(pub HashMap<u32, Vec2>);
+
+/// Token de identidade persistente do jogador (MF-035): a MESMA identidade
+/// sobrevive a restart de client — a conexão é descartável, o personagem
+/// não. Ordem: `MAREFORGE_IDENTITY` (testes/smoke) → `~/.mareforge/identity`
+/// → gera e salva. Fail-closed seria negar jogo; aqui gerar é a política
+/// dev declarada (identidade nova = personagem novo, sem inventar dono).
+fn identity_token() -> String {
+    if let Ok(token) = std::env::var("MAREFORGE_IDENTITY") {
+        if !token.trim().is_empty() {
+            return token;
+        }
+    }
+    let path = std::env::var("HOME")
+        .map(|home| {
+            std::path::PathBuf::from(home)
+                .join(".mareforge")
+                .join("identity")
+        })
+        .unwrap_or_else(|_| std::path::PathBuf::from("mareforge-identity"));
+    if let Ok(token) = std::fs::read_to_string(&path) {
+        let token = token.trim().to_string();
+        if !token.is_empty() {
+            return token;
+        }
+    }
+    let token = uuid::Uuid::new_v4().to_string();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if std::fs::write(&path, &token).is_ok() {
+        info!(token = %token, "nova identidade de jogador criada");
+    }
+    token
+}
+
+/// Sessão caiu: o client não tem mais navio atribuído (o servidor mantém o
+/// personagem vivo na janela de graça; o reconnect é um novo processo com
+/// o mesmo token — `identity_token`).
+fn reset_on_disconnect(mut disconnect: EventReader<DisconnectEvent>, mut my_ship: ResMut<MyShip>) {
+    for _ in disconnect.read() {
+        warn!("conexão perdida; personagem segue no servidor dentro da janela de graça");
+        my_ship.0 = None;
+    }
+}
 
 fn connect(mut commands: Commands) {
     commands.connect_client();
@@ -152,14 +195,15 @@ fn log_connecting() {
 }
 
 /// Handshake (ADR-0011): primeira mensagem após conectar é o hello com a
-/// versão do protocolo.
+/// versão do protocolo e o token de identidade do jogador (MF-035).
 fn send_hello_on_connect(
     mut connect: EventReader<ConnectEvent>,
     mut connection_manager: ResMut<ConnectionManager>,
 ) {
     for _ in connect.read() {
-        info!("conectado; enviando ClientHello");
-        let _ = connection_manager.send_message::<ReliableChannel, _>(&ClientHello::current());
+        let token = identity_token();
+        info!("conectado; enviando ClientHello com identidade");
+        let _ = connection_manager.send_message::<ReliableChannel, _>(&ClientHello::current(token));
     }
 }
 
@@ -235,34 +279,6 @@ fn handle_ship_destroyed(
         destroyed.0.insert(ship_id);
         for (entity, visual) in &visuals {
             if visual.target.ship_id == ship_id {
-                commands.entity(entity).despawn();
-            }
-        }
-    }
-}
-
-/// Ciclo de vida dos wrecks: memoriza posições e remove os que somirem.
-fn handle_wreck_lifecycle(
-    mut spawned: EventReader<ClientReceiveMessage<WreckSpawned>>,
-    mut removed: EventReader<ClientReceiveMessage<WreckRemoved>>,
-    mut known: ResMut<KnownWrecks>,
-    mut commands: Commands,
-    visuals: Query<(Entity, &crate::ship::WreckVisual)>,
-) {
-    for event in spawned.read() {
-        let wreck = event.message();
-        info!(
-            wreck_id = wreck.wreck_id,
-            stacks = wreck.stack_count,
-            "wreck avistado — carga esperando saqueador"
-        );
-        known.0.insert(wreck.wreck_id, Vec2::new(wreck.x, wreck.y));
-    }
-    for event in removed.read() {
-        let wreck_id = event.message().wreck_id;
-        known.0.remove(&wreck_id);
-        for (entity, visual) in &visuals {
-            if visual.wreck_num == wreck_id {
                 commands.entity(entity).despawn();
             }
         }

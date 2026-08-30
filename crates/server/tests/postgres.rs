@@ -1,0 +1,253 @@
+//! Integração do PostgresStateStore (MF-034, ADR-0004/0010).
+//!
+//! Roda contra um PostgreSQL real (Docker serve):
+//!
+//! ```text
+//! docker run --rm -d --name mareforge-pg -p 54329:5432 \
+//!   -e POSTGRES_PASSWORD=mareforge postgres:16-alpine
+//! MAREFORGE_TEST_DATABASE_URL=postgres://postgres:mareforge@localhost:54329/postgres \
+//!   cargo test -p mareforge-server --test postgres
+//! ```
+//!
+//! Sem a variável, o teste pula com aviso — CI sem banco não quebra, mas a
+//! verificação do adapter também não acontece (reporte honesto > falso verde).
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
+
+use chrono::Utc;
+use mareforge_domain_economy::{Ledger, LedgerKind, MarketOrder, Money, OrderStatus};
+use mareforge_domain_items::{Custody, ItemInstance, ItemLocation};
+use mareforge_domain_ships::ShipKind;
+use mareforge_server::market::MarketSnapshot;
+use mareforge_server::persist::{PostgresStateStore, ShipRecord, StateStore};
+use mareforge_shared::ids::{
+    CharacterId, ItemDefinitionId, ItemInstanceId, MarketOrderId, RegionId, ShipInstanceId,
+};
+
+/// Os três testes compartilham UM banco (o estado é global por natureza):
+/// mutex serializa e o reset limpa o estado antes de cada cenário.
+fn test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Limpa todas as tabelas (o ledger é append-only no jogo; no TESTE o
+/// cenário começa limpo para as asserções serem exatas).
+fn reset_database(url: &str) {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime de teste");
+    runtime.block_on(async {
+        let pool = sqlx::PgPool::connect(url).await.expect("pool de reset");
+        sqlx::query(
+            "TRUNCATE accounts, characters, ship_instances, item_instances, \
+             ledger_entries, market_orders, wallets CASCADE",
+        )
+        .execute(&pool)
+        .await
+        .expect("reset do banco de teste");
+        pool.close().await;
+    });
+}
+
+fn store_or_skip() -> Option<(Arc<PostgresStateStore>, String)> {
+    match std::env::var("MAREFORGE_TEST_DATABASE_URL") {
+        Ok(url) => {
+            // Conectar PRIMEIRO (roda as migrations), resetar DEPOIS.
+            let store = match PostgresStateStore::connect(&url) {
+                Ok(store) => store,
+                Err(error) => panic!("banco de teste configurado mas não abriu: {error}"),
+            };
+            reset_database(&url);
+            Some((Arc::new(store), url))
+        }
+        Err(_) => {
+            eprintln!(
+                "PULANDO: defina MAREFORGE_TEST_DATABASE_URL para testar o PostgresStateStore"
+            );
+            None
+        }
+    }
+}
+
+fn sample_snapshot() -> (MarketSnapshot, CharacterId) {
+    let character = CharacterId::new();
+    let region = RegionId::new();
+    let item = ItemDefinitionId::new();
+    let order_id = MarketOrderId::new();
+    let order_num = 0u32;
+
+    let mut ledger = Ledger::default();
+    ledger.record(LedgerKind::Mint, Money(1_000), "bootstrap dev (§48)");
+    ledger.record(LedgerKind::Burn, Money(1), "listing fee (§46)");
+
+    let mut balances = HashMap::new();
+    balances.insert(character, Money(999));
+    let mut identities = HashMap::new();
+    identities.insert("token-alfa".to_string(), character);
+
+    let stack = Custody {
+        instance: ItemInstance::new_resource(ItemInstanceId::new(), item, 30),
+        location: ItemLocation::PortStorage(region),
+    };
+    let escrowed = Custody {
+        instance: ItemInstance::new_resource(ItemInstanceId::new(), item, 5),
+        location: ItemLocation::MarketEscrow(order_id),
+    };
+
+    let snapshot = MarketSnapshot {
+        identities,
+        balances,
+        storage: vec![mareforge_server::market::StorageEntry {
+            character,
+            region,
+            stacks: vec![stack],
+        }],
+        escrow: vec![mareforge_server::market::EscrowEntry {
+            order_num,
+            stacks: vec![escrowed],
+        }],
+        board: vec![MarketOrder {
+            id: order_id,
+            seller: character,
+            item,
+            quantity: 5,
+            unit_price: Money(8),
+            region,
+            status: OrderStatus::Open,
+            created_at: Utc::now(),
+            expires_at: Utc::now(),
+            filled_quantity: 0,
+        }],
+        order_nums: HashMap::from([(order_num, order_id)]),
+        next_order_num: 1,
+        ledger,
+    };
+    (snapshot, character)
+}
+
+fn quantity_of(snapshot: &MarketSnapshot, character: CharacterId) -> u32 {
+    snapshot
+        .storage
+        .iter()
+        .filter(|entry| entry.character == character)
+        .flat_map(|entry| entry.stacks.iter())
+        .map(|custody| custody.instance.quantity)
+        .sum()
+}
+
+/// MF-034: o estado econômico completo sobrevive ao banco — salvo em uma
+/// transação, lido de volta idêntico (carteiras, storage, escrow, orders,
+/// ledger).
+#[test]
+fn market_state_roundtrips_through_postgres() {
+    let _guard = test_lock();
+    let Some((store, _url)) = store_or_skip() else {
+        return;
+    };
+    let (snapshot, character) = sample_snapshot();
+
+    store
+        .save_market(&snapshot)
+        .expect("save_market transacional");
+    let restored = store
+        .load_market()
+        .expect("load_market")
+        .expect("estado após save");
+
+    assert_eq!(restored.identities.get("token-alfa"), Some(&character));
+    assert_eq!(restored.balances.get(&character), Some(&Money(999)));
+    assert_eq!(quantity_of(&restored, character), 30);
+    assert_eq!(restored.board.len(), 1);
+    assert_eq!(restored.board[0].unit_price, Money(8));
+    assert_eq!(restored.order_nums.len(), 1);
+    assert_eq!(restored.escrow.len(), 1);
+    assert_eq!(restored.escrow[0].stacks[0].instance.quantity, 5);
+    assert_eq!(restored.ledger.entries().len(), 2);
+    assert_eq!(restored.ledger.burned(), Money(1));
+    assert_eq!(restored.next_order_num, 1);
+}
+
+/// A unidade atômica é o estado inteiro (ADR-0010 no Alpha single-writer):
+/// salvar duas vezes seguidas não duplica linhas nem entra em conflito.
+#[test]
+fn repeated_saves_stay_consistent() {
+    let _guard = test_lock();
+    let Some((store, _url)) = store_or_skip() else {
+        return;
+    };
+    let (snapshot, character) = sample_snapshot();
+    store.save_market(&snapshot).expect("primeiro save");
+    store.save_market(&snapshot).expect("segundo save");
+    let restored = store
+        .load_market()
+        .expect("load_market")
+        .expect("estado após saves");
+    assert_eq!(quantity_of(&restored, character), 30, "carga não duplica");
+    assert_eq!(restored.board.len(), 1, "order não duplica entre saves");
+    assert_eq!(restored.ledger.entries().len(), 2, "ledger é append-only");
+}
+
+/// MF-035/034: o navio do personagem sobrevive — casco, HP, posição e a
+/// carga embarcada (item_instances com location ShipCargo).
+#[test]
+fn ship_record_roundtrips_through_postgres() {
+    let _guard = test_lock();
+    let Some((store, _url)) = store_or_skip() else {
+        return;
+    };
+    let character = CharacterId::new();
+    // No fluxo real o personagem já existe no banco (market.character →
+    // save_market). O teste reproduz a ordem: identidade primeiro, navio
+    // depois — a FK de ship_instances é o fail-closed do banco.
+    let mut ledger = Ledger::default();
+    ledger.record(LedgerKind::Mint, Money(1_000), "bootstrap dev (§48)");
+    let seed = MarketSnapshot {
+        identities: HashMap::from([("token-navio".to_string(), character)]),
+        balances: HashMap::from([(character, Money(1_000))]),
+        storage: Vec::new(),
+        escrow: Vec::new(),
+        board: Vec::new(),
+        order_nums: HashMap::new(),
+        next_order_num: 0,
+        ledger,
+    };
+    store.save_market(&seed).expect("identidade no banco");
+
+    let ship_instance = ShipInstanceId::new();
+    let item = ItemDefinitionId::new();
+    let record = ShipRecord {
+        ship_instance,
+        character,
+        kind: ShipKind::Corsair,
+        hp: 55,
+        x: -300.5,
+        y: 42.25,
+        heading: 1.25,
+        cargo: vec![Custody {
+            instance: ItemInstance::new_resource(ItemInstanceId::new(), item, 12),
+            location: ItemLocation::ShipCargo(ship_instance),
+        }],
+    };
+
+    store.save_ship(&record).expect("save_ship");
+    let restored = store
+        .load_ship(character)
+        .expect("load_ship")
+        .expect("navio persistido");
+
+    assert_eq!(restored.ship_instance, ship_instance);
+    assert_eq!(restored.character, character);
+    assert_eq!(restored.kind, ShipKind::Corsair);
+    assert_eq!(restored.hp, 55);
+    assert_eq!(restored.cargo.len(), 1);
+    assert_eq!(restored.cargo[0].instance.quantity, 12);
+    assert_eq!(
+        restored.cargo[0].location,
+        ItemLocation::ShipCargo(ship_instance)
+    );
+}

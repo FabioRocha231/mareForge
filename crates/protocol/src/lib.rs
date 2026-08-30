@@ -25,18 +25,29 @@ use serde::{Deserialize, Serialize};
 /// v7: mercado regional (MF-023..026) — catálogo de itens e carteira no
 ///     hello, intents de storage (Z/X), sell/cancel/buy de orders, e
 ///     veredito MarketResult.
-pub const PROTOCOL_VERSION: u16 = 7;
+/// v8: A1-P0 — identidade estável (MF-035): `ClientHello.identity` carrega o
+///     token persistente do jogador; a conexão nunca é dona de nada. E AOI
+///     (MF-031): `WorldSnapshot` passa a ser construído por destinatário e
+///     inclui wrecks visíveis (`WreckState`) — WreckSpawned/WreckRemoved
+///     saem do protocolo (visibilidade de wreck vem do snapshot, com TTL no
+///     client).
+pub const PROTOCOL_VERSION: u16 = 8;
 
-/// Primeira mensagem do client após conectar (ADR-0011).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Primeira mensagem do client após conectar (ADR-0011). `identity` é o
+/// token persistente do jogador (MF-035): o servidor resolve token →
+/// CharacterId; ClientId/conexão é só transporte da sessão.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientHello {
     pub protocol_version: u16,
+    pub identity: String,
 }
 
 impl ClientHello {
-    pub fn current() -> Self {
+    /// Hello da versão atual com o token de identidade do jogador.
+    pub fn current(identity: impl Into<String>) -> Self {
         Self {
             protocol_version: PROTOCOL_VERSION,
+            identity: identity.into(),
         }
     }
 }
@@ -104,9 +115,10 @@ pub struct ShipDestroyed {
     pub ship_id: u32,
 }
 
-/// Wreck surgiu no mar com a carga que sobreviveu ao naufrágio (PRD §26).
+/// Destroço visível no snapshot do destinatário (MF-031: visibilidade de
+/// wreck é recorte de AOI como navios e projéteis).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct WreckSpawned {
+pub struct WreckState {
     pub wreck_id: u32,
     pub x: f32,
     pub y: f32,
@@ -114,10 +126,15 @@ pub struct WreckSpawned {
     pub stack_count: u32,
 }
 
-/// Wreck desapareceu (saqueado até esvaziar ou expirado — PRD §26).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WreckRemoved {
-    pub wreck_id: u32,
+/// Snapshot do mundo **do ponto de vista do destinatário** (PRD §64, ADR-0009,
+/// MF-031): só entidades dos chunks visíveis + anel de borda. Enviado a 20 Hz
+/// (ADR-0008) por canal não-confiável.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorldSnapshot {
+    pub tick: u64,
+    pub ships: Vec<ShipState>,
+    pub projectiles: Vec<ProjectileState>,
+    pub wrecks: Vec<WreckState>,
 }
 
 /// Jogador quer saquear um wreck (PRD §27: precisa estar nele, com porão).
@@ -311,31 +328,26 @@ pub struct MarketResult {
     pub reason: String,
 }
 
-/// Snapshot do mundo visível; enviado por tick (PRD §64/§66 — AOI corta o
-/// escopo por proximidade quando entrar).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct WorldSnapshot {
-    pub tick: u64,
-    pub ships: Vec<ShipState>,
-    pub projectiles: Vec<ProjectileState>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn current_protocol_version_is_seven() {
-        assert_eq!(PROTOCOL_VERSION, 7);
-        assert_eq!(ClientHello::current().protocol_version, PROTOCOL_VERSION);
+    fn current_protocol_version_is_eight() {
+        assert_eq!(PROTOCOL_VERSION, 8);
+        assert_eq!(
+            ClientHello::current("token").protocol_version,
+            PROTOCOL_VERSION
+        );
     }
 
     #[test]
     fn client_hello_roundtrips() {
-        let message = ClientHello::current();
+        let message = ClientHello::current("jogador-abc");
         let bytes = bincode::serialize(&message).unwrap();
         let decoded: ClientHello = bincode::deserialize(&bytes).unwrap();
         assert_eq!(decoded, message);
+        assert_eq!(decoded.identity, "jogador-abc");
     }
 
     #[test]
@@ -362,7 +374,7 @@ mod tests {
     }
 
     #[test]
-    fn world_snapshot_roundtrips_with_ships_and_projectiles() {
+    fn world_snapshot_roundtrips_with_aoi_entities() {
         let message = WorldSnapshot {
             tick: 42,
             ships: vec![
@@ -389,33 +401,21 @@ mod tests {
                 y: 2.0,
                 heading: 1.5,
             }],
+            wrecks: vec![WreckState {
+                wreck_id: 9,
+                x: 30.0,
+                y: -10.0,
+                stack_count: 2,
+            }],
         };
         let bytes = bincode::serialize(&message).unwrap();
         let decoded: WorldSnapshot = bincode::deserialize(&bytes).unwrap();
         assert_eq!(decoded, message);
+        assert_eq!(decoded.wrecks[0].stack_count, 2);
     }
 
     #[test]
-    fn wreck_lifecycle_messages_roundtrip() {
-        let spawned = WreckSpawned {
-            wreck_id: 9,
-            x: -4.0,
-            y: 8.5,
-            stack_count: 2,
-        };
-        let bytes = bincode::serialize(&spawned).unwrap();
-        assert_eq!(
-            bincode::deserialize::<WreckSpawned>(&bytes).unwrap(),
-            spawned
-        );
-
-        let removed = WreckRemoved { wreck_id: 9 };
-        let bytes = bincode::serialize(&removed).unwrap();
-        assert_eq!(
-            bincode::deserialize::<WreckRemoved>(&bytes).unwrap(),
-            removed
-        );
-
+    fn loot_messages_roundtrip() {
         let loot = LootWreck { wreck_id: 9 };
         let bytes = bincode::serialize(&loot).unwrap();
         assert_eq!(bincode::deserialize::<LootWreck>(&bytes).unwrap(), loot);

@@ -36,11 +36,13 @@ use crate::net::{DevItems, ReliableChannel, ServerShip, ServerWorldMap};
 const DEV_SEED_GOLD: u64 = 1_000;
 
 /// Estado econômico serializável (MF-027, Phase 9): sobrevive a restart.
-/// O alvo de produção é o Postgres do ADR-0004; o slice persiste snapshot
-/// em arquivo (`MAREFORGE_STATE_PATH`), mesmo contrato de estado.
+/// `FileStateStore` persiste este contrato em arquivo; `PostgresStateStore`
+/// persiste o mesmo estado nas tabelas do ADR-0004 (persist.rs).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MarketSnapshot {
-    pub identities: HashMap<u64, CharacterId>,
+    /// Token de identidade persistente → CharacterId (MF-035): o dono é o
+    /// personagem; a conexão/client_num é só transporte da sessão.
+    pub identities: HashMap<String, CharacterId>,
     pub balances: HashMap<CharacterId, Money>,
     /// Chave composta vira lista de entradas: JSON não aceita chave-tupla.
     pub storage: Vec<StorageEntry>,
@@ -71,7 +73,7 @@ pub struct EscrowEntry {
 /// (listar, comprar) tocam várias partes atomicamente.
 #[derive(Resource)]
 pub struct ServerMarket {
-    identities: HashMap<u64, CharacterId>,
+    identities: HashMap<String, CharacterId>,
     balances: HashMap<CharacterId, Money>,
     /// (personagem, região) → custódias guardadas (§30: storage regional).
     storage: HashMap<(CharacterId, RegionId), Vec<Custody>>,
@@ -82,6 +84,10 @@ pub struct ServerMarket {
     next_order_num: u32,
     pub policy: FeePolicy,
     pub ledger: Ledger,
+    /// Âncora de sobrevivência (MF-033/034). `Some(File)` = salvamento
+    /// periódico; `Some(Postgres)` = persistência por operação crítica;
+    /// `None` = dev puro, mundo descartável.
+    store: Option<std::sync::Arc<dyn crate::persist::StateStore>>,
 }
 
 impl Default for ServerMarket {
@@ -92,6 +98,10 @@ impl Default for ServerMarket {
 
 impl ServerMarket {
     pub fn new() -> Self {
+        Self::with_store(None)
+    }
+
+    pub fn with_store(store: Option<std::sync::Arc<dyn crate::persist::StateStore>>) -> Self {
         Self {
             identities: HashMap::new(),
             balances: HashMap::new(),
@@ -102,16 +112,19 @@ impl ServerMarket {
             next_order_num: 0,
             policy: FeePolicy::default(),
             ledger: Ledger::default(),
+            store,
         }
     }
 
-    /// Identidade do client, cunhando o bootstrap dev no primeiro toque (§48).
-    pub fn character(&mut self, client_num: u64) -> CharacterId {
-        if let Some(id) = self.identities.get(&client_num) {
+    /// Identidade persistente do jogador (MF-035), cunhando o bootstrap dev
+    /// no primeiro toque (§48). O token vem do client e é o ÚNICO vínculo
+    /// duradouro — conexão nenhuma é dona de nada.
+    pub fn character(&mut self, identity_token: &str) -> CharacterId {
+        if let Some(id) = self.identities.get(identity_token) {
             return *id;
         }
         let id = CharacterId::new();
-        self.identities.insert(client_num, id);
+        self.identities.insert(identity_token.to_string(), id);
         self.balances.insert(id, Money(DEV_SEED_GOLD));
         self.ledger.record(
             LedgerKind::Mint,
@@ -119,6 +132,7 @@ impl ServerMarket {
             "bootstrap dev (§48)",
         );
         info!(character = ?id, gold = DEV_SEED_GOLD, "carteira semeada (dev)");
+        self.persist();
         id
     }
 
@@ -126,9 +140,16 @@ impl ServerMarket {
         self.balances.get(&character).copied().unwrap_or(Money(0))
     }
 
-    /// Id de personagem já criado (sem cunhar) — para personalizar broadcasts.
-    pub fn peek_character(&self, client_num: u64) -> Option<CharacterId> {
-        self.identities.get(&client_num).copied()
+    /// Persiste o estado no store ativo (MF-034: operação crítica chega
+    /// atomicamente ao banco; arquivo de dev salva no ritmo periódico).
+    /// Chamado ao fim de toda mutação econômica.
+    fn persist(&self) {
+        if let Some(store) = &self.store {
+            let snapshot = self.snapshot();
+            if let Err(error) = store.save_market(&snapshot) {
+                warn!(error = %error, "falha ao persistir estado econômico");
+            }
+        }
     }
 
     /// Estado atual como snapshot persistível.
@@ -160,8 +181,12 @@ impl ServerMarket {
         }
     }
 
-    /// Reconstrói o estado de um snapshot (boot com MAREFORGE_STATE_PATH).
-    pub fn restore(snapshot: MarketSnapshot) -> Self {
+    /// Reconstrói o estado de um snapshot (boot com store). O store volta
+    /// como âncora da sessão — persistências seguintes continuam por ele.
+    pub fn restore_with_store(
+        snapshot: MarketSnapshot,
+        store: Option<std::sync::Arc<dyn crate::persist::StateStore>>,
+    ) -> Self {
         Self {
             identities: snapshot.identities,
             balances: snapshot.balances,
@@ -180,7 +205,13 @@ impl ServerMarket {
             next_order_num: snapshot.next_order_num,
             policy: FeePolicy::default(),
             ledger: snapshot.ledger,
+            store,
         }
+    }
+
+    /// Restore sem store (testes e dev puro).
+    pub fn restore(snapshot: MarketSnapshot) -> Self {
+        Self::restore_with_store(snapshot, None)
     }
 
     fn credit(&mut self, character: CharacterId, amount: Money) {
@@ -233,6 +264,7 @@ impl ServerMarket {
                 .into_iter()
                 .map(|custody| custody.with_location(ItemLocation::PortStorage(region))),
         );
+        self.persist();
         Ok((stacks, weight))
     }
 
@@ -259,6 +291,9 @@ impl ServerMarket {
                 }
                 Err(_) => index += 1,
             }
+        }
+        if withdrawn > 0 {
+            self.persist();
         }
         Ok(withdrawn)
     }
@@ -317,6 +352,7 @@ impl ServerMarket {
             expires_at: Utc::now(),
             filled_quantity: 0,
         });
+        self.persist();
         Ok((order_num, fee))
     }
 
@@ -350,6 +386,7 @@ impl ServerMarket {
                     }),
                 );
         }
+        self.persist();
         Ok(())
     }
 
@@ -436,6 +473,7 @@ impl ServerMarket {
             net,
             tax,
         })
+        .inspect(|_| self.persist())
     }
 }
 
@@ -534,7 +572,10 @@ pub fn handle_storage(
 ) {
     for event in deposit_events.read() {
         let client_id = event.from();
-        let Some(mut ship) = ships.iter_mut().find(|ship| ship.client_id == client_id) else {
+        let Some(mut ship) = ships
+            .iter_mut()
+            .find(|ship| ship.client_id == Some(client_id))
+        else {
             continue;
         };
         let Some((region_id, name)) = port_region(&map.0, ship.motion.x, ship.motion.y) else {
@@ -550,7 +591,7 @@ pub fn handle_storage(
             );
             continue;
         };
-        let character = market.character(ship.client_num);
+        let character = ship.character;
         match market.deposit_all(character, region_id, &mut ship.hold, &dev.catalog) {
             Ok((stacks, weight)) => {
                 info!(
@@ -575,7 +616,10 @@ pub fn handle_storage(
 
     for event in withdraw_events.read() {
         let client_id = event.from();
-        let Some(mut ship) = ships.iter_mut().find(|ship| ship.client_id == client_id) else {
+        let Some(mut ship) = ships
+            .iter_mut()
+            .find(|ship| ship.client_id == Some(client_id))
+        else {
             continue;
         };
         let Some((region_id, name)) = port_region(&map.0, ship.motion.x, ship.motion.y) else {
@@ -587,7 +631,7 @@ pub fn handle_storage(
             );
             continue;
         };
-        let character = market.character(ship.client_num);
+        let character = ship.character;
         match market.withdraw_all(character, region_id, &mut ship.hold, &dev.catalog) {
             Ok(0) => {
                 info!(
@@ -639,7 +683,7 @@ pub fn handle_sell(
     for event in sell_events.read() {
         let client_id = event.from();
         let message = event.message();
-        let Some(ship) = ships.iter().find(|ship| ship.client_id == client_id) else {
+        let Some(ship) = ships.iter().find(|ship| ship.client_id == Some(client_id)) else {
             continue;
         };
         let Some((region_id, name)) = port_region(&map.0, ship.motion.x, ship.motion.y) else {
@@ -651,7 +695,7 @@ pub fn handle_sell(
             );
             continue;
         };
-        let character = market.character(ship.client_num);
+        let character = ship.character;
         match market.create_order(
             character,
             region_id,
@@ -674,14 +718,15 @@ pub fn handle_sell(
                     listing_fee = fee.0,
                     "sell order criada; item em escrow"
                 );
+                let viewers = viewers_of(&ships);
                 broadcast_orders(
                     &mut connection_manager,
                     &market,
                     &dev.catalog,
                     &map.0,
-                    &ships,
+                    &viewers,
                 );
-                send_wallet(&mut connection_manager, &market, &ships, character);
+                send_wallet(&mut connection_manager, &market, &viewers, character);
                 market_result(
                     &mut connection_manager,
                     client_id,
@@ -715,7 +760,7 @@ pub fn handle_buy(
     for event in buy_events.read() {
         let client_id = event.from();
         let message = event.message();
-        let Some(ship) = ships.iter().find(|ship| ship.client_id == client_id) else {
+        let Some(ship) = ships.iter().find(|ship| ship.client_id == Some(client_id)) else {
             continue;
         };
         let Some((buyer_region_id, buyer_region_name)) =
@@ -729,7 +774,7 @@ pub fn handle_buy(
             );
             continue;
         };
-        let buyer = market.character(ship.client_num);
+        let buyer = ship.character;
         match market.buy(buyer, buyer_region_id, message.order_num, message.quantity) {
             Ok(receipt) => {
                 info!(
@@ -741,15 +786,16 @@ pub fn handle_buy(
                     tax = receipt.tax.0,
                     "order executada; ouro fluiu, item mudou de dono"
                 );
+                let viewers = viewers_of(&ships);
                 broadcast_orders(
                     &mut connection_manager,
                     &market,
                     &dev.catalog,
                     &map.0,
-                    &ships,
+                    &viewers,
                 );
-                send_wallet(&mut connection_manager, &market, &ships, buyer);
-                send_wallet(&mut connection_manager, &market, &ships, receipt.seller);
+                send_wallet(&mut connection_manager, &market, &viewers, buyer);
+                send_wallet(&mut connection_manager, &market, &viewers, receipt.seller);
                 market_result(
                     &mut connection_manager,
                     client_id,
@@ -786,22 +832,23 @@ pub fn handle_cancel(
     for event in cancel_events.read() {
         let client_id = event.from();
         let order_num = event.message().order_num;
-        let Some(ship) = ships.iter().find(|ship| ship.client_id == client_id) else {
+        let Some(ship) = ships.iter().find(|ship| ship.client_id == Some(client_id)) else {
             continue;
         };
-        let character = market.character(ship.client_num);
+        let character = ship.character;
         match market.cancel_order(character, order_num) {
             Ok(()) => {
                 info!(
                     order_num,
                     "order cancelada; item devolvido ao storage (fee não reembolsada, §46)"
                 );
+                let viewers = viewers_of(&ships);
                 broadcast_orders(
                     &mut connection_manager,
                     &market,
                     &dev.catalog,
                     &map.0,
-                    &ships,
+                    &viewers,
                 );
                 market_result(&mut connection_manager, client_id, true, "order cancelada");
             }
@@ -818,18 +865,19 @@ pub fn handle_cancel(
     }
 }
 
-/// Snapshot de orders personalizado por client (o campo `mine` é do
-/// observador). Enviado no hello e a cada mudança no board.
+/// Snapshot de orders personalizado por observador (o campo `mine` é do
+/// dono — MF-035: personagem vs. vendedor). `viewers` são os pares
+/// (sessão, personagem) online — o mercado não conhece o ECS. Enviado no
+/// hello e a cada mudança no board.
 pub fn broadcast_orders(
     connection_manager: &mut ConnectionManager,
     market: &ServerMarket,
     catalog: &ItemCatalog,
     map: &WorldMap,
-    ships: &Query<&ServerShip>,
+    viewers: &[(Option<ClientId>, CharacterId)],
 ) {
-    for ship in ships.iter() {
-        let viewer = market.peek_character(ship.client_num);
-        let lines: Vec<OrderLine> = market
+    let lines_for = |character: CharacterId| -> Vec<OrderLine> {
+        market
             .board
             .iter()
             .filter_map(|order| {
@@ -852,12 +900,20 @@ pub fn broadcast_orders(
                         .unwrap_or_default(),
                     unit_price: order.unit_price.0,
                     quantity: remaining,
-                    mine: viewer.is_some_and(|viewer| viewer == order.seller),
+                    mine: character == order.seller,
                 })
             })
-            .collect();
-        let _ = connection_manager
-            .send_message::<ReliableChannel, _>(ship.client_id, &OrdersSnapshot { orders: lines });
+            .collect()
+    };
+    for (client_id, character) in viewers {
+        if let Some(client_id) = client_id {
+            let _ = connection_manager.send_message::<ReliableChannel, _>(
+                *client_id,
+                &OrdersSnapshot {
+                    orders: lines_for(*character),
+                },
+            );
+        }
     }
 }
 
@@ -866,19 +922,29 @@ pub fn broadcast_orders(
 fn send_wallet(
     connection_manager: &mut ConnectionManager,
     market: &ServerMarket,
-    ships: &Query<&ServerShip>,
+    viewers: &[(Option<ClientId>, CharacterId)],
     character: CharacterId,
 ) {
-    for ship in ships.iter() {
-        if market.peek_character(ship.client_num) == Some(character) {
-            let _ = connection_manager.send_message::<ReliableChannel, _>(
-                ship.client_id,
-                &WalletUpdated {
-                    gold: market.balance(character).0,
-                },
-            );
+    for (client_id, owner) in viewers {
+        if *owner == character {
+            if let Some(client_id) = client_id {
+                let _ = connection_manager.send_message::<ReliableChannel, _>(
+                    *client_id,
+                    &WalletUpdated {
+                        gold: market.balance(character).0,
+                    },
+                );
+            }
         }
     }
+}
+
+/// Pares (sessão, personagem) dos navios — bridge ECS → funções puras.
+pub fn viewers_of(ships: &Query<&ServerShip>) -> Vec<(Option<ClientId>, CharacterId)> {
+    ships
+        .iter()
+        .map(|ship| (ship.client_id, ship.character))
+        .collect()
 }
 
 /// Catálogo de itens para o client no hello (MF-023): nomes e pesos para a
@@ -896,64 +962,47 @@ pub fn catalog_snapshot(catalog: &ItemCatalog) -> CatalogSnapshot {
     }
 }
 
-/// Carrega o snapshot persistido no boot (MF-027). Sem
-/// `MAREFORGE_STATE_PATH`, o mundo nasce limpo — comportamento de dev.
-pub fn load_state(mut market: ResMut<ServerMarket>) {
-    let Some(path) = std::env::var_os("MAREFORGE_STATE_PATH") else {
+/// Carrega o estado econômico do store ativo no boot (MF-027/033). Sem
+/// store configurado, o mundo nasce limpo — comportamento de dev puro.
+pub fn load_state(store: Res<crate::persist::StoreHandle>, mut market: ResMut<ServerMarket>) {
+    let Some(store) = store.0.clone() else {
         return;
     };
-    match std::fs::read(&path) {
-        Ok(bytes) => match serde_json::from_slice::<MarketSnapshot>(&bytes) {
-            Ok(snapshot) => {
-                *market = ServerMarket::restore(snapshot);
-                info!(
-                    path = %path.to_string_lossy(),
-                    "estado econômico restaurado do snapshot"
-                );
-            }
-            Err(error) => {
-                warn!(error = %error, "snapshot ilegível; começando limpo");
-            }
-        },
-        Err(_) => {
-            info!("sem snapshot anterior; começando limpo");
+    match store.load_market() {
+        Ok(Some(snapshot)) => {
+            *market = ServerMarket::restore_with_store(snapshot, Some(store));
+            info!("estado econômico restaurado do store");
         }
+        Ok(None) => info!("mundo econômico novo (store vazio)"),
+        Err(error) => warn!(error = %error, "store ilegível; começando limpo"),
     }
 }
 
-/// Salva o snapshot a cada 10s (e tenta no AppExit). Pior caso de perda:
-/// o intervalo — aceitável no slice; produção usará Postgres (ADR-0004).
+/// Salvamento periódico (a cada 10s e no AppExit) — só para stores que
+/// declaram esse modo (arquivo de dev). Postgres persiste por operação
+/// crítica (MF-034); dev puro não persiste.
 pub fn save_state(
+    store: Res<crate::persist::StoreHandle>,
     market: Res<ServerMarket>,
     mut exit: EventReader<AppExit>,
     time: Res<Time>,
     mut timer: Local<f32>,
 ) {
     const SAVE_INTERVAL: f32 = 10.0;
+    let Some(store) = store.0.clone() else {
+        return;
+    };
+    if !store.periodic_saving() {
+        return;
+    }
     *timer += time.delta_secs();
     let exiting = exit.read().next().is_some();
     if *timer < SAVE_INTERVAL && !exiting {
         return;
     }
     *timer = 0.0;
-    let Some(path) = std::env::var_os("MAREFORGE_STATE_PATH") else {
-        return;
-    };
-    let snapshot = market.snapshot();
-    match serde_json::to_vec_pretty(&snapshot) {
-        Ok(bytes) => {
-            let mut temp = std::path::PathBuf::from(&path);
-            temp.set_extension("tmp");
-            // Escrita atômica via rename: crash no meio não corrompe o arquivo.
-            if std::fs::write(&temp, bytes)
-                .and_then(|()| std::fs::rename(&temp, &path))
-                .is_ok()
-            {
-                info!(path = %path.to_string_lossy(), "estado econômico persistido");
-            } else {
-                warn!("falha ao persistir estado econômico");
-            }
-        }
-        Err(error) => warn!(error = %error, "falha ao serializar snapshot"),
+    match store.save_market(&market.snapshot()) {
+        Ok(()) => info!("estado econômico persistido"),
+        Err(error) => warn!(error = %error, "falha ao persistir estado econômico"),
     }
 }

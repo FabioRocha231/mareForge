@@ -47,8 +47,8 @@ impl World {
     fn new() -> Self {
         let (catalog, wood) = wood_definition();
         let mut market = ServerMarket::new();
-        let a = market.character(1);
-        let b = market.character(2);
+        let a = market.character("token-a");
+        let b = market.character("token-b");
         let region = RegionId::new();
 
         for character in [a, b] {
@@ -191,18 +191,22 @@ fn retry_of_sell_order_does_not_duplicate_escrow() {
     );
 }
 
-/// §70 disconnect: o navio afunda com o client, mas a CARTEIRA é da
-/// personagem (§31) e sobrevive; reconectar com o mesmo client_num
-/// encontra a mesma identidade e saldo.
+/// §70 + MF-035: a conexão cai, mas a CARTEIRA é da personagem (§31) e
+/// sobrevive; reconectar com o MESMO TOKEN de identidade encontra o mesmo
+/// personagem e saldo — conexão nunca foi dona de nada.
 #[test]
 fn disconnect_then_reconnect_keeps_wallet() {
     let mut market = ServerMarket::new();
-    let character = market.character(42);
+    let character = market.character("token-42");
     assert_eq!(market.balance(character), Money(1_000));
 
-    let reconnected = market.character(42);
+    let reconnected = market.character("token-42");
     assert_eq!(reconnected, character);
     assert_eq!(market.balance(reconnected), Money(1_000));
+
+    // Token diferente = personagem diferente (fail-closed por identidade).
+    let stranger = market.character("token-43");
+    assert_ne!(stranger, character);
 }
 
 /// Full loot + mercado deixam rastro econômico completo no ledger.

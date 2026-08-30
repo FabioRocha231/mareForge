@@ -89,11 +89,11 @@ fn vertical_slice_loop_gather_craft_transport_fight_loot_sell() {
     let mut market = ServerMarket::new();
 
     let mut a = Player {
-        character: market.character(100),
+        character: market.character("token-a"),
         hold: CargoHold::new(ShipInstanceId::new(), 100),
     };
     let mut b = Player {
-        character: market.character(200),
+        character: market.character("token-b"),
         hold: CargoHold::new(ShipInstanceId::new(), 100),
     };
 
