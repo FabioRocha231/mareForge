@@ -22,6 +22,7 @@ use mareforge_domain_combat::{
     apply_damage, can_loot, is_expired, resolve_ship_destruction, BroadsideBattery, DamageOutcome,
     LootPolicy, Projectile, WeaponParams, WreckChest, WreckPolicy,
 };
+use mareforge_domain_economy::MarketPriceIndex;
 use mareforge_domain_items::{
     CargoHold, Custody, EquipmentDefinition, EquipmentSlot, EquipmentStats, ItemCatalog,
     ItemDefinition, ItemInstance, ItemKind,
@@ -326,6 +327,10 @@ impl Plugin for ServerNetPlugin {
         app.init_resource::<Metrics>();
         app.init_resource::<crate::nodes::NodeIdCounter>();
         app.init_resource::<LiveWreckRecords>();
+        let economy = crate::market::ServerEconomyConfig::default();
+        app.insert_resource(crate::market::ServerPriceIndex(MarketPriceIndex::new(
+            economy.price_index_window_size,
+        )));
         // Persistência (MF-033/034): o store nasce do ambiente (Postgres de
         // produção, arquivo de dev, ou nenhum) e amarra mercado e navios.
         let store = crate::persist::store_from_env();
@@ -383,6 +388,8 @@ impl Plugin for ServerNetPlugin {
         app.add_systems(Startup, crate::npc::setup_npcs.after(start_server));
         app.add_systems(Startup, crate::market::load_state.after(start_server));
         app.add_systems(Update, crate::market::save_state);
+        app.add_event::<crate::market::TradeExecuted>();
+        app.add_systems(FixedUpdate, crate::market::update_price_index_from_trades);
         // MF-027 cont.: wrecks persistem como snapshot derivado do estado
         // em memória. O `persist_wrecks` corre após o tick para evitar
         // pressão no hot loop.
@@ -455,14 +462,12 @@ pub struct ServerShip {
     /// Zona atual conforme o mapa (MF-017). `None` = fora das águas
     /// declaradas (UnknownZone): combate fail-closed, nenhuma UI nova.
     pub zone: Option<ZoneId>,
-    /// §72 average_trip_duration: instante (em `Time::elapsed_secs()`)
-    /// em que o player ship entrou no mar pela última vez. `None` para
-    /// NPC ou antes do primeiro tick do sistema. Zera em dock/sink para
-    /// acumular uma viagem por vez.
-    pub trip_started_at: Option<f32>,
-    /// Porto onde a trip ativa começou. Restore em alto-mar abre medição
-    /// operacional, mas não inventa origem de rota.
-    pub trip_origin_port: Option<RegionId>,
+    /// Trip iniciada por Undock. `None` antes do primeiro Undock ou depois
+    /// de Dock/Sink.
+    pub trip: Option<TripTelemetry>,
+    /// Restore AtSea abre apenas medição operacional de duração; origem e
+    /// preço de marcação não são inventados (alpha não persiste telemetria).
+    pub restored_trip_started_at: Option<f32>,
 }
 
 /// Dono desconectado; o navio fica no mar por [`DISCONNECT_GRACE_SECS`],
@@ -518,6 +523,18 @@ pub struct TradeRouteKey {
     pub destination: RegionId,
 }
 
+/// MF-052: estado da trip iniciada em Undock. O valor da carga é marcado
+/// uma vez, no preço regional do porto de origem; itens sem VWAP ficam
+/// unpriced em vez de valer zero.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TripTelemetry {
+    pub started_at: f32,
+    pub origin: RegionId,
+    pub marked_cargo_value: u64,
+    pub priced_quantity: u32,
+    pub unpriced_quantity: u32,
+}
+
 /// Telemetria econômica + gameplay (MF-029, §71+§72): faucets, sinks, perdas
 /// e os contadores derivados de combate contados no ponto onde acontecem.
 /// Nada é derivado retroativamente: cada incremento é um `+= 1` no evento
@@ -553,6 +570,16 @@ pub struct Metrics {
     pub completed_routes: HashMap<TradeRouteKey, u64>,
     pub same_port_returns: u64,
     pub trips_sunk: u64,
+    /// MF-052: soma dos valores marcados das trips 100% priced e com carga.
+    pub cargo_value_at_risk_total: u64,
+    /// MF-052: denominador de `average_cargo_value_at_risk`.
+    pub cargo_value_trip_count: u64,
+    /// MF-052: unidades com preço regional conhecido no Undock.
+    pub cargo_value_priced_items: u64,
+    /// MF-052: unidades sem preço regional conhecido no Undock.
+    pub cargo_value_unpriced_items: u64,
+    /// MF-052: cobertura agregada; 0/0 é reportada como 100%.
+    pub cargo_value_coverage_pct: f32,
 }
 
 pub enum TripOutcome {
@@ -562,7 +589,7 @@ pub enum TripOutcome {
 
 /// MF-049: encerra a trip ativa de um player ship em Dock bem-sucedido ou
 /// Sunk — soma a duração ao `trip_total_secs`, incrementa `trip_count` e
-/// zera `trip_started_at`. No-op se não havia trip ativa. Retorna `true`
+/// zera a trip ativa. No-op se não havia trip ativa. Retorna `true`
 /// quando uma viagem foi contabilizada.
 pub fn finalize_trip(
     ship: &mut ServerShip,
@@ -570,41 +597,85 @@ pub fn finalize_trip(
     now: f32,
     outcome: TripOutcome,
 ) -> bool {
-    if let Some(started) = ship.trip_started_at.take() {
-        let origin = ship.trip_origin_port.take();
+    if let Some(trip) = ship.trip.take() {
+        finalize_marked_trip(trip, metrics, now, outcome);
+        true
+    } else if let Some(started) = ship.restored_trip_started_at.take() {
         metrics.trip_total_secs += (now - started) as f64;
         metrics.trip_count += 1;
-        match outcome {
-            TripOutcome::Docked(destination) => match origin {
-                Some(origin) if origin != destination => {
-                    *metrics
-                        .completed_routes
-                        .entry(TradeRouteKey {
-                            origin,
-                            destination,
-                        })
-                        .or_default() += 1;
-                }
-                Some(_) => metrics.same_port_returns += 1,
-                None => {}
-            },
-            TripOutcome::Sunk => metrics.trips_sunk += 1,
-        }
         true
     } else {
-        ship.trip_origin_port = None;
         false
     }
 }
 
-/// MF-049: abre uma trip nova em Undock bem-sucedido — `trip_started_at =
-/// now`. Idempotente: se já existe trip ativa, mantém (proteção contra
+fn finalize_marked_trip(
+    trip: TripTelemetry,
+    metrics: &mut Metrics,
+    now: f32,
+    outcome: TripOutcome,
+) {
+    metrics.trip_total_secs += (now - trip.started_at) as f64;
+    metrics.trip_count += 1;
+    match outcome {
+        TripOutcome::Docked(destination) if trip.origin != destination => {
+            *metrics
+                .completed_routes
+                .entry(TradeRouteKey {
+                    origin: trip.origin,
+                    destination,
+                })
+                .or_default() += 1;
+        }
+        TripOutcome::Docked(_) => metrics.same_port_returns += 1,
+        TripOutcome::Sunk => metrics.trips_sunk += 1,
+    }
+
+    metrics.cargo_value_priced_items += u64::from(trip.priced_quantity);
+    metrics.cargo_value_unpriced_items += u64::from(trip.unpriced_quantity);
+    let total_quantity = metrics.cargo_value_priced_items + metrics.cargo_value_unpriced_items;
+    metrics.cargo_value_coverage_pct = if total_quantity == 0 {
+        100.0
+    } else {
+        metrics.cargo_value_priced_items as f32 / total_quantity as f32 * 100.0
+    };
+    if trip.priced_quantity > 0 && trip.unpriced_quantity == 0 {
+        metrics.cargo_value_at_risk_total += trip.marked_cargo_value;
+        metrics.cargo_value_trip_count += 1;
+    }
+}
+
+/// MF-049: abre uma trip nova em Undock bem-sucedido. Idempotente: se já
+/// existe trip ativa, mantém (proteção contra
 /// Undock espúrio durante viagem — não pode acontecer pelo domínio, mas
 /// falhamos em silêncio em vez de resetar medição).
-pub fn start_trip(ship: &mut ServerShip, now: f32, origin_port: RegionId) {
-    if ship.trip_started_at.is_none() {
-        ship.trip_started_at = Some(now);
-        ship.trip_origin_port = Some(origin_port);
+pub fn start_trip(
+    ship: &mut ServerShip,
+    price_index: &crate::market::ServerPriceIndex,
+    now: f32,
+    origin_port: RegionId,
+) {
+    if ship.trip.is_none() {
+        let mut marked_cargo_value = 0u64;
+        let mut priced_quantity = 0u32;
+        let mut unpriced_quantity = 0u32;
+        for custody in ship.hold.items() {
+            let quantity = custody.instance.quantity;
+            if let Some(vwap) = price_index.vwap(origin_port, custody.instance.definition) {
+                priced_quantity = priced_quantity.saturating_add(quantity);
+                marked_cargo_value = marked_cargo_value
+                    .saturating_add(vwap.unit_price.0.saturating_mul(u64::from(quantity)));
+            } else {
+                unpriced_quantity = unpriced_quantity.saturating_add(quantity);
+            }
+        }
+        ship.trip = Some(TripTelemetry {
+            started_at: now,
+            origin: origin_port,
+            marked_cargo_value,
+            priced_quantity,
+            unpriced_quantity,
+        });
     }
 }
 
@@ -679,8 +750,8 @@ pub(crate) fn spawn_ship_for(
         // abre medição. O spawn aqui é o equivalente a "já está fora do
         // porto"; a primeira trip do personagem começa quando ele Decide
         // sair novamente.
-        trip_started_at: None,
-        trip_origin_port: None,
+        trip: None,
+        restored_trip_started_at: None,
     },));
     ship_id
 }
@@ -735,7 +806,7 @@ pub(crate) fn restore_ship_from_record(
     // estava atracado, AtSea se estava fora. Trip só começa por evento
     // explícito, então AtSea restaurado abre nova medição em `now` (não
     // reconstruímos duração anterior — não há dado persistido para isso).
-    let trip_started_at = match record.presence {
+    let restored_trip_started_at = match record.presence {
         VesselPresence::AtSea => Some(now),
         VesselPresence::Docked(_) => None,
     };
@@ -763,8 +834,8 @@ pub(crate) fn restore_ship_from_record(
         },
         tuning: MotionTuning::default(),
         zone,
-        trip_started_at,
-        trip_origin_port: None,
+        trip: None,
+        restored_trip_started_at,
     },));
     ship_id
 }
@@ -954,7 +1025,7 @@ fn handle_hello(
                     &map.0,
                     record,
                     // MF-049: passamos o instante atual para que o restore
-                    // normalize `trip_started_at` quando o navio volta
+                    // normalize a medição operacional quando o navio volta
                     // AtSea.
                     time.elapsed_secs(),
                 );
@@ -1767,6 +1838,10 @@ fn world_status(
     } else {
         0.0
     };
+    let average_cargo_value_at_risk = metrics
+        .cargo_value_at_risk_total
+        .checked_div(metrics.cargo_value_trip_count)
+        .unwrap_or(0);
     // §72 players_per_zone: snapshot por pulso, não persiste entre pulsos.
     let mut players_per_zone: std::collections::BTreeMap<&'static str, u32> =
         std::collections::BTreeMap::new();
@@ -1801,6 +1876,10 @@ fn world_status(
         completed_routes = ?metrics.completed_routes,
         same_port_returns = metrics.same_port_returns,
         trips_sunk = metrics.trips_sunk,
+        average_cargo_value_at_risk,
+        cargo_value_priced_items = metrics.cargo_value_priced_items,
+        cargo_value_unpriced_items = metrics.cargo_value_unpriced_items,
+        cargo_value_coverage_pct = metrics.cargo_value_coverage_pct,
         avg_trip_secs,
         trip_count = metrics.trip_count,
         players_per_zone = ?players_per_zone,
@@ -2113,6 +2192,7 @@ fn port_storage_snapshot(
 fn handle_undock(
     mut undock_events: EventReader<ServerReceiveMessage<Undock>>,
     mut connection_manager: ResMut<ConnectionManager>,
+    price_index: Res<crate::market::ServerPriceIndex>,
     time: Res<Time>,
     mut ships: Query<&mut ServerShip>,
 ) {
@@ -2133,9 +2213,9 @@ fn handle_undock(
                 let origin_port = origin_port.expect("undock validou que o navio estava atracado");
                 ship.presence = presence;
                 // MF-049: trip começa em undock bem-sucedido. Dock anterior
-                // já zerou `trip_started_at`, então `start_trip` é o ponto
+                // já encerrou a trip anterior, então `start_trip` é o ponto
                 // de partida autoritativo.
-                start_trip(&mut ship, time.elapsed_secs(), origin_port);
+                start_trip(&mut ship, &price_index, time.elapsed_secs(), origin_port);
                 info!(ship_id = ship.ship_id, "navio desatracou");
                 let _ = connection_manager.send_message::<ReliableChannel, _>(
                     client_id,
@@ -2261,8 +2341,8 @@ mod tests {
             },
             tuning: MotionTuning::default(),
             zone: None,
-            trip_started_at: None,
-            trip_origin_port: None,
+            trip: None,
+            restored_trip_started_at: None,
         };
 
         let state = to_ship_state(&ship, &ItemCatalog::default());
