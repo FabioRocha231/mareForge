@@ -1,0 +1,11 @@
+[package]
+name = "mareforge-domain-crafting"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+
+[dependencies]
+mareforge-shared = { path = "../shared" }
+mareforge-domain-items = { path = "../domain-items" }
+serde = { version = "1", features = ["derive"] }
+thiserror = "1"

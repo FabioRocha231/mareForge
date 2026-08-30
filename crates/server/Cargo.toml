@@ -1,0 +1,11 @@
+[package]
+name = "mareforge-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+bevy = { version = "0.15", default-features = false, features = ["bevy_asset"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
