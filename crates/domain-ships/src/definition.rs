@@ -64,7 +64,7 @@ impl ShipDefinition {
                 },
             ],
             cargo_capacity: 100,
-            base_speed: 6.0,
+            base_speed: 30.0,
             base_turn_rate: 1.0,
             base_hp: 100,
             base_weapon_damage: 20,

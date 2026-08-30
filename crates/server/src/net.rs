@@ -172,6 +172,7 @@ impl Plugin for ServerNetPlugin {
                 handle_fire,
                 handle_loot,
                 simulate_and_snapshot,
+                world_status,
                 expire_wrecks,
             ),
         );
@@ -352,7 +353,16 @@ fn handle_input(
         let client_id = event.from();
         for mut ship in &mut ships {
             if ship.client_id == client_id {
-                ship.input = *event.message();
+                let incoming = *event.message();
+                if ship.input != incoming {
+                    info!(
+                        ship_id = ship.ship_id,
+                        throttle = incoming.throttle,
+                        turn = incoming.turn,
+                        "input aplicado"
+                    );
+                }
+                ship.input = incoming;
                 break;
             }
         }
@@ -741,6 +751,25 @@ fn simulate_and_snapshot(
     }
 
     counter.0 += 1;
+}
+
+/// Telemetria de mundo (PRD §72): posição/velocidade dos navios a cada 5s.
+fn world_status(time: Res<Time>, ships: Query<&ServerShip>, mut timer: Local<f32>) {
+    *timer += time.delta_secs();
+    if *timer < 5.0 {
+        return;
+    }
+    *timer = 0.0;
+    for ship in &ships {
+        info!(
+            ship_id = ship.ship_id,
+            x = format!("{:.1}", ship.motion.x),
+            y = format!("{:.1}", ship.motion.y),
+            speed = format!("{:.2}", ship.motion.speed),
+            throttle = format!("{:.2}", ship.input.throttle),
+            "world status"
+        );
+    }
 }
 
 /// Wrecks expirados somem do mar (PRD §26: 5 minutos; tuning no recurso).

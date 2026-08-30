@@ -31,27 +31,35 @@ impl Plugin for ClientPlugin {
 }
 
 fn setup_camera(mut commands: Commands) {
-    commands.spawn(Camera2d);
+    // 2 px por metro: o navio de 26 m ocupa 52 px e a velocidade de cruzeiro
+    // (30 m/s) fica visível — 1:1 fazia o mar parecer congelado.
+    commands.spawn((
+        Camera2d,
+        Projection::Orthographic(OrthographicProjection {
+            scale: 0.5,
+            ..OrthographicProjection::default_2d()
+        }),
+    ));
 }
 
 fn setup_hud(mut commands: Commands) {
     commands.spawn((
         Text2d::new("W/S: velas · A/D: leme · Q/E: bordos · F: saquear · ESC: sair"),
         TextFont {
-            font_size: 24.0,
+            font_size: 12.0,
             ..default()
         },
         TextColor(Color::srgb(0.85, 0.85, 0.85)),
-        Transform::from_xyz(0.0, -240.0, 0.0),
+        Transform::from_xyz(0.0, -120.0, 0.0),
     ));
     commands.spawn((
         Text2d::new("Carga: —"),
         TextFont {
-            font_size: 26.0,
+            font_size: 13.0,
             ..default()
         },
         TextColor(Color::srgb(0.95, 0.8, 0.5)),
-        Transform::from_xyz(0.0, 260.0, 0.0),
+        Transform::from_xyz(0.0, 130.0, 0.0),
         CargoReadout,
     ));
 }

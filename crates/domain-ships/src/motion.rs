@@ -42,9 +42,11 @@ pub struct MotionTuning {
 impl Default for MotionTuning {
     fn default() -> Self {
         Self {
-            max_accel: 1.0,
-            max_decel: 2.0,
-            rudder_reference_ratio: 0.3,
+            // Tuning de jogabilidade do slice: peso perceptível (chega na
+            // velocidade em ~4s) sem parecer que o navio não responde.
+            max_accel: 8.0,
+            max_decel: 8.0,
+            rudder_reference_ratio: 0.15,
         }
     }
 }
@@ -110,7 +112,13 @@ mod tests {
     }
 
     fn tuning() -> MotionTuning {
-        MotionTuning::default()
+        // Valores fixados: os testes cobrem as REGRAS do modelo, não o
+        // tuning de jogo (que muda por balanceamento).
+        MotionTuning {
+            max_accel: 1.0,
+            max_decel: 2.0,
+            rudder_reference_ratio: 0.3,
+        }
     }
 
     fn input(throttle: f32, turn: f32) -> MotionInput {

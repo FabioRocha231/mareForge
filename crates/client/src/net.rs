@@ -147,7 +147,9 @@ fn send_ship_input(
     keys: Res<ButtonInput<KeyCode>>,
     mut connection_manager: ResMut<ConnectionManager>,
 ) {
-    let throttle = if keys.pressed(KeyCode::KeyW) {
+    // Dev tooling (PRD §39): MAREFORGE_AUTOSAIL=1 segura o W sozinho.
+    let autosail = std::env::var_os("MAREFORGE_AUTOSAIL").is_some();
+    let throttle = if keys.pressed(KeyCode::KeyW) || autosail {
         1.0
     } else {
         0.0
