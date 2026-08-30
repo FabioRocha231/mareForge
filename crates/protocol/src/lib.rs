@@ -16,7 +16,9 @@ use serde::{Deserialize, Serialize};
 ///     Wreck (WreckSpawned/WreckRemoved) e loot (LootWreck/LootResult).
 /// v4: geografia de risco (MF-017) — ZoneChanged com tier e nome da zona;
 ///     o servidor é quem calcula a zona real (PRD §10), a UI representa.
-pub const PROTOCOL_VERSION: u16 = 4;
+/// v5: economia de recursos (MF-018/019) — nós visíveis (NodesSnapshot no
+///     hello, NodeUpdated em toda mudança), coleta GatherNode/GatherResult.
+pub const PROTOCOL_VERSION: u16 = 5;
 
 /// Primeira mensagem do client após conectar (ADR-0011).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -135,6 +137,49 @@ pub struct ZoneChanged {
     pub zone_name: String,
 }
 
+/// Estado visível de um nó de recurso (PRD §64: ResourceNodeUpdated,
+/// MF-018). Nós são server-authoritative: o client desenha e pede.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NodeState {
+    /// Id numérico do nó (protocolo usa u32, como wrecks e navios).
+    pub node_id: u32,
+    pub x: f32,
+    pub y: f32,
+    /// Nome do recurso para a UI (display name do catálogo do servidor).
+    pub resource_name: String,
+    /// Unidades disponíveis agora (0 = esgotado, aguardando respawn).
+    pub stock: u32,
+    pub max_stock: u32,
+}
+
+/// Todos os nós do mundo, enviados no handshake — depois, só deltas.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NodesSnapshot {
+    pub nodes: Vec<NodeState>,
+}
+
+/// Um nó mudou (coleta de outro jogador ou respawn). Mesmo formato do
+/// estado: o client substitui o que sabe.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NodeUpdated {
+    pub node: NodeState,
+}
+
+/// Jogador quer coletar um nó (PRD MF-019: perto, com estoque e porão).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GatherNode {
+    pub node_id: u32,
+}
+
+/// Resultado da tentativa de coleta (MF-019).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GatherResult {
+    pub node_id: u32,
+    pub success: bool,
+    /// Unidades efetivamente coletadas (0 quando falha).
+    pub gathered: u32,
+}
+
 /// Snapshot do mundo visível; enviado por tick (PRD §64/§66 — AOI corta o
 /// escopo por proximidade quando entrar).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -149,8 +194,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn current_protocol_version_is_four() {
-        assert_eq!(PROTOCOL_VERSION, 4);
+    fn current_protocol_version_is_five() {
+        assert_eq!(PROTOCOL_VERSION, 5);
         assert_eq!(ClientHello::current().protocol_version, PROTOCOL_VERSION);
     }
 
@@ -289,5 +334,56 @@ mod tests {
             let decoded: ZoneChanged = bincode::deserialize(&bytes).unwrap();
             assert_eq!(decoded, message);
         }
+    }
+
+    #[test]
+    fn node_messages_roundtrip() {
+        let state = NodeState {
+            node_id: 4,
+            x: -430.0,
+            y: 20.0,
+            resource_name: String::from("Madeira"),
+            stock: 50,
+            max_stock: 60,
+        };
+        let snapshot = NodesSnapshot {
+            nodes: vec![
+                state.clone(),
+                NodeState {
+                    node_id: 5,
+                    x: 0.0,
+                    y: 900.0,
+                    resource_name: String::from("Coral Negro"),
+                    stock: 0,
+                    max_stock: 30,
+                },
+            ],
+        };
+        let bytes = bincode::serialize(&snapshot).unwrap();
+        let decoded: NodesSnapshot = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded, snapshot);
+        assert_eq!(decoded.nodes[1].stock, 0);
+
+        let updated = NodeUpdated { node: state };
+        let bytes = bincode::serialize(&updated).unwrap();
+        assert_eq!(
+            bincode::deserialize::<NodeUpdated>(&bytes).unwrap(),
+            updated
+        );
+
+        let gather = GatherNode { node_id: 4 };
+        let bytes = bincode::serialize(&gather).unwrap();
+        assert_eq!(bincode::deserialize::<GatherNode>(&bytes).unwrap(), gather);
+
+        let result = GatherResult {
+            node_id: 4,
+            success: true,
+            gathered: 10,
+        };
+        let bytes = bincode::serialize(&result).unwrap();
+        assert_eq!(
+            bincode::deserialize::<GatherResult>(&bytes).unwrap(),
+            result
+        );
     }
 }

@@ -27,11 +27,11 @@ use mareforge_domain_ships::{
     compute_ship_stats, step_motion, EquippedComponents, MotionInput, MotionTuning, ShipMotion,
     ShipStats,
 };
-use mareforge_domain_world::{RiskPolicy, WorldMap};
+use mareforge_domain_world::{GatheringPolicy, RiskPolicy, WorldMap};
 use mareforge_protocol::{
-    AssignShip, ClientHello, FireBroadside, LootResult, LootWreck, ProjectileState, ServerWelcome,
-    ShipDestroyed, ShipInput, ShipState, WorldSnapshot, WreckRemoved, WreckSpawned, ZoneChanged,
-    PROTOCOL_VERSION,
+    AssignShip, ClientHello, FireBroadside, GatherNode, GatherResult, LootResult, LootWreck,
+    NodeUpdated, NodesSnapshot, ProjectileState, ServerWelcome, ShipDestroyed, ShipInput,
+    ShipState, WorldSnapshot, WreckRemoved, WreckSpawned, ZoneChanged, PROTOCOL_VERSION,
 };
 use mareforge_shared::ids::{
     DestructionEventId, ItemDefinitionId, ItemInstanceId, ShipInstanceId, WreckId, ZoneId,
@@ -86,29 +86,61 @@ impl Default for CombatTuning {
 }
 
 /// Catálogo dev (PRD §32/§39): nomes são conteúdo, não contrato arquitetural.
-/// O mínimo para o loop econômico do slice ser observável.
+/// O mínimo para o loop econômico do slice ser observável — e a base da
+/// especialização regional (§7): madeira no Porto da Serra, minério no Porto
+/// da Mina, coral raro na ilha sem lei.
 #[derive(Resource)]
 pub struct DevItems {
     pub catalog: ItemCatalog,
     pub timber: ItemDefinitionId,
+    pub ore: ItemDefinitionId,
+    pub coral: ItemDefinitionId,
 }
 
 impl DevItems {
     fn new() -> Self {
         let timber = ItemDefinitionId::new();
+        let ore = ItemDefinitionId::new();
+        let coral = ItemDefinitionId::new();
         let mut catalog = ItemCatalog::default();
-        catalog
-            .register(ItemDefinition {
-                id: timber,
-                kind: ItemKind::Resource,
-                equipment: None,
-                max_stack: 100,
-                base_weight: 2,
-                tags: SmallVec::new(),
-                display_name: String::from("Timber"),
-            })
-            .expect("catálogo dev não registra duplicatas");
-        Self { catalog, timber }
+        let mut register = |definition: ItemDefinition| {
+            catalog
+                .register(definition)
+                .expect("catálogo dev não registra duplicatas");
+        };
+        register(ItemDefinition {
+            id: timber,
+            kind: ItemKind::Resource,
+            equipment: None,
+            max_stack: 100,
+            base_weight: 2,
+            tags: SmallVec::new(),
+            display_name: String::from("Madeira"),
+        });
+        register(ItemDefinition {
+            id: ore,
+            kind: ItemKind::Resource,
+            equipment: None,
+            max_stack: 100,
+            base_weight: 3,
+            tags: SmallVec::new(),
+            display_name: String::from("Minério"),
+        });
+        register(ItemDefinition {
+            id: coral,
+            kind: ItemKind::Resource,
+            equipment: None,
+            max_stack: 20,
+            base_weight: 1,
+            tags: SmallVec::new(),
+            display_name: String::from("Coral Negro"),
+        });
+        Self {
+            catalog,
+            timber,
+            ore,
+            coral,
+        }
     }
 }
 
@@ -129,6 +161,10 @@ pub struct ServerWorldMap(pub WorldMap);
 /// liga); Frontier/Lawless são full loot incondicional (§9).
 #[derive(Resource, Clone, Copy)]
 pub struct ServerRiskPolicy(pub RiskPolicy);
+
+/// Política de coleta (MF-019): taxa, raio de interação e respawn.
+#[derive(Resource, Clone, Copy)]
+pub struct ServerGatherPolicy(pub GatheringPolicy);
 
 /// Doca do Porto da Serra (mapa do triângulo, PRD §6): dentro das águas
 /// protegidas. Jogadores nascem em segurança e escolhem quando se arriscar
@@ -160,6 +196,8 @@ impl Plugin for ServerNetPlugin {
         app.insert_resource(ServerWreckPolicy(WreckPolicy::default()));
         app.insert_resource(ServerWorldMap(WorldMap::vertical_slice()));
         app.insert_resource(ServerRiskPolicy(RiskPolicy::default()));
+        app.insert_resource(ServerGatherPolicy(GatheringPolicy::default()));
+        app.init_resource::<crate::nodes::NodeIdCounter>();
         app.insert_resource(DevItems::new());
         app.add_channel::<ReliableChannel>(ChannelSettings {
             mode: ChannelMode::OrderedReliable(ReliableSettings::default()),
@@ -173,6 +211,7 @@ impl Plugin for ServerNetPlugin {
         app.register_message::<ShipInput>(ChannelDirection::ClientToServer);
         app.register_message::<FireBroadside>(ChannelDirection::ClientToServer);
         app.register_message::<LootWreck>(ChannelDirection::ClientToServer);
+        app.register_message::<GatherNode>(ChannelDirection::ClientToServer);
         app.register_message::<ServerWelcome>(ChannelDirection::ServerToClient);
         app.register_message::<AssignShip>(ChannelDirection::ServerToClient);
         app.register_message::<WorldSnapshot>(ChannelDirection::ServerToClient);
@@ -181,7 +220,11 @@ impl Plugin for ServerNetPlugin {
         app.register_message::<WreckRemoved>(ChannelDirection::ServerToClient);
         app.register_message::<LootResult>(ChannelDirection::ServerToClient);
         app.register_message::<ZoneChanged>(ChannelDirection::ServerToClient);
+        app.register_message::<NodesSnapshot>(ChannelDirection::ServerToClient);
+        app.register_message::<NodeUpdated>(ChannelDirection::ServerToClient);
+        app.register_message::<GatherResult>(ChannelDirection::ServerToClient);
         app.add_systems(Startup, start_server);
+        app.add_systems(Startup, crate::nodes::spawn_dev_nodes.after(start_server));
         app.add_systems(
             FixedUpdate,
             (
@@ -190,9 +233,11 @@ impl Plugin for ServerNetPlugin {
                 handle_input,
                 handle_fire,
                 handle_loot,
+                crate::nodes::handle_gather,
                 simulate_and_snapshot,
                 world_status,
                 expire_wrecks,
+                crate::nodes::respawn_nodes,
             ),
         );
     }
@@ -338,6 +383,8 @@ fn handle_connections(
 }
 
 /// Handshake (ADR-0011): só spawna navio para hello com versão atual.
+// System Bevy: params são injeção de dependência, não assinatura.
+#[allow(clippy::too_many_arguments)]
 fn handle_hello(
     mut commands: Commands,
     mut hello_events: EventReader<ServerReceiveMessage<ClientHello>>,
@@ -345,6 +392,7 @@ fn handle_hello(
     dev: Res<DevItems>,
     map: Res<ServerWorldMap>,
     ships: Query<&ServerShip>,
+    nodes: Query<&crate::nodes::ServerNode>,
     mut ship_ids: ResMut<ShipIdCounter>,
 ) {
     for event in hello_events.read() {
@@ -386,6 +434,12 @@ fn handle_hello(
         if let Some(zone) = zone_changed_for(&map.0, ship_id, DEV_SPAWN.0, DEV_SPAWN.1) {
             let _ = connection_manager.send_message::<ReliableChannel, _>(client_id, &zone);
         }
+        // Estado inicial do mundo de recursos (MF-018): depois deste
+        // snapshot, o client só recebe deltas (NodeUpdated).
+        let _ = connection_manager.send_message::<ReliableChannel, _>(
+            client_id,
+            &crate::nodes::nodes_snapshot(&nodes, &dev.catalog),
+        );
         info!(client = ?client_id, ship_id, "navio autoritativo criado");
     }
 }

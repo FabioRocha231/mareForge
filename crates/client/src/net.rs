@@ -17,8 +17,9 @@ use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 use mareforge_domain_combat::BroadsideSide;
 use mareforge_protocol::{
-    AssignShip, ClientHello, FireBroadside, LootResult, LootWreck, ServerWelcome, ShipDestroyed,
-    ShipInput, WorldSnapshot, WreckRemoved, WreckSpawned, ZoneChanged, PROTOCOL_VERSION,
+    AssignShip, ClientHello, FireBroadside, GatherNode, GatherResult, LootResult, LootWreck,
+    NodeUpdated, NodesSnapshot, ServerWelcome, ShipDestroyed, ShipInput, WorldSnapshot,
+    WreckRemoved, WreckSpawned, ZoneChanged, PROTOCOL_VERSION,
 };
 
 pub const SERVER_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 5000);
@@ -87,6 +88,7 @@ impl Plugin for ClientNetPlugin {
         app.register_message::<ShipInput>(ChannelDirection::ClientToServer);
         app.register_message::<FireBroadside>(ChannelDirection::ClientToServer);
         app.register_message::<LootWreck>(ChannelDirection::ClientToServer);
+        app.register_message::<GatherNode>(ChannelDirection::ClientToServer);
         app.register_message::<ServerWelcome>(ChannelDirection::ServerToClient);
         app.register_message::<AssignShip>(ChannelDirection::ServerToClient);
         app.register_message::<WorldSnapshot>(ChannelDirection::ServerToClient);
@@ -95,6 +97,9 @@ impl Plugin for ClientNetPlugin {
         app.register_message::<WreckRemoved>(ChannelDirection::ServerToClient);
         app.register_message::<LootResult>(ChannelDirection::ServerToClient);
         app.register_message::<ZoneChanged>(ChannelDirection::ServerToClient);
+        app.register_message::<NodesSnapshot>(ChannelDirection::ServerToClient);
+        app.register_message::<NodeUpdated>(ChannelDirection::ServerToClient);
+        app.register_message::<GatherResult>(ChannelDirection::ServerToClient);
         app.init_resource::<crate::ship::DestroyedShips>();
         app.init_resource::<KnownWrecks>();
         app.add_systems(Startup, (connect, log_connecting));
@@ -105,6 +110,7 @@ impl Plugin for ClientNetPlugin {
                 send_ship_input,
                 send_fire_input,
                 send_loot_input,
+                send_gather_input,
             ),
         );
         app.add_systems(
@@ -312,6 +318,61 @@ fn send_loot_input(
         }
         let _ = connection_manager.send_message::<ReliableChannel, _>(&LootWreck { wreck_id });
     }
+}
+
+/// G coleta o node mais próximo com estoque (PRD MF-019). Dev tooling
+/// (§39): MAREFORGE_AUTOGATHER=1 coleta sozinho — smoke do loop de recursos.
+fn send_gather_input(
+    keys: Res<ButtonInput<KeyCode>>,
+    time: Res<Time>,
+    my_ship: Res<MyShip>,
+    known_nodes: Res<crate::nodes::KnownNodes>,
+    visuals: Query<&crate::ship::ShipVisual>,
+    mut auto_timer: Local<f32>,
+    mut connection_manager: ResMut<ConnectionManager>,
+) {
+    let manual = keys.just_pressed(KeyCode::KeyG);
+    let mut auto = false;
+    if autogather_enabled() {
+        *auto_timer += time.delta_secs();
+        if *auto_timer >= 1.0 {
+            *auto_timer = 0.0;
+            auto = true;
+        }
+    }
+    if !manual && !auto {
+        return;
+    }
+
+    let Some(my_id) = my_ship.0 else { return };
+    let Some(my_visual) = visuals.iter().find(|v| v.target.ship_id == my_id) else {
+        return;
+    };
+    let mine = Vec2::new(my_visual.target.x, my_visual.target.y);
+
+    // Mesmo raio do servidor (30 m) com folga para o lerp visual.
+    const GATHER_RADIUS_SQ: f32 = 28.0 * 28.0;
+    let nearest = known_nodes
+        .0
+        .iter()
+        .filter(|(_, info)| info.stock > 0 && mine.distance_squared(info.pos) <= GATHER_RADIUS_SQ)
+        .min_by(|a, b| {
+            let da = mine.distance_squared(a.1.pos);
+            let db = mine.distance_squared(b.1.pos);
+            da.total_cmp(&db)
+        })
+        .map(|(id, _)| *id);
+
+    if let Some(node_id) = nearest {
+        if manual {
+            info!(node_id, "coletando node");
+        }
+        let _ = connection_manager.send_message::<ReliableChannel, _>(&GatherNode { node_id });
+    }
+}
+
+fn autogather_enabled() -> bool {
+    std::env::var_os("MAREFORGE_AUTOGATHER").is_some()
 }
 
 fn handle_handshake(

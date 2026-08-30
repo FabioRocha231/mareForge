@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 use crate::net::ClientNetPlugin;
+use crate::nodes::NodePlugin;
 use crate::ship::{
     lerp_projectile_visuals, lerp_ship_visuals, spawn_wreck_visuals, update_cargo_readout,
     upsert_projectile_visuals, upsert_ship_visuals, CargoReadout,
@@ -16,6 +17,7 @@ impl Plugin for ClientPlugin {
             .insert_resource(Time::<Fixed>::from_hz(30.0))
             .add_plugins(ClientNetPlugin)
             .add_plugins(ZonePlugin)
+            .add_plugins(NodePlugin)
             .add_systems(Startup, (setup_camera, setup_hud))
             .add_systems(
                 Update,
@@ -46,7 +48,7 @@ fn setup_camera(mut commands: Commands) {
 
 fn setup_hud(mut commands: Commands) {
     commands.spawn((
-        Text2d::new("W/S: velas · A/D: leme · Q/E: bordos · F: saquear · ESC: sair"),
+        Text2d::new("W/S: velas · A/D: leme · Q/E: bordos · F: saquear · G: coletar · ESC: sair"),
         TextFont {
             font_size: 12.0,
             ..default()
