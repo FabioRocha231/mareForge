@@ -17,3 +17,12 @@ cargo build --workspace
 ```sh
 cargo test --workspace
 ```
+
+## Assets
+
+External assets must be registered in
+[docs/assets/registry.md](docs/assets/registry.md).
+
+## License
+
+MIT OR Apache-2.0. See [LICENSE](LICENSE).
