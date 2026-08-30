@@ -41,34 +41,78 @@ impl ShipDefinition {
         self.slots.iter().filter(|s| s.kind == kind).count()
     }
 
-    /// Definição provisória do SmallMerchant do vertical slice. Placeholder
-    /// até o catálogo de navios existir (PRD MF-022); client e server usam
-    /// esta mesma definição para que stats e movimento batam nos dois lados.
-    pub fn small_merchant_placeholder() -> Self {
+    fn slots_of(kind: SlotKind) -> Vec<SlotSpec> {
+        vec![SlotSpec {
+            kind,
+            accepts_tag: None,
+        }]
+    }
+
+    /// Transportador (PRD §12): maior carga, suficiente para tentar fugir.
+    /// Client e server usam a mesma definição para que stats e movimento
+    /// batam nos dois lados.
+    pub fn small_merchant() -> Self {
         Self {
             id: ShipDefinitionId::new(),
             kind: ShipKind::SmallMerchant,
             display_name: String::from("Small Merchant"),
-            slots: vec![
-                SlotSpec {
-                    kind: SlotKind::Hull,
-                    accepts_tag: None,
-                },
-                SlotSpec {
-                    kind: SlotKind::Sail,
-                    accepts_tag: None,
-                },
-                SlotSpec {
-                    kind: SlotKind::Weapon,
-                    accepts_tag: None,
-                },
-            ],
+            slots: Self::slots_of(SlotKind::Hull)
+                .into_iter()
+                .chain(Self::slots_of(SlotKind::Sail))
+                .chain(Self::slots_of(SlotKind::Weapon))
+                .collect(),
             cargo_capacity: 100,
             base_speed: 30.0,
             base_turn_rate: 1.0,
             base_hp: 100,
             base_weapon_damage: 20,
             base_weapon_range: 50.0,
+        }
+    }
+
+    /// Compat: nome antigo do placeholder do SmallMerchant (MF-022 trouxe o
+    /// catálogo real; o nome antigo sobrevive no dev respawn).
+    pub fn small_merchant_placeholder() -> Self {
+        Self::small_merchant()
+    }
+
+    /// Controle de área e escolta (PRD §13): casco grosso, carga média.
+    pub fn patrol() -> Self {
+        Self {
+            id: ShipDefinitionId::new(),
+            kind: ShipKind::Patrol,
+            display_name: String::from("Patrol"),
+            slots: Self::slots_of(SlotKind::Hull)
+                .into_iter()
+                .chain(Self::slots_of(SlotKind::Sail))
+                .chain(Self::slots_of(SlotKind::Weapon))
+                .collect(),
+            cargo_capacity: 70,
+            base_speed: 27.0,
+            base_turn_rate: 0.9,
+            base_hp: 160,
+            base_weapon_damage: 20,
+            base_weapon_range: 50.0,
+        }
+    }
+
+    /// Interceptador (PRD §14): velocidade e pressão ofensiva, porão curto.
+    pub fn corsair() -> Self {
+        Self {
+            id: ShipDefinitionId::new(),
+            kind: ShipKind::Corsair,
+            display_name: String::from("Corsair"),
+            slots: Self::slots_of(SlotKind::Hull)
+                .into_iter()
+                .chain(Self::slots_of(SlotKind::Sail))
+                .chain(Self::slots_of(SlotKind::Weapon))
+                .collect(),
+            cargo_capacity: 40,
+            base_speed: 40.0,
+            base_turn_rate: 1.2,
+            base_hp: 70,
+            base_weapon_damage: 25,
+            base_weapon_range: 55.0,
         }
     }
 }

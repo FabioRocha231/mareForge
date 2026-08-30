@@ -5,6 +5,7 @@
 //! client e servidor. Versionamento no handshake conforme ADR-0011.
 
 use mareforge_domain_combat::weapon::BroadsideSide;
+use mareforge_domain_crafting::recipe::StationKind;
 use mareforge_domain_world::RiskTier;
 use serde::{Deserialize, Serialize};
 
@@ -18,7 +19,9 @@ use serde::{Deserialize, Serialize};
 ///     o servidor é quem calcula a zona real (PRD §10), a UI representa.
 /// v5: economia de recursos (MF-018/019) — nós visíveis (NodesSnapshot no
 ///     hello, NodeUpdated em toda mudança), coleta GatherNode/GatherResult.
-pub const PROTOCOL_VERSION: u16 = 5;
+/// v6: crafting (MF-021/022) — catálogo de receitas no hello
+///     (RecipesSnapshot), intents CraftItem e veredito CraftResult.
+pub const PROTOCOL_VERSION: u16 = 6;
 
 /// Primeira mensagem do client após conectar (ADR-0011).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -180,6 +183,50 @@ pub struct GatherResult {
     pub gathered: u32,
 }
 
+/// Uma receita do catálogo do servidor, pronta para exibição (MF-021/022).
+/// O `recipe_id` é o índice numérico que o client devolve em `CraftItem`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecipeEntry {
+    pub recipe_id: u32,
+    pub display_name: String,
+    /// Estação exigida (Workbench/Dock/None — §36).
+    pub station: StationKind,
+    /// "item" quando produz equipamento/recurso; "navio" quando o output é
+    /// um ShipInstance construído no Dock (PRD §38: navio não é item).
+    pub ship_build: bool,
+    pub output_name: String,
+    /// Quantidade produzida por craft (1 para equipamento).
+    pub output_quantity: u32,
+    /// Linhas de ingredientes já resolvidas para UI (nome + quantidade).
+    pub ingredients: Vec<IngredientLine>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IngredientLine {
+    pub name: String,
+    pub quantity: u32,
+}
+
+/// Catálogo completo de receitas, enviado no handshake — estático na sessão.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecipesSnapshot {
+    pub recipes: Vec<RecipeEntry>,
+}
+
+/// Jogador quer fabricar (PRD §63: CraftItem). O servidor valida estação,
+/// ingredientes e porão — fail-closed (§37).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CraftItem {
+    pub recipe_id: u32,
+}
+
+/// Resultado da tentativa de fabricação/construção.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CraftResult {
+    pub recipe_id: u32,
+    pub success: bool,
+}
+
 /// Snapshot do mundo visível; enviado por tick (PRD §64/§66 — AOI corta o
 /// escopo por proximidade quando entrar).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -194,8 +241,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn current_protocol_version_is_five() {
-        assert_eq!(PROTOCOL_VERSION, 5);
+    fn current_protocol_version_is_six() {
+        assert_eq!(PROTOCOL_VERSION, 6);
         assert_eq!(ClientHello::current().protocol_version, PROTOCOL_VERSION);
     }
 
@@ -385,5 +432,48 @@ mod tests {
             bincode::deserialize::<GatherResult>(&bytes).unwrap(),
             result
         );
+    }
+
+    #[test]
+    fn craft_messages_roundtrip_with_station_and_ingredients() {
+        let entry = RecipeEntry {
+            recipe_id: 3,
+            display_name: String::from("Corsair"),
+            station: mareforge_domain_crafting::recipe::StationKind::Dock,
+            ship_build: true,
+            output_name: String::from("Corsair"),
+            output_quantity: 1,
+            ingredients: vec![
+                IngredientLine {
+                    name: String::from("Minério"),
+                    quantity: 40,
+                },
+                IngredientLine {
+                    name: String::from("Coral Negro"),
+                    quantity: 10,
+                },
+            ],
+        };
+        let snapshot = RecipesSnapshot {
+            recipes: vec![entry],
+        };
+        let bytes = bincode::serialize(&snapshot).unwrap();
+        let decoded: RecipesSnapshot = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded, snapshot);
+        assert_eq!(
+            decoded.recipes[0].station,
+            mareforge_domain_crafting::recipe::StationKind::Dock
+        );
+
+        let intent = CraftItem { recipe_id: 3 };
+        let bytes = bincode::serialize(&intent).unwrap();
+        assert_eq!(bincode::deserialize::<CraftItem>(&bytes).unwrap(), intent);
+
+        let result = CraftResult {
+            recipe_id: 3,
+            success: false,
+        };
+        let bytes = bincode::serialize(&result).unwrap();
+        assert_eq!(bincode::deserialize::<CraftResult>(&bytes).unwrap(), result);
     }
 }

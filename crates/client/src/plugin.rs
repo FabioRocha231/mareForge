@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+use crate::crafting::{send_craft_input, CraftPlugin};
 use crate::net::ClientNetPlugin;
 use crate::nodes::NodePlugin;
 use crate::ship::{
@@ -18,7 +19,8 @@ impl Plugin for ClientPlugin {
             .add_plugins(ClientNetPlugin)
             .add_plugins(ZonePlugin)
             .add_plugins(NodePlugin)
-            .add_systems(Startup, (setup_camera, setup_hud))
+            .add_plugins(CraftPlugin)
+            .add_systems(Startup, (setup_camera, setup_hud).chain())
             .add_systems(
                 Update,
                 (
@@ -28,6 +30,8 @@ impl Plugin for ClientPlugin {
                     lerp_projectile_visuals,
                     spawn_wreck_visuals,
                     update_cargo_readout,
+                    crate::ship::follow_camera,
+                    send_craft_input,
                     close_on_esc,
                 ),
             );
@@ -46,26 +50,41 @@ fn setup_camera(mut commands: Commands) {
     ));
 }
 
-fn setup_hud(mut commands: Commands) {
-    commands.spawn((
-        Text2d::new("W/S: velas · A/D: leme · Q/E: bordos · F: saquear · G: coletar · ESC: sair"),
-        TextFont {
-            font_size: 12.0,
-            ..default()
-        },
-        TextColor(Color::srgb(0.85, 0.85, 0.85)),
-        Transform::from_xyz(0.0, -120.0, 0.0),
-    ));
-    commands.spawn((
-        Text2d::new("Carga: —"),
-        TextFont {
-            font_size: 13.0,
-            ..default()
-        },
-        TextColor(Color::srgb(0.95, 0.8, 0.5)),
-        Transform::from_xyz(0.0, 130.0, 0.0),
-        CargoReadout,
-    ));
+/// HUD filho da câmera: a câmera segue o navio (follow_camera) e o HUD vai
+/// junto — texto em coordenada de mundo some quando se navega.
+fn setup_hud(mut commands: Commands, camera: Query<Entity, With<Camera2d>>) {
+    let Ok(camera) = camera.get_single() else {
+        return;
+    };
+    let hud = |commands: &mut Commands, text: &str, size: f32, color: Color, y: f32| {
+        commands
+            .spawn((
+                Text2d::new(text.to_owned()),
+                TextFont {
+                    font_size: size,
+                    ..default()
+                },
+                TextColor(color),
+                Transform::from_xyz(0.0, y, 10.0),
+            ))
+            .set_parent(camera)
+            .id()
+    };
+    hud(
+        &mut commands,
+        "W/S: velas · A/D: leme · Q/E: bordos · F: saquear · G: coletar · 1-9: fabricar · ESC: sair",
+        12.0,
+        Color::srgb(0.85, 0.85, 0.85),
+        -170.0,
+    );
+    let cargo = hud(
+        &mut commands,
+        "Carga: —",
+        13.0,
+        Color::srgb(0.95, 0.8, 0.5),
+        140.0,
+    );
+    commands.entity(cargo).insert(CargoReadout);
 }
 
 fn close_on_esc(keys: Res<ButtonInput<KeyCode>>, mut exit: EventWriter<AppExit>) {

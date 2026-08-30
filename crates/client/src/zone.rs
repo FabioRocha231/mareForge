@@ -46,17 +46,22 @@ impl Plugin for ZonePlugin {
     }
 }
 
-fn setup_zone_hud(mut commands: Commands) {
-    commands.spawn((
-        Text2d::new("—"),
-        TextFont {
-            font_size: 14.0,
-            ..default()
-        },
-        TextColor(Color::srgb(0.85, 0.85, 0.85)),
-        Transform::from_xyz(0.0, 155.0, 0.0),
-        ZoneReadout,
-    ));
+fn setup_zone_hud(mut commands: Commands, camera: Query<Entity, With<Camera2d>>) {
+    let Ok(camera) = camera.get_single() else {
+        return;
+    };
+    commands
+        .spawn((
+            Text2d::new("—"),
+            TextFont {
+                font_size: 14.0,
+                ..default()
+            },
+            TextColor(Color::srgb(0.85, 0.85, 0.85)),
+            Transform::from_xyz(0.0, 165.0, 10.0),
+            ZoneReadout,
+        ))
+        .set_parent(camera);
 }
 
 /// O servidor é a lei: só escrevemos o que ele mandou.
@@ -65,6 +70,7 @@ fn handle_zone_changed(
     mut current: ResMut<CurrentZone>,
     mut shown: ResMut<PvpWarningShown>,
     mut commands: Commands,
+    camera: Query<Entity, With<Camera2d>>,
 ) {
     for event in events.read() {
         let zone = event.message();
@@ -77,18 +83,22 @@ fn handle_zone_changed(
         if entering_pvp {
             shown.0 = true;
             warn!("primeira entrada em águas de risco nesta sessão");
-            commands.spawn((
-                Text2d::new(
-                    "Você está entrando em águas de risco.\n\nSeu navio, equipamentos e carga poderão ser perdidos.",
-                ),
-                TextFont {
-                    font_size: 16.0,
-                    ..default()
-                },
-                TextColor(Color::srgb(1.0, 0.45, 0.35)),
-                Transform::from_xyz(0.0, 30.0, 0.0),
-                PvpWarningText,
-            ));
+            if let Ok(camera) = camera.get_single() {
+                commands
+                    .spawn((
+                        Text2d::new(
+                            "Você está entrando em águas de risco.\n\nSeu navio, equipamentos e carga poderão ser perdidos.",
+                        ),
+                        TextFont {
+                            font_size: 16.0,
+                            ..default()
+                        },
+                        TextColor(Color::srgb(1.0, 0.45, 0.35)),
+                        Transform::from_xyz(0.0, 30.0, 10.0),
+                        PvpWarningText,
+                    ))
+                    .set_parent(camera);
+            }
         }
 
         current.0 = Some(ServerZone {

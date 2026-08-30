@@ -202,6 +202,29 @@ pub fn spawn_wreck_visuals(
     }
 }
 
+/// A câmera segue o próprio navio: o mar é grande e o HUD é filho da
+/// câmera — navegar sem isso é assistir o casco sumir do quadro.
+pub fn follow_camera(
+    time: Res<Time>,
+    my_ship: Res<crate::net::MyShip>,
+    visuals: Query<&ShipVisual>,
+    mut camera: Query<&mut Transform, With<Camera2d>>,
+) {
+    let Ok(mut transform) = camera.get_single_mut() else {
+        return;
+    };
+    let Some(my_id) = my_ship.0 else { return };
+    let Some(visual) = visuals.iter().find(|visual| visual.target.ship_id == my_id) else {
+        return;
+    };
+    // Perseguição suave: o lerp mais lento que o dos navios dá sensação de
+    // câmera de mastro, não de Railcam colada no casco.
+    let factor = 1.0 - (-6.0 * time.delta_secs()).exp();
+    transform.translation = transform
+        .translation
+        .lerp(Vec3::new(visual.target.x, visual.target.y, 0.0), factor);
+}
+
 /// Leitor de peso de carga do próprio navio (feedback do loop econômico).
 #[derive(Component)]
 pub struct CargoReadout;

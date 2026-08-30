@@ -21,7 +21,7 @@ use mareforge_domain_combat::{
     LootPolicy, Projectile, WeaponParams, WreckChest, WreckPolicy,
 };
 use mareforge_domain_items::{
-    CargoHold, Custody, ItemCatalog, ItemDefinition, ItemInstance, ItemKind,
+    CargoHold, Custody, EquipmentStats, ItemCatalog, ItemDefinition, ItemInstance, ItemKind,
 };
 use mareforge_domain_ships::{
     compute_ship_stats, step_motion, EquippedComponents, MotionInput, MotionTuning, ShipMotion,
@@ -29,9 +29,10 @@ use mareforge_domain_ships::{
 };
 use mareforge_domain_world::{GatheringPolicy, RiskPolicy, WorldMap};
 use mareforge_protocol::{
-    AssignShip, ClientHello, FireBroadside, GatherNode, GatherResult, LootResult, LootWreck,
-    NodeUpdated, NodesSnapshot, ProjectileState, ServerWelcome, ShipDestroyed, ShipInput,
-    ShipState, WorldSnapshot, WreckRemoved, WreckSpawned, ZoneChanged, PROTOCOL_VERSION,
+    AssignShip, ClientHello, CraftItem, CraftResult, FireBroadside, GatherNode, GatherResult,
+    LootResult, LootWreck, NodeUpdated, NodesSnapshot, ProjectileState, RecipesSnapshot,
+    ServerWelcome, ShipDestroyed, ShipInput, ShipState, WorldSnapshot, WreckRemoved, WreckSpawned,
+    ZoneChanged, PROTOCOL_VERSION,
 };
 use mareforge_shared::ids::{
     DestructionEventId, ItemDefinitionId, ItemInstanceId, ShipInstanceId, WreckId, ZoneId,
@@ -95,6 +96,9 @@ pub struct DevItems {
     pub timber: ItemDefinitionId,
     pub ore: ItemDefinitionId,
     pub coral: ItemDefinitionId,
+    pub hull_plate: ItemDefinitionId,
+    pub racing_sails: ItemDefinitionId,
+    pub bronze_cannon: ItemDefinitionId,
 }
 
 impl DevItems {
@@ -102,6 +106,9 @@ impl DevItems {
         let timber = ItemDefinitionId::new();
         let ore = ItemDefinitionId::new();
         let coral = ItemDefinitionId::new();
+        let hull_plate = ItemDefinitionId::new();
+        let racing_sails = ItemDefinitionId::new();
+        let bronze_cannon = ItemDefinitionId::new();
         let mut catalog = ItemCatalog::default();
         let mut register = |definition: ItemDefinition| {
             catalog
@@ -135,11 +142,61 @@ impl DevItems {
             tags: SmallVec::new(),
             display_name: String::from("Coral Negro"),
         });
+        // Equipamento dev (MF-021): o que o Workbench produz. Stats de
+        // velocidade/alcance usam offsets de 0,01 unidade (§32).
+        register(ItemDefinition {
+            id: hull_plate,
+            kind: ItemKind::Equipment,
+            equipment: Some(EquipmentStats {
+                damage: 0,
+                speed: 0,
+                cargo: 0,
+                hp: 40,
+                range: 0,
+            }),
+            max_stack: 1,
+            base_weight: 8,
+            tags: SmallVec::new(),
+            display_name: String::from("Casco Reforçado"),
+        });
+        register(ItemDefinition {
+            id: racing_sails,
+            kind: ItemKind::Equipment,
+            equipment: Some(EquipmentStats {
+                damage: 0,
+                speed: 600,
+                cargo: 0,
+                hp: 0,
+                range: 0,
+            }),
+            max_stack: 1,
+            base_weight: 5,
+            tags: SmallVec::new(),
+            display_name: String::from("Velas de Corrida"),
+        });
+        register(ItemDefinition {
+            id: bronze_cannon,
+            kind: ItemKind::Equipment,
+            equipment: Some(EquipmentStats {
+                damage: 10,
+                speed: 0,
+                cargo: 0,
+                hp: 0,
+                range: 500,
+            }),
+            max_stack: 1,
+            base_weight: 10,
+            tags: SmallVec::new(),
+            display_name: String::from("Canhão de Bronze"),
+        });
         Self {
             catalog,
             timber,
             ore,
             coral,
+            hull_plate,
+            racing_sails,
+            bronze_cannon,
         }
     }
 }
@@ -198,7 +255,10 @@ impl Plugin for ServerNetPlugin {
         app.insert_resource(ServerRiskPolicy(RiskPolicy::default()));
         app.insert_resource(ServerGatherPolicy(GatheringPolicy::default()));
         app.init_resource::<crate::nodes::NodeIdCounter>();
-        app.insert_resource(DevItems::new());
+        let dev_items = DevItems::new();
+        app.insert_resource(crate::crafting::DevShips::new());
+        app.insert_resource(crate::crafting::DevRecipes::new(&dev_items));
+        app.insert_resource(dev_items);
         app.add_channel::<ReliableChannel>(ChannelSettings {
             mode: ChannelMode::OrderedReliable(ReliableSettings::default()),
             ..default()
@@ -212,6 +272,7 @@ impl Plugin for ServerNetPlugin {
         app.register_message::<FireBroadside>(ChannelDirection::ClientToServer);
         app.register_message::<LootWreck>(ChannelDirection::ClientToServer);
         app.register_message::<GatherNode>(ChannelDirection::ClientToServer);
+        app.register_message::<CraftItem>(ChannelDirection::ClientToServer);
         app.register_message::<ServerWelcome>(ChannelDirection::ServerToClient);
         app.register_message::<AssignShip>(ChannelDirection::ServerToClient);
         app.register_message::<WorldSnapshot>(ChannelDirection::ServerToClient);
@@ -223,6 +284,8 @@ impl Plugin for ServerNetPlugin {
         app.register_message::<NodesSnapshot>(ChannelDirection::ServerToClient);
         app.register_message::<NodeUpdated>(ChannelDirection::ServerToClient);
         app.register_message::<GatherResult>(ChannelDirection::ServerToClient);
+        app.register_message::<RecipesSnapshot>(ChannelDirection::ServerToClient);
+        app.register_message::<CraftResult>(ChannelDirection::ServerToClient);
         app.add_systems(Startup, start_server);
         app.add_systems(Startup, crate::nodes::spawn_dev_nodes.after(start_server));
         app.add_systems(
@@ -234,6 +297,7 @@ impl Plugin for ServerNetPlugin {
                 handle_fire,
                 handle_loot,
                 crate::nodes::handle_gather,
+                crate::crafting::handle_craft,
                 simulate_and_snapshot,
                 world_status,
                 expire_wrecks,
@@ -294,12 +358,16 @@ pub struct ProjectileIdCounter(pub u32);
 #[derive(Resource, Default)]
 pub struct WreckIdCounter(pub u32);
 
-fn spawn_ship_for(
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn spawn_ship_for(
     commands: &mut Commands,
     ship_ids: &mut ShipIdCounter,
     dev: &DevItems,
+    dev_ships: &crate::crafting::DevShips,
     map: &WorldMap,
+    kind: mareforge_domain_ships::ShipKind,
     client_id: ClientId,
+    carry: Vec<Custody>,
 ) -> u32 {
     let ship_id = ship_ids.0;
     ship_ids.0 += 1;
@@ -307,7 +375,7 @@ fn spawn_ship_for(
         ClientId::Netcode(n) => n,
         _ => 0,
     };
-    let definition = mareforge_domain_ships::ShipDefinition::small_merchant_placeholder();
+    let definition = dev_ships.definition(kind).clone();
     let stats = compute_ship_stats(
         &definition,
         &EquippedComponents::default(),
@@ -317,12 +385,21 @@ fn spawn_ship_for(
     let ship_instance = ShipInstanceId::new();
     let mut hold = CargoHold::new(ship_instance, stats.cargo_capacity);
     // Carga dev (PRD §39): mercadoria de teste para o loop econômico —
-    // afundou, a carga vai pro wreck e muda de dono.
-    hold.insert(
-        &dev.catalog,
-        ItemInstance::new_resource(ItemInstanceId::new(), dev.timber, 10),
-    )
-    .expect("carga dev cabe no porão vazio");
+    // afundou, a carga vai pro wreck e muda de dono. Só o merchant de
+    // dev respawn nasce semeado; navios construídos migram a carga real.
+    if kind == mareforge_domain_ships::ShipKind::SmallMerchant {
+        hold.insert(
+            &dev.catalog,
+            ItemInstance::new_resource(ItemInstanceId::new(), dev.timber, 15),
+        )
+        .expect("carga dev cabe no porão vazio");
+    }
+    if !carry.is_empty() {
+        // Construção (MF-022): a carga do casco antigo migra para o novo.
+        // `take_all` é atômico; a capacidade foi conferida pelo chamador.
+        hold.take_all(&dev.catalog, carry)
+            .expect("carga migra: capacidade conferida antes da construção");
+    }
 
     // Nasce na doca do Porto da Serra, em águas protegidas (Pilar 3: o
     // risco é escolha do jogador, não condição de nascimento).
@@ -354,7 +431,12 @@ fn spawn_ship_for(
 
 /// Mensagem inicial de zona para um navio que acabou de nascer (PRD §10: o
 /// client precisa do estado atual, não só das transições).
-fn zone_changed_for(map: &WorldMap, ship_id: u32, x: f32, y: f32) -> Option<ZoneChanged> {
+pub(crate) fn zone_changed_for(
+    map: &WorldMap,
+    ship_id: u32,
+    x: f32,
+    y: f32,
+) -> Option<ZoneChanged> {
     map.zone_at(x, y).ok().map(|zone| ZoneChanged {
         ship_id,
         tier: zone.tier,
@@ -390,6 +472,8 @@ fn handle_hello(
     mut hello_events: EventReader<ServerReceiveMessage<ClientHello>>,
     mut connection_manager: ResMut<ConnectionManager>,
     dev: Res<DevItems>,
+    dev_ships: Res<crate::crafting::DevShips>,
+    dev_recipes: Res<crate::crafting::DevRecipes>,
     map: Res<ServerWorldMap>,
     ships: Query<&ServerShip>,
     nodes: Query<&crate::nodes::ServerNode>,
@@ -421,7 +505,16 @@ fn handle_hello(
             continue;
         }
 
-        let ship_id = spawn_ship_for(&mut commands, &mut ship_ids, &dev, &map.0, client_id);
+        let ship_id = spawn_ship_for(
+            &mut commands,
+            &mut ship_ids,
+            &dev,
+            &dev_ships,
+            &map.0,
+            mareforge_domain_ships::ShipKind::SmallMerchant,
+            client_id,
+            Vec::new(),
+        );
         let _ = connection_manager.send_message::<ReliableChannel, _>(
             client_id,
             &ServerWelcome {
@@ -434,12 +527,14 @@ fn handle_hello(
         if let Some(zone) = zone_changed_for(&map.0, ship_id, DEV_SPAWN.0, DEV_SPAWN.1) {
             let _ = connection_manager.send_message::<ReliableChannel, _>(client_id, &zone);
         }
-        // Estado inicial do mundo de recursos (MF-018): depois deste
-        // snapshot, o client só recebe deltas (NodeUpdated).
+        // Estado inicial do mundo: nodes (MF-018) e receitas (MF-021/022).
+        // Depois deste hello, o client só recebe deltas.
         let _ = connection_manager.send_message::<ReliableChannel, _>(
             client_id,
             &crate::nodes::nodes_snapshot(&nodes, &dev.catalog),
         );
+        let _ = connection_manager
+            .send_message::<ReliableChannel, _>(client_id, &dev_recipes.snapshot(&dev.catalog));
         info!(client = ?client_id, ship_id, "navio autoritativo criado");
     }
 }
@@ -660,6 +755,7 @@ fn simulate_and_snapshot(
     mut ship_ids: ResMut<ShipIdCounter>,
     mut wreck_ids: ResMut<WreckIdCounter>,
     dev: Res<DevItems>,
+    dev_ships: Res<crate::crafting::DevShips>,
     loot_policy: Res<ServerLootPolicy>,
     tuning: Res<CombatTuning>,
     map: Res<ServerWorldMap>,
@@ -903,8 +999,16 @@ fn simulate_and_snapshot(
         // Dev respawn (PRD §39): conveniência de teste — o loop do
         // vertical slice não pode matar a sessão do jogador. A regra
         // definitiva de reconstrução é o Dock (PRD §38, Phase 7).
-        let new_ship_id =
-            spawn_ship_for(&mut commands, &mut ship_ids, &dev, &map.0, victim_client_id);
+        let new_ship_id = spawn_ship_for(
+            &mut commands,
+            &mut ship_ids,
+            &dev,
+            &dev_ships,
+            &map.0,
+            mareforge_domain_ships::ShipKind::SmallMerchant,
+            victim_client_id,
+            Vec::new(),
+        );
         let _ = connection_manager.send_message::<ReliableChannel, _>(
             victim_client_id,
             &AssignShip {

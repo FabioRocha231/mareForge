@@ -22,6 +22,8 @@ pub enum CraftError {
     UnknownOutputItem {
         item: mareforge_shared::ids::ItemDefinitionId,
     },
+    #[error("cargo rejected the craft: {0}")]
+    Cargo(#[from] mareforge_domain_items::CargoError),
 }
 
 #[derive(Debug)]

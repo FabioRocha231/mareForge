@@ -17,9 +17,10 @@ use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 use mareforge_domain_combat::BroadsideSide;
 use mareforge_protocol::{
-    AssignShip, ClientHello, FireBroadside, GatherNode, GatherResult, LootResult, LootWreck,
-    NodeUpdated, NodesSnapshot, ServerWelcome, ShipDestroyed, ShipInput, WorldSnapshot,
-    WreckRemoved, WreckSpawned, ZoneChanged, PROTOCOL_VERSION,
+    AssignShip, ClientHello, CraftItem, CraftResult, FireBroadside, GatherNode, GatherResult,
+    LootResult, LootWreck, NodeUpdated, NodesSnapshot, RecipesSnapshot, ServerWelcome,
+    ShipDestroyed, ShipInput, WorldSnapshot, WreckRemoved, WreckSpawned, ZoneChanged,
+    PROTOCOL_VERSION,
 };
 
 pub const SERVER_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 5000);
@@ -89,6 +90,7 @@ impl Plugin for ClientNetPlugin {
         app.register_message::<FireBroadside>(ChannelDirection::ClientToServer);
         app.register_message::<LootWreck>(ChannelDirection::ClientToServer);
         app.register_message::<GatherNode>(ChannelDirection::ClientToServer);
+        app.register_message::<CraftItem>(ChannelDirection::ClientToServer);
         app.register_message::<ServerWelcome>(ChannelDirection::ServerToClient);
         app.register_message::<AssignShip>(ChannelDirection::ServerToClient);
         app.register_message::<WorldSnapshot>(ChannelDirection::ServerToClient);
@@ -100,6 +102,8 @@ impl Plugin for ClientNetPlugin {
         app.register_message::<NodesSnapshot>(ChannelDirection::ServerToClient);
         app.register_message::<NodeUpdated>(ChannelDirection::ServerToClient);
         app.register_message::<GatherResult>(ChannelDirection::ServerToClient);
+        app.register_message::<RecipesSnapshot>(ChannelDirection::ServerToClient);
+        app.register_message::<CraftResult>(ChannelDirection::ServerToClient);
         app.init_resource::<crate::ship::DestroyedShips>();
         app.init_resource::<KnownWrecks>();
         app.add_systems(Startup, (connect, log_connecting));

@@ -9,6 +9,7 @@ license.workspace = true
 bevy = { version = "0.15", default-features = false, features = ["bevy_asset", "bevy_state"] }
 lightyear = "0.19"
 mareforge-domain-combat = { path = "../domain-combat" }
+mareforge-domain-crafting = { path = "../domain-crafting" }
 mareforge-domain-items = { path = "../domain-items" }
 mareforge-domain-ships = { path = "../domain-ships" }
 mareforge-domain-world = { path = "../domain-world" }
