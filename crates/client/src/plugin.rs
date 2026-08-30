@@ -6,6 +6,7 @@ use crate::net::{
     ClientNetPlugin, KnownWrecks, MyDocked, MyShip, GATHER_RADIUS_SQ, LOOT_RADIUS_SQ,
 };
 use crate::nodes::{KnownNodes, NodePlugin};
+use crate::port_screen::PortPlugin;
 use crate::ship::{
     expire_stale_visuals, lerp_projectile_visuals, lerp_ship_visuals, update_cargo_readout,
     upsert_projectile_visuals, upsert_ship_visuals, upsert_wreck_visuals, CargoReadout,
@@ -26,6 +27,7 @@ impl Plugin for ClientPlugin {
             .add_plugins(NodePlugin)
             .add_plugins(CraftPlugin)
             .add_plugins(MarketPlugin)
+            .add_plugins(PortPlugin)
             .add_systems(
                 Startup,
                 (setup_camera, setup_hud, spawn_market_panel).chain(),
@@ -257,8 +259,12 @@ fn update_sea_hud(
     }
 }
 
-fn close_on_esc(keys: Res<ButtonInput<KeyCode>>, mut exit: EventWriter<AppExit>) {
-    if keys.just_pressed(KeyCode::Escape) {
+fn close_on_esc(
+    keys: Res<ButtonInput<KeyCode>>,
+    docked: Res<MyDocked>,
+    mut exit: EventWriter<AppExit>,
+) {
+    if keys.just_pressed(KeyCode::Escape) && !docked.0 {
         exit.send(AppExit::Success);
     }
 }
