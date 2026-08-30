@@ -6,4 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+mareforge-domain-items = { path = "../domain-items" }
+mareforge-shared = { path = "../shared" }
 serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+uuid = { version = "1", features = ["v4"] }
