@@ -85,6 +85,8 @@ mod tests {
             max_speed: 30.0,
             weapon_damage: 20,
             weapon_range: 50.0,
+            port_cooldown_secs: 0.0,
+            starboard_cooldown_secs: 0.0,
         }
     }
 

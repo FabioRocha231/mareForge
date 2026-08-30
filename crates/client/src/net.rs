@@ -161,6 +161,12 @@ pub struct KnownWrecks(pub HashMap<u32, Vec2>);
 #[derive(Resource, Debug, Default)]
 pub struct MyDocked(pub bool);
 
+/// Raio de saque usado pelo HUD e pelo atalho F (28 m: 30 do servidor com
+/// folga para o lerp visual).
+pub const LOOT_RADIUS_SQ: f32 = 28.0 * 28.0;
+/// Raio de coleta usado pelo HUD e pelo atalho G (mesma folga do saque).
+pub const GATHER_RADIUS_SQ: f32 = 28.0 * 28.0;
+
 /// E alterna atracar/desatracar (MF-036). Dev tooling (§39):
 /// MAREFORGE_AUTODOCK=1 tenta atracar sozinho até conseguir — smoke da
 /// rotina de porto sem digitar.
@@ -460,12 +466,10 @@ fn send_loot_input(
     };
     let mine = Vec2::new(my_visual.target.x, my_visual.target.y);
 
-    // Raio de interação do servidor (30 m) com folga para o lerp visual.
-    const INTERACT_RADIUS_SQ: f32 = 28.0 * 28.0;
     let nearest = known_wrecks
         .0
         .iter()
-        .filter(|(_, pos)| mine.distance_squared(**pos) <= INTERACT_RADIUS_SQ)
+        .filter(|(_, pos)| mine.distance_squared(**pos) <= LOOT_RADIUS_SQ)
         .min_by(|a, b| {
             let da = mine.distance_squared(*a.1);
             let db = mine.distance_squared(*b.1);
@@ -511,8 +515,6 @@ fn send_gather_input(
     };
     let mine = Vec2::new(my_visual.target.x, my_visual.target.y);
 
-    // Mesmo raio do servidor (30 m) com folga para o lerp visual.
-    const GATHER_RADIUS_SQ: f32 = 28.0 * 28.0;
     let nearest = known_nodes
         .0
         .iter()

@@ -1428,6 +1428,29 @@ fn simulate_world(
     counter.0 += 1;
 }
 
+/// Face protocolar de um navio autoritativo (MF-043: cooldowns são display;
+/// o servidor continua dono do `BroadsideBattery`).
+fn to_ship_state(ship: &ServerShip, catalog: &ItemCatalog) -> ShipState {
+    ShipState {
+        ship_id: ship.ship_id,
+        x: ship.motion.x,
+        y: ship.motion.y,
+        heading: ship.motion.heading,
+        speed: ship.motion.speed,
+        cargo_weight: ship
+            .hold
+            .used_weight(catalog)
+            .expect("porão só contém definições do catálogo"),
+        hp: ship.hp,
+        max_hp: ship.stats.max_hp,
+        max_speed: ship.stats.speed,
+        weapon_damage: ship.stats.weapon_damage,
+        weapon_range: ship.stats.weapon_range,
+        port_cooldown_secs: ship.battery.port_cooldown,
+        starboard_cooldown_secs: ship.battery.starboard_cooldown,
+    }
+}
+
 /// Snapshot de rede a 20 Hz (ADR-0008, MF-032) — a simulação corre a 30 Hz;
 /// o relógio ([`SnapshotClock`]) decide se ESTE tick transmite. O estado do
 /// mundo é coletado uma vez e recortado por destinatário via AOI
@@ -1458,22 +1481,7 @@ fn send_snapshots(
         .collect();
     let ship_states: Vec<ShipState> = ships
         .iter()
-        .map(|(_, ship)| ShipState {
-            ship_id: ship.ship_id,
-            x: ship.motion.x,
-            y: ship.motion.y,
-            heading: ship.motion.heading,
-            speed: ship.motion.speed,
-            cargo_weight: ship
-                .hold
-                .used_weight(&dev.catalog)
-                .expect("porão só contém definições do catálogo"),
-            hp: ship.hp,
-            max_hp: ship.stats.max_hp,
-            max_speed: ship.stats.speed,
-            weapon_damage: ship.stats.weapon_damage,
-            weapon_range: ship.stats.weapon_range,
-        })
+        .map(|(_, ship)| to_ship_state(ship, &dev.catalog))
         .collect();
     let projectile_states: Vec<ProjectileState> = projectiles
         .iter()
@@ -1755,6 +1763,57 @@ mod tests {
             (60i32 - snapshots as i32).abs() <= 1,
             "esperado ~60 snapshots em 3s, veio {snapshots}"
         );
+    }
+
+    /// MF-043: o snapshot copia a recarga autoritativa do `BroadsideBattery`
+    /// para os campos de display do client.
+    #[test]
+    fn ship_state_populates_battery_cooldowns() {
+        let ship_instance = ShipInstanceId::new();
+        let definition = crate::crafting::DevShips::new()
+            .definition(ShipKind::SmallMerchant)
+            .clone();
+        let stats = compute_ship_stats(
+            &definition,
+            &EquippedComponents::default(),
+            &ItemCatalog::default(),
+        )
+        .expect("stats base do merchant não falham");
+        let ship = ServerShip {
+            ship_id: 7,
+            client_id: None,
+            character: CharacterId::new(),
+            ship_instance,
+            kind: ShipKind::SmallMerchant,
+            presence: VesselPresence::AtSea,
+            loadout: ShipLoadout::new(),
+            input: ShipInput {
+                throttle: 0.0,
+                turn: 0.0,
+            },
+            hp: stats.max_hp,
+            hold: CargoHold::new(ship_instance, stats.cargo_capacity),
+            battery: BroadsideBattery {
+                port_cooldown: 2.5,
+                starboard_cooldown: 0.75,
+            },
+            stats,
+            motion: ShipMotion {
+                x: 10.0,
+                y: 20.0,
+                ..ShipMotion::default()
+            },
+            tuning: MotionTuning::default(),
+            zone: None,
+        };
+
+        let state = to_ship_state(&ship, &ItemCatalog::default());
+        assert_eq!(state.ship_id, 7);
+        assert_eq!(state.x, 10.0);
+        assert_eq!(state.y, 20.0);
+        assert_eq!(state.cargo_weight, 0);
+        assert_eq!(state.port_cooldown_secs, 2.5);
+        assert_eq!(state.starboard_cooldown_secs, 0.75);
     }
 
     /// Simulação e snapshot não são a mesma cadência: há ticks de 30 Hz em

@@ -24,10 +24,6 @@ pub struct ServerZone {
 #[derive(Resource, Default)]
 pub struct PvpWarningShown(pub bool);
 
-/// Indicador permanente de risco no topo da tela.
-#[derive(Component)]
-pub struct ZoneReadout;
-
 /// O aviso grande de entrada em PvP; some sozinho após alguns segundos.
 #[derive(Component)]
 pub struct PvpWarningText;
@@ -38,30 +34,11 @@ impl Plugin for ZonePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CurrentZone>()
             .init_resource::<PvpWarningShown>()
-            .add_systems(Startup, setup_zone_hud)
             .add_systems(
                 Update,
                 (handle_zone_changed, update_zone_hud, expire_pvp_warning),
             );
     }
-}
-
-fn setup_zone_hud(mut commands: Commands, camera: Query<Entity, With<Camera2d>>) {
-    let Ok(camera) = camera.get_single() else {
-        return;
-    };
-    commands
-        .spawn((
-            Text2d::new("—"),
-            TextFont {
-                font_size: 14.0,
-                ..default()
-            },
-            TextColor(Color::srgb(0.85, 0.85, 0.85)),
-            Transform::from_xyz(0.0, 165.0, 10.0),
-            ZoneReadout,
-        ))
-        .set_parent(camera);
 }
 
 /// O servidor é a lei: só escrevemos o que ele mandou.
@@ -108,33 +85,28 @@ fn handle_zone_changed(
     }
 }
 
-/// Indicador permanente + alteração visual da água por tier (§10).
-fn update_zone_hud(
-    zone: Res<CurrentZone>,
-    mut clear_color: ResMut<ClearColor>,
-    mut readouts: Query<(&mut Text2d, &mut TextColor), With<ZoneReadout>>,
-) {
+/// Rótulo público de risco para o HUD do mar (MF-043).
+pub fn risk_tag(tier: RiskTier) -> &'static str {
+    match tier {
+        RiskTier::Protected => "PvP desativado",
+        RiskTier::Frontier => "PvP ATIVO · full loot",
+        RiskTier::Lawless => "PvP ATIVO · full loot",
+    }
+}
+
+/// Alteração visual da água por tier (§10).
+fn update_zone_hud(zone: Res<CurrentZone>, mut clear_color: ResMut<ClearColor>) {
     if !zone.is_changed() {
         return;
     }
     let Some(zone) = zone.0.as_ref() else {
         return;
     };
-    let (risk_tag, ink) = match zone.tier {
-        RiskTier::Protected => ("PvP desativado", Color::srgb(0.55, 0.9, 0.6)),
-        RiskTier::Frontier => ("PvP ATIVO · full loot", Color::srgb(0.98, 0.75, 0.35)),
-        RiskTier::Lawless => ("PvP ATIVO · full loot", Color::srgb(1.0, 0.35, 0.3)),
-    };
     let water = match zone.tier {
         RiskTier::Protected => Color::srgb(0.04, 0.14, 0.24),
         RiskTier::Frontier => Color::srgb(0.08, 0.11, 0.19),
         RiskTier::Lawless => Color::srgb(0.20, 0.05, 0.07),
     };
-
-    if let Ok((mut label, mut color)) = readouts.get_single_mut() {
-        label.0 = format!("{} — {risk_tag}", zone.name);
-        *color = TextColor(ink);
-    }
     clear_color.0 = water;
 }
 

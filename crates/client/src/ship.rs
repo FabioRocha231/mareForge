@@ -292,28 +292,11 @@ pub fn update_cargo_readout(
     mut readout: Query<&mut Text2d, With<CargoReadout>>,
 ) {
     let Some(my_id) = my_ship.0 else { return };
-    let Some(weight) = visuals
-        .iter()
-        .find(|visual| visual.target.ship_id == my_id)
-        .map(|visual| visual.target.cargo_weight)
-    else {
-        return;
-    };
     let Some(visual) = visuals.iter().find(|visual| visual.target.ship_id == my_id) else {
         return;
     };
-    let state = &visual.target;
     let mut text = readout.single_mut();
-    // Stats AUTORITATIVOS do snapshot (MF-039): equipar vela/casco/canhão
-    // muda esta linha no próximo quadro — a troca é observável.
-    text.0 = format!(
-        "Carga: {} · HP {}/{} · vel {:.0} (máx {:.0}) · dano {} · alc {:.0}",
-        weight,
-        state.hp,
-        state.max_hp,
-        state.speed,
-        state.max_speed,
-        state.weapon_damage,
-        state.weapon_range
-    );
+    // ponytail: capacidade não está no ShipState ainda; mostrar só o peso.
+    // Adicionar cargo_capacity ao ShipState quando a UI precisar do limite.
+    text.0 = format!("Carga: {}", visual.target.cargo_weight);
 }

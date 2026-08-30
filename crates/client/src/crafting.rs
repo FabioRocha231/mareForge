@@ -1,12 +1,12 @@
 //! Crafting no client (PRD MF-021/022). O catálogo de receitas chega no
-//! handshake; o client lista no HUD e envia `CraftItem` (teclas 1-9 ou
-//! autocraft dev). Estação, ingredientes e porão são julgados pelo servidor.
+//! handshake e alimenta os atalhos `CraftItem` (teclas 1-9 ou autocraft dev);
+//! a lista visual pertence à tela de porto (MF-042). Estação, ingredientes e
+//! porão são julgados pelo servidor.
 
 use bevy::ecs::prelude::*;
 use bevy::prelude::*;
 use lightyear::prelude::client::*;
 use lightyear::prelude::*;
-use mareforge_domain_crafting::StationKind;
 use mareforge_protocol::{CraftItem, CraftResult, RecipeEntry, RecipesSnapshot};
 
 use crate::net::ReliableChannel;
@@ -14,12 +14,6 @@ use crate::net::ReliableChannel;
 /// Receitas conhecidas (do RecipesSnapshot do handshake).
 #[derive(Resource, Debug, Default)]
 pub struct KnownRecipes(pub Vec<RecipeEntry>);
-
-/// Linha do HUD de receitas, filha da câmera (fixa na tela).
-#[derive(Component)]
-pub struct RecipeLine {
-    pub recipe_id: u32,
-}
 
 pub struct CraftPlugin;
 
@@ -30,74 +24,14 @@ impl Plugin for CraftPlugin {
     }
 }
 
-fn station_label(station: StationKind) -> &'static str {
-    match station {
-        StationKind::None => "mão livre",
-        StationKind::Workbench => "Workbench",
-        StationKind::Anvil => "Anvil",
-        StationKind::Dock => "Dock",
-    }
-}
-
-fn ingredient_summary(entry: &RecipeEntry) -> String {
-    entry
-        .ingredients
-        .iter()
-        .map(|line| format!("{}× {}", line.quantity, line.name))
-        .collect::<Vec<_>>()
-        .join(" + ")
-}
-
-/// Catálogo do servidor chega: spawna a coluna de receitas, filha da
-/// câmera (fixa na tela, canto esquerdo).
+/// Catálogo do servidor chega: guarda para os atalhos de craft. A lista
+/// visual pertence à tela de porto (MF-042), não ao HUD do mar.
 fn handle_recipes_snapshot(
-    mut commands: Commands,
     mut snapshot_events: EventReader<ClientReceiveMessage<RecipesSnapshot>>,
     mut known: ResMut<KnownRecipes>,
-    camera: Query<Entity, With<Camera2d>>,
 ) {
     for event in snapshot_events.read() {
         known.0 = event.message().recipes.clone();
-        let Ok(camera) = camera.get_single() else {
-            continue;
-        };
-        let header = commands
-            .spawn((
-                Text2d::new("Receitas (1-9):"),
-                TextFont {
-                    font_size: 9.0,
-                    ..default()
-                },
-                TextColor(Color::srgb(0.75, 0.75, 0.7)),
-                Transform::from_xyz(-310.0, 160.0, 10.0),
-            ))
-            .set_parent(camera)
-            .id();
-        let _ = header;
-        for entry in &known.0 {
-            let line = format!(
-                "{}. {} [{}] ← {} → {}",
-                entry.recipe_id + 1,
-                entry.display_name,
-                station_label(entry.station),
-                ingredient_summary(entry),
-                entry.output_name
-            );
-            commands
-                .spawn((
-                    RecipeLine {
-                        recipe_id: entry.recipe_id,
-                    },
-                    Text2d::new(line),
-                    TextFont {
-                        font_size: 9.0,
-                        ..default()
-                    },
-                    TextColor(Color::srgb(0.85, 0.82, 0.7)),
-                    Transform::from_xyz(-310.0, 148.0 - 12.0 * entry.recipe_id as f32, 10.0),
-                ))
-                .set_parent(camera);
-        }
         info!(recipes = known.0.len(), "catálogo de receitas recebido");
     }
 }

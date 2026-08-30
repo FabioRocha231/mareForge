@@ -89,6 +89,8 @@ pub struct ShipInput {
 /// Estado autoritativo de um navio no tick do snapshot (PRD §64: ShipState).
 /// Desde o v10 carrega os STATS do servidor (MF-039): o client exibe, nunca
 /// calcula — equipar vela/casco/canhão aparece aqui no próximo snapshot.
+/// v10+: os cooldowns de bordo são campos de display do client; a verdade
+/// continua no servidor (`BroadsideBattery`).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct ShipState {
     pub ship_id: u32,
@@ -106,6 +108,10 @@ pub struct ShipState {
     pub max_speed: f32,
     pub weapon_damage: u32,
     pub weapon_range: f32,
+    #[serde(default)]
+    pub port_cooldown_secs: f32,
+    #[serde(default)]
+    pub starboard_cooldown_secs: f32,
 }
 
 /// Instala um item do storage regional no slot dele (MF-039). Só atracado;
@@ -426,9 +432,14 @@ mod tests {
             max_speed: 36.0,
             weapon_damage: 30,
             weapon_range: 55.0,
+            port_cooldown_secs: 3.5,
+            starboard_cooldown_secs: 1.25,
         };
         let bytes = bincode::serialize(&state).unwrap();
-        assert_eq!(bincode::deserialize::<ShipState>(&bytes).unwrap(), state);
+        let decoded = bincode::deserialize::<ShipState>(&bytes).unwrap();
+        assert_eq!(decoded, state);
+        assert_eq!(decoded.port_cooldown_secs, 3.5);
+        assert_eq!(decoded.starboard_cooldown_secs, 1.25);
     }
 
     #[test]
@@ -539,6 +550,8 @@ mod tests {
                     max_speed: 30.0,
                     weapon_damage: 20,
                     weapon_range: 50.0,
+                    port_cooldown_secs: 0.0,
+                    starboard_cooldown_secs: 2.0,
                 },
                 ShipState {
                     ship_id: 2,
@@ -552,6 +565,8 @@ mod tests {
                     max_speed: 40.0,
                     weapon_damage: 25,
                     weapon_range: 55.0,
+                    port_cooldown_secs: 0.0,
+                    starboard_cooldown_secs: 0.0,
                 },
             ],
             projectiles: vec![ProjectileState {

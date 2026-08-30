@@ -13,10 +13,11 @@ use mareforge_protocol::{GatherResult, NodeState, NodeUpdated, NodesSnapshot};
 #[derive(Resource, Debug, Default)]
 pub struct KnownNodes(pub HashMap<u32, NodeInfo>);
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct NodeInfo {
     pub pos: Vec2,
     pub stock: u32,
+    pub resource_name: String,
 }
 
 /// Entidade visual de um node: forma + rótulo filho com nome e estoque.
@@ -117,6 +118,7 @@ fn handle_nodes_snapshot(
                 NodeInfo {
                     pos: Vec2::new(state.x, state.y),
                     stock: state.stock,
+                    resource_name: state.resource_name.clone(),
                 },
             );
             if existing
@@ -149,6 +151,7 @@ fn handle_node_updated(
             NodeInfo {
                 pos: Vec2::new(state.x, state.y),
                 stock: state.stock,
+                resource_name: state.resource_name.clone(),
             },
         );
         let Some((visual, material_handle)) = nodes
