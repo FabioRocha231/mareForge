@@ -7,3 +7,6 @@ license.workspace = true
 
 [dependencies]
 bevy = "0.15"
+mareforge-domain-items = { path = "../domain-items" }
+mareforge-domain-ships = { path = "../domain-ships" }
+mareforge-shared = { path = "../shared" }

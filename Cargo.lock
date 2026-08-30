@@ -3208,6 +3208,9 @@ name = "mareforge-client"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "mareforge-domain-items",
+ "mareforge-domain-ships",
+ "mareforge-shared",
 ]
 
 [[package]]
