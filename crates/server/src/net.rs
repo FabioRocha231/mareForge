@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use bevy::ecs::prelude::*;
 use bevy::prelude::*;
+use chrono::Utc;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 use mareforge_domain_combat::{
@@ -379,7 +380,10 @@ impl Plugin for ServerNetPlugin {
         );
         // Ordem importa: snapshots veem o estado JÁ simulado deste tick.
         app.add_systems(FixedUpdate, (simulate_world, send_snapshots).chain());
-        app.add_systems(FixedUpdate, (expire_ship_grace, expire_wrecks));
+        app.add_systems(
+            FixedUpdate,
+            (expire_ship_grace, expire_wrecks, expire_orders),
+        );
         app.add_systems(FixedUpdate, world_status);
         app.add_systems(FixedUpdate, crate::nodes::respawn_nodes);
     }
@@ -1607,6 +1611,30 @@ fn expire_wrecks(
             commands.entity(entity).despawn();
         }
     }
+}
+
+/// Orders expiradas (MF-041): escrow volta ao storage do seller e o client
+/// recebe o board ativo sem a ordem vencida.
+fn expire_orders(
+    mut market: ResMut<crate::market::ServerMarket>,
+    mut connection_manager: ResMut<ConnectionManager>,
+    dev: Res<DevItems>,
+    map: Res<ServerWorldMap>,
+    ships: Query<&ServerShip>,
+) {
+    let expired = market.expire_orders(Utc::now());
+    if expired == 0 {
+        return;
+    }
+    info!(expired, "orders expiradas; escrow devolvido ao storage");
+    let viewers = crate::market::viewers_of(&ships);
+    crate::market::broadcast_orders(
+        &mut connection_manager,
+        &market,
+        &dev.catalog,
+        &map.0,
+        &viewers,
+    );
 }
 
 /// Atracar (MF-036): validação pura via `domain-ships::dock` — dentro da

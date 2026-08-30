@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use bevy::app::AppExit;
 use bevy::ecs::prelude::*;
 use bevy::time::Time;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 use mareforge_domain_crafting::{craft_in_storage, CraftError, Recipe, StationKind};
@@ -344,6 +344,7 @@ impl ServerMarket {
         self.next_order_num += 1;
         self.order_nums.insert(order_num, order_id);
         self.escrow.insert(order_num, escrowed);
+        let now = Utc::now();
         self.board.push(MarketOrder {
             id: order_id,
             seller: character,
@@ -352,8 +353,9 @@ impl ServerMarket {
             unit_price,
             region,
             status: OrderStatus::Open,
-            created_at: Utc::now(),
-            expires_at: Utc::now(),
+            created_at: now,
+            expires_at: now
+                + chrono::Duration::seconds(self.policy.default_order_duration_secs as i64),
             filled_quantity: 0,
         });
         self.persist();
@@ -477,6 +479,11 @@ impl ServerMarket {
         if self.board[position].seller != character {
             return Err(MarketError::NotOrderOwner);
         }
+        if self.board[position].status != OrderStatus::Open
+            && self.board[position].status != OrderStatus::Partial
+        {
+            return Err(MarketError::OrderNotOpen);
+        }
         let order = self.board.remove(position);
         if let Some(escrowed) = self.escrow.remove(&order_num) {
             self.storage
@@ -576,6 +583,44 @@ impl ServerMarket {
             tax,
         })
         .inspect(|_| self.persist())
+    }
+
+    /// Expira orders vencidas (MF-041). Escrow volta ao storage do seller na
+    /// região da order; o listing fee já queimou na criação e não reembolsa.
+    pub fn expire_orders(&mut self, now: DateTime<Utc>) -> usize {
+        // ponytail: varredura global; agendamento por região se o board crescer.
+        let mut expired = Vec::new();
+        for (index, order) in self.board.iter().enumerate() {
+            if order.expires_at >= now
+                || !matches!(order.status, OrderStatus::Open | OrderStatus::Partial)
+            {
+                continue;
+            }
+            let order_num = self
+                .order_nums
+                .iter()
+                .find(|(_, id)| **id == order.id)
+                .map(|(num, _)| *num)
+                .unwrap_or(0);
+            if let Some(escrowed) = self.escrow.remove(&order_num) {
+                self.storage
+                    .entry((order.seller, order.region))
+                    .or_default()
+                    .extend(escrowed.into_iter().map(|custody| {
+                        custody.with_location(ItemLocation::PortStorage(order.region))
+                    }));
+            }
+            expired.push(index);
+        }
+        if expired.is_empty() {
+            return 0;
+        }
+        let expired_count = expired.len();
+        for index in expired {
+            self.board[index].status = OrderStatus::Expired;
+        }
+        self.persist();
+        expired_count
     }
 }
 
@@ -984,45 +1029,54 @@ pub fn broadcast_orders(
     map: &WorldMap,
     viewers: &[(Option<ClientId>, CharacterId)],
 ) {
-    let lines_for = |character: CharacterId| -> Vec<OrderLine> {
-        market
-            .board
-            .iter()
-            .filter_map(|order| {
-                let remaining = order.quantity - order.filled_quantity;
-                if remaining == 0 {
-                    return None;
-                }
-                let order_num = market
-                    .order_nums
-                    .iter()
-                    .find(|(_, id)| **id == order.id)
-                    .map(|(num, _)| *num)
-                    .unwrap_or(0);
-                Some(OrderLine {
-                    order_num,
-                    region: String::from(region_name(map, order.region)),
-                    item_name: catalog
-                        .get(order.item)
-                        .map(|definition| definition.display_name.clone())
-                        .unwrap_or_default(),
-                    unit_price: order.unit_price.0,
-                    quantity: remaining,
-                    mine: character == order.seller,
-                })
-            })
-            .collect()
-    };
     for (client_id, character) in viewers {
         if let Some(client_id) = client_id {
             let _ = connection_manager.send_message::<ReliableChannel, _>(
                 *client_id,
                 &OrdersSnapshot {
-                    orders: lines_for(*character),
+                    orders: order_lines_for(market, catalog, map, *character),
                 },
             );
         }
     }
+}
+
+/// Linhas ativas do board para um observador (MF-041: Expired fica no estado
+/// do servidor para auditoria, mas nunca vai ao client).
+fn order_lines_for(
+    market: &ServerMarket,
+    catalog: &ItemCatalog,
+    map: &WorldMap,
+    character: CharacterId,
+) -> Vec<OrderLine> {
+    market
+        .board
+        .iter()
+        .filter(|order| matches!(order.status, OrderStatus::Open | OrderStatus::Partial))
+        .filter_map(|order| {
+            let remaining = order.quantity - order.filled_quantity;
+            if remaining == 0 {
+                return None;
+            }
+            let order_num = market
+                .order_nums
+                .iter()
+                .find(|(_, id)| **id == order.id)
+                .map(|(num, _)| *num)
+                .unwrap_or(0);
+            Some(OrderLine {
+                order_num,
+                region: String::from(region_name(map, order.region)),
+                item_name: catalog
+                    .get(order.item)
+                    .map(|definition| definition.display_name.clone())
+                    .unwrap_or_default(),
+                unit_price: order.unit_price.0,
+                quantity: remaining,
+                mine: character == order.seller,
+            })
+        })
+        .collect()
 }
 
 /// Envia a carteira atualizada ao dono, se ele estiver online (§31: ouro é
@@ -1112,5 +1166,183 @@ pub fn save_state(
     match store.save_market(&market.snapshot()) {
         Ok(()) => info!("estado econômico persistido"),
         Err(error) => warn!(error = %error, "falha ao persistir estado econômico"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Duration;
+
+    use mareforge_domain_items::{CargoHold, ItemDefinition, ItemInstance, ItemKind};
+    use mareforge_shared::ids::{ItemInstanceId, ShipInstanceId};
+
+    use super::*;
+
+    fn catalog_with_item() -> (ItemCatalog, ItemDefinitionId) {
+        let item = ItemDefinitionId::new();
+        let mut catalog = ItemCatalog::default();
+        catalog
+            .register(ItemDefinition {
+                id: item,
+                kind: ItemKind::Resource,
+                equipment: None,
+                max_stack: 100,
+                base_weight: 1,
+                tags: Default::default(),
+                display_name: String::from("Madeira"),
+            })
+            .expect("catálogo de teste não registra duplicatas");
+        (catalog, item)
+    }
+
+    fn put_in_storage(
+        market: &mut ServerMarket,
+        character: CharacterId,
+        region: RegionId,
+        item: ItemDefinitionId,
+        catalog: &ItemCatalog,
+        quantity: u32,
+    ) {
+        let mut hold = CargoHold::new(ShipInstanceId::new(), 1_000);
+        hold.insert(
+            catalog,
+            ItemInstance::new_resource(ItemInstanceId::new(), item, quantity),
+        )
+        .expect("teste cabe no porão");
+        market
+            .deposit_all(character, region, &mut hold, catalog)
+            .expect("teste deposita no storage");
+    }
+
+    #[test]
+    fn create_order_sets_expiry_from_policy_duration() {
+        let mut market = ServerMarket::new();
+        let character = market.character("seller");
+        let region = RegionId::new();
+        let (catalog, item) = catalog_with_item();
+        put_in_storage(&mut market, character, region, item, &catalog, 10);
+        market.policy.default_order_duration_secs = 123;
+
+        let (order_num, _) = market
+            .create_order(character, region, item, 10, Money(5))
+            .expect("storage tem estoque");
+        let snapshot = market.snapshot();
+        let order_id = snapshot.order_nums[&order_num];
+        let order = snapshot
+            .board
+            .iter()
+            .find(|order| order.id == order_id)
+            .expect("order criada");
+
+        assert_eq!(order.expires_at - order.created_at, Duration::seconds(123));
+    }
+
+    #[test]
+    fn expire_orders_flips_status_and_returns_escrow() {
+        let mut market = ServerMarket::new();
+        let character = market.character("seller");
+        let region = RegionId::new();
+        let (catalog, item) = catalog_with_item();
+        put_in_storage(&mut market, character, region, item, &catalog, 10);
+        let (order_num, _) = market
+            .create_order(character, region, item, 10, Money(5))
+            .expect("storage tem estoque");
+        let order = market.snapshot().board[0].clone();
+
+        assert_eq!(
+            market.expire_orders(order.expires_at + Duration::seconds(1)),
+            1
+        );
+        let snapshot = market.snapshot();
+        let expired = snapshot
+            .board
+            .iter()
+            .find(|order| order.id == snapshot.order_nums[&order_num])
+            .expect("order continua no board para auditoria");
+        assert_eq!(expired.status, OrderStatus::Expired);
+        assert!(snapshot.escrow.is_empty());
+        assert_eq!(market.storage_quantity(character, region, item), 10);
+    }
+
+    #[test]
+    fn expire_does_not_refund_listing_fee() {
+        let mut market = ServerMarket::new();
+        let character = market.character("seller");
+        let region = RegionId::new();
+        let (catalog, item) = catalog_with_item();
+        put_in_storage(&mut market, character, region, item, &catalog, 10);
+        let balance_before = market.balance(character);
+        let burns_before = market.ledger.burned();
+        let entries_before = market.ledger.entries().len();
+
+        let (order_num, _) = market
+            .create_order(character, region, item, 10, Money(5))
+            .expect("storage tem estoque");
+        let balance_after_create = market.balance(character);
+        let burns_after_create = market.ledger.burned();
+        let order = market.snapshot().board[0].clone();
+        market.expire_orders(order.expires_at + Duration::seconds(1));
+
+        assert!(
+            balance_after_create.0 < balance_before.0,
+            "fee queimou ouro"
+        );
+        assert!(
+            burns_after_create.0 > burns_before.0,
+            "burn registrado no ledger"
+        );
+        assert_eq!(market.balance(character), balance_after_create);
+        assert_eq!(market.ledger.burned(), burns_after_create);
+        assert_eq!(market.ledger.entries().len(), entries_before + 1);
+        assert_eq!(market.snapshot().order_nums[&order_num], order.id);
+    }
+
+    #[test]
+    fn expired_order_cannot_be_cancelled_or_bought() {
+        let mut market = ServerMarket::new();
+        let character = market.character("seller");
+        let region = RegionId::new();
+        let (catalog, item) = catalog_with_item();
+        put_in_storage(&mut market, character, region, item, &catalog, 10);
+        let (order_num, _) = market
+            .create_order(character, region, item, 10, Money(5))
+            .expect("storage tem estoque");
+        let order = market.snapshot().board[0].clone();
+        market.expire_orders(order.expires_at + Duration::seconds(1));
+
+        assert_eq!(
+            market.cancel_order(character, order_num),
+            Err(MarketError::OrderNotOpen)
+        );
+        assert_eq!(
+            market.buy(character, region, order_num, 1),
+            Err(MarketError::OrderNotOpen)
+        );
+    }
+
+    #[test]
+    fn order_lines_exclude_expired_orders() {
+        let mut market = ServerMarket::new();
+        let character = market.character("seller");
+        let region = RegionId::new();
+        let (catalog, item) = catalog_with_item();
+        put_in_storage(&mut market, character, region, item, &catalog, 20);
+        market.policy.default_order_duration_secs = 60;
+        let (open_num, _) = market
+            .create_order(character, region, item, 10, Money(5))
+            .expect("primeira order");
+        market.policy.default_order_duration_secs = 0;
+        let (expired_num, _) = market
+            .create_order(character, region, item, 10, Money(5))
+            .expect("segunda order");
+        let expired = market.snapshot().board[1].clone();
+        market.expire_orders(expired.expires_at + Duration::seconds(1));
+        let map = WorldMap::vertical_slice();
+
+        let lines = order_lines_for(&market, &catalog, &map, character);
+
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].order_num, open_num);
+        assert!(lines.iter().all(|line| line.order_num != expired_num));
     }
 }

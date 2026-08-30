@@ -15,13 +15,16 @@ pub struct FeePolicy {
     pub listing_fee_bps: u64,
     /// Descontada dos proceeds do seller na execução (§47).
     pub transaction_tax_bps: u64,
+    /// Janela de vida de uma order nova (MF-041).
+    pub default_order_duration_secs: u64,
 }
 
 impl Default for FeePolicy {
     fn default() -> Self {
         Self {
-            listing_fee_bps: 100,     // 1%
-            transaction_tax_bps: 300, // 3%
+            listing_fee_bps: 100,             // 1%
+            transaction_tax_bps: 300,         // 3%
+            default_order_duration_secs: 300, // 5 min (MF-041)
         }
     }
 }
@@ -101,6 +104,7 @@ mod tests {
         let policy = FeePolicy::default();
         assert_eq!(policy.listing_fee_bps, 100); // §46: 1%
         assert_eq!(policy.transaction_tax_bps, 300); // §47: 3%
+        assert_eq!(policy.default_order_duration_secs, 300); // MF-041
     }
 
     #[test]

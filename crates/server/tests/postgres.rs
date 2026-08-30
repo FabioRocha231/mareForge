@@ -17,9 +17,11 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use chrono::Utc;
 use mareforge_domain_economy::{Ledger, LedgerKind, MarketOrder, Money, OrderStatus};
-use mareforge_domain_items::{Custody, ItemInstance, ItemLocation};
+use mareforge_domain_items::{
+    CargoHold, Custody, ItemCatalog, ItemDefinition, ItemInstance, ItemKind, ItemLocation,
+};
 use mareforge_domain_ships::ShipKind;
-use mareforge_server::market::MarketSnapshot;
+use mareforge_server::market::{MarketSnapshot, ServerMarket};
 use mareforge_server::persist::{PostgresStateStore, ShipRecord, StateStore};
 use mareforge_shared::ids::{
     CharacterId, ItemDefinitionId, ItemInstanceId, MarketOrderId, RegionId, ShipInstanceId,
@@ -266,4 +268,63 @@ fn ship_record_roundtrips_through_postgres() {
         restored.cargo[0].location,
         ItemLocation::ShipCargo(ship_instance)
     );
+}
+
+/// MF-041: um Expired persistido no banco volta com o status preservado e
+/// sem escrow, porque o servidor já devolveu o item ao storage do seller.
+#[test]
+fn expired_order_roundtrips_with_escrow_returned() {
+    let _guard = test_lock();
+    let Some((store, _url)) = store_or_skip() else {
+        return;
+    };
+    let region = RegionId::new();
+    let item = ItemDefinitionId::new();
+    let mut catalog = ItemCatalog::default();
+    catalog
+        .register(ItemDefinition {
+            id: item,
+            kind: ItemKind::Resource,
+            equipment: None,
+            max_stack: 100,
+            base_weight: 1,
+            tags: Default::default(),
+            display_name: String::from("Madeira"),
+        })
+        .expect("catálogo de teste não registra duplicatas");
+
+    let mut market = ServerMarket::with_store(Some(store.clone()));
+    let character = market.character("token-expired");
+    let mut hold = CargoHold::new(ShipInstanceId::new(), 1_000);
+    hold.insert(
+        &catalog,
+        ItemInstance::new_resource(ItemInstanceId::new(), item, 10),
+    )
+    .expect("teste cabe no porão");
+    market
+        .deposit_all(character, region, &mut hold, &catalog)
+        .expect("teste deposita no storage");
+    market.policy.default_order_duration_secs = 60;
+    market
+        .create_order(character, region, item, 10, Money(8))
+        .expect("storage tem estoque");
+    let order = market.snapshot().board[0].clone();
+    market.expire_orders(order.expires_at + chrono::Duration::seconds(1));
+
+    let restored = store
+        .load_market()
+        .expect("load_market")
+        .expect("estado após expire");
+    let restored_order = restored.board[0].clone();
+    assert_eq!(restored_order.status, OrderStatus::Expired);
+    assert!(restored.escrow.is_empty(), "escrow devolvido ao storage");
+    let storage_quantity = restored
+        .storage
+        .iter()
+        .filter(|entry| entry.character == character && entry.region == region)
+        .flat_map(|entry| entry.stacks.iter())
+        .filter(|custody| custody.instance.definition == item)
+        .map(|custody| custody.instance.quantity)
+        .sum::<u32>();
+    assert_eq!(storage_quantity, 10);
 }
