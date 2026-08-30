@@ -44,6 +44,11 @@ impl ItemCatalog {
         Ok(())
     }
 
+    /// Todas as definições registradas (para o catálogo via protocolo).
+    pub fn items(&self) -> impl Iterator<Item = &ItemDefinition> {
+        self.definitions.values()
+    }
+
     pub fn get(&self, id: ItemDefinitionId) -> Option<&ItemDefinition> {
         self.definitions.get(&id)
     }

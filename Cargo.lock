@@ -3784,6 +3784,7 @@ dependencies = [
  "mareforge-domain-combat",
  "mareforge-domain-crafting",
  "mareforge-domain-world",
+ "mareforge-shared",
  "serde",
 ]
 
@@ -3792,9 +3793,11 @@ name = "mareforge-server"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "chrono",
  "lightyear",
  "mareforge-domain-combat",
  "mareforge-domain-crafting",
+ "mareforge-domain-economy",
  "mareforge-domain-items",
  "mareforge-domain-ships",
  "mareforge-domain-world",

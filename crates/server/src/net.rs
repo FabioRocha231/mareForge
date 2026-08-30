@@ -29,10 +29,11 @@ use mareforge_domain_ships::{
 };
 use mareforge_domain_world::{GatheringPolicy, RiskPolicy, WorldMap};
 use mareforge_protocol::{
-    AssignShip, ClientHello, CraftItem, CraftResult, FireBroadside, GatherNode, GatherResult,
-    LootResult, LootWreck, NodeUpdated, NodesSnapshot, ProjectileState, RecipesSnapshot,
-    ServerWelcome, ShipDestroyed, ShipInput, ShipState, WorldSnapshot, WreckRemoved, WreckSpawned,
-    ZoneChanged, PROTOCOL_VERSION,
+    AssignShip, BuySellOrder, CancelSellOrder, CatalogSnapshot, ClientHello, CraftItem,
+    CraftResult, CreateSellOrder, FireBroadside, GatherNode, GatherResult, LootResult, LootWreck,
+    MarketResult, NodeUpdated, NodesSnapshot, OrdersSnapshot, ProjectileState, RecipesSnapshot,
+    ServerWelcome, ShipDestroyed, ShipInput, ShipState, StorageDepositAll, StorageWithdrawAll,
+    WalletUpdated, WorldSnapshot, WreckRemoved, WreckSpawned, ZoneChanged, PROTOCOL_VERSION,
 };
 use mareforge_shared::ids::{
     DestructionEventId, ItemDefinitionId, ItemInstanceId, ShipInstanceId, WreckId, ZoneId,
@@ -254,6 +255,7 @@ impl Plugin for ServerNetPlugin {
         app.insert_resource(ServerWorldMap(WorldMap::vertical_slice()));
         app.insert_resource(ServerRiskPolicy(RiskPolicy::default()));
         app.insert_resource(ServerGatherPolicy(GatheringPolicy::default()));
+        app.insert_resource(crate::market::ServerMarket::new());
         app.init_resource::<crate::nodes::NodeIdCounter>();
         let dev_items = DevItems::new();
         app.insert_resource(crate::crafting::DevShips::new());
@@ -273,6 +275,11 @@ impl Plugin for ServerNetPlugin {
         app.register_message::<LootWreck>(ChannelDirection::ClientToServer);
         app.register_message::<GatherNode>(ChannelDirection::ClientToServer);
         app.register_message::<CraftItem>(ChannelDirection::ClientToServer);
+        app.register_message::<StorageDepositAll>(ChannelDirection::ClientToServer);
+        app.register_message::<StorageWithdrawAll>(ChannelDirection::ClientToServer);
+        app.register_message::<CreateSellOrder>(ChannelDirection::ClientToServer);
+        app.register_message::<CancelSellOrder>(ChannelDirection::ClientToServer);
+        app.register_message::<BuySellOrder>(ChannelDirection::ClientToServer);
         app.register_message::<ServerWelcome>(ChannelDirection::ServerToClient);
         app.register_message::<AssignShip>(ChannelDirection::ServerToClient);
         app.register_message::<WorldSnapshot>(ChannelDirection::ServerToClient);
@@ -286,6 +293,10 @@ impl Plugin for ServerNetPlugin {
         app.register_message::<GatherResult>(ChannelDirection::ServerToClient);
         app.register_message::<RecipesSnapshot>(ChannelDirection::ServerToClient);
         app.register_message::<CraftResult>(ChannelDirection::ServerToClient);
+        app.register_message::<CatalogSnapshot>(ChannelDirection::ServerToClient);
+        app.register_message::<WalletUpdated>(ChannelDirection::ServerToClient);
+        app.register_message::<OrdersSnapshot>(ChannelDirection::ServerToClient);
+        app.register_message::<MarketResult>(ChannelDirection::ServerToClient);
         app.add_systems(Startup, start_server);
         app.add_systems(Startup, crate::nodes::spawn_dev_nodes.after(start_server));
         app.add_systems(
@@ -298,6 +309,10 @@ impl Plugin for ServerNetPlugin {
                 handle_loot,
                 crate::nodes::handle_gather,
                 crate::crafting::handle_craft,
+                crate::market::handle_storage,
+                crate::market::handle_sell,
+                crate::market::handle_buy,
+                crate::market::handle_cancel,
                 simulate_and_snapshot,
                 world_status,
                 expire_wrecks,
@@ -474,6 +489,7 @@ fn handle_hello(
     dev: Res<DevItems>,
     dev_ships: Res<crate::crafting::DevShips>,
     dev_recipes: Res<crate::crafting::DevRecipes>,
+    mut market: ResMut<crate::market::ServerMarket>,
     map: Res<ServerWorldMap>,
     ships: Query<&ServerShip>,
     nodes: Query<&crate::nodes::ServerNode>,
@@ -535,6 +551,30 @@ fn handle_hello(
         );
         let _ = connection_manager
             .send_message::<ReliableChannel, _>(client_id, &dev_recipes.snapshot(&dev.catalog));
+        // Economia (MF-023..026): catálogo de itens, carteira (o primeiro
+        // toque semeia o bootstrap dev, §48) e o quadro de orders atual.
+        let _ = connection_manager.send_message::<ReliableChannel, _>(
+            client_id,
+            &crate::market::catalog_snapshot(&dev.catalog),
+        );
+        let client_num = match client_id {
+            ClientId::Netcode(n) => n,
+            _ => 0,
+        };
+        let character = market.character(client_num);
+        let _ = connection_manager.send_message::<ReliableChannel, _>(
+            client_id,
+            &WalletUpdated {
+                gold: market.balance(character).0,
+            },
+        );
+        crate::market::broadcast_orders(
+            &mut connection_manager,
+            &market,
+            &dev.catalog,
+            &map.0,
+            &ships,
+        );
         info!(client = ?client_id, ship_id, "navio autoritativo criado");
     }
 }
@@ -1033,10 +1073,12 @@ fn simulate_and_snapshot(
     counter.0 += 1;
 }
 
-/// Telemetria de mundo (PRD §72): posição/velocidade/zona dos navios a cada 5s.
+/// Telemetria de mundo (PRD §72/§71): posição, zona e o pulso econômico
+/// (ouro cunhado/queimado/volume) a cada 5s.
 fn world_status(
     time: Res<Time>,
     map: Res<ServerWorldMap>,
+    market: Res<crate::market::ServerMarket>,
     ships: Query<&ServerShip>,
     mut timer: Local<f32>,
 ) {
@@ -1045,6 +1087,13 @@ fn world_status(
         return;
     }
     *timer = 0.0;
+    info!(
+        gold_minted = market.ledger.minted().0,
+        gold_burned = market.ledger.burned().0,
+        market_volume = market.ledger.market_volume().0,
+        open_orders = market.ledger.entries().len(),
+        "economic pulse"
+    );
     for ship in &ships {
         let zone = map
             .0

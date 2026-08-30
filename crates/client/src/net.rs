@@ -17,10 +17,11 @@ use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 use mareforge_domain_combat::BroadsideSide;
 use mareforge_protocol::{
-    AssignShip, ClientHello, CraftItem, CraftResult, FireBroadside, GatherNode, GatherResult,
-    LootResult, LootWreck, NodeUpdated, NodesSnapshot, RecipesSnapshot, ServerWelcome,
-    ShipDestroyed, ShipInput, WorldSnapshot, WreckRemoved, WreckSpawned, ZoneChanged,
-    PROTOCOL_VERSION,
+    AssignShip, BuySellOrder, CancelSellOrder, CatalogSnapshot, ClientHello, CraftItem,
+    CraftResult, CreateSellOrder, FireBroadside, GatherNode, GatherResult, LootResult, LootWreck,
+    MarketResult, NodeUpdated, NodesSnapshot, OrdersSnapshot, RecipesSnapshot, ServerWelcome,
+    ShipDestroyed, ShipInput, StorageDepositAll, StorageWithdrawAll, WalletUpdated, WorldSnapshot,
+    WreckRemoved, WreckSpawned, ZoneChanged, PROTOCOL_VERSION,
 };
 
 pub const SERVER_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 5000);
@@ -91,6 +92,11 @@ impl Plugin for ClientNetPlugin {
         app.register_message::<LootWreck>(ChannelDirection::ClientToServer);
         app.register_message::<GatherNode>(ChannelDirection::ClientToServer);
         app.register_message::<CraftItem>(ChannelDirection::ClientToServer);
+        app.register_message::<StorageDepositAll>(ChannelDirection::ClientToServer);
+        app.register_message::<StorageWithdrawAll>(ChannelDirection::ClientToServer);
+        app.register_message::<CreateSellOrder>(ChannelDirection::ClientToServer);
+        app.register_message::<CancelSellOrder>(ChannelDirection::ClientToServer);
+        app.register_message::<BuySellOrder>(ChannelDirection::ClientToServer);
         app.register_message::<ServerWelcome>(ChannelDirection::ServerToClient);
         app.register_message::<AssignShip>(ChannelDirection::ServerToClient);
         app.register_message::<WorldSnapshot>(ChannelDirection::ServerToClient);
@@ -104,6 +110,10 @@ impl Plugin for ClientNetPlugin {
         app.register_message::<GatherResult>(ChannelDirection::ServerToClient);
         app.register_message::<RecipesSnapshot>(ChannelDirection::ServerToClient);
         app.register_message::<CraftResult>(ChannelDirection::ServerToClient);
+        app.register_message::<CatalogSnapshot>(ChannelDirection::ServerToClient);
+        app.register_message::<WalletUpdated>(ChannelDirection::ServerToClient);
+        app.register_message::<OrdersSnapshot>(ChannelDirection::ServerToClient);
+        app.register_message::<MarketResult>(ChannelDirection::ServerToClient);
         app.init_resource::<crate::ship::DestroyedShips>();
         app.init_resource::<KnownWrecks>();
         app.add_systems(Startup, (connect, log_connecting));

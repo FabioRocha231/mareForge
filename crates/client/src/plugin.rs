@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 use crate::crafting::{send_craft_input, CraftPlugin};
+use crate::market::{send_market_input, MarketPlugin};
 use crate::net::ClientNetPlugin;
 use crate::nodes::NodePlugin;
 use crate::ship::{
@@ -20,6 +21,7 @@ impl Plugin for ClientPlugin {
             .add_plugins(ZonePlugin)
             .add_plugins(NodePlugin)
             .add_plugins(CraftPlugin)
+            .add_plugins(MarketPlugin)
             .add_systems(Startup, (setup_camera, setup_hud).chain())
             .add_systems(
                 Update,
@@ -32,6 +34,7 @@ impl Plugin for ClientPlugin {
                     update_cargo_readout,
                     crate::ship::follow_camera,
                     send_craft_input,
+                    send_market_input,
                     close_on_esc,
                 ),
             );
@@ -72,7 +75,7 @@ fn setup_hud(mut commands: Commands, camera: Query<Entity, With<Camera2d>>) {
     };
     hud(
         &mut commands,
-        "W/S: velas · A/D: leme · Q/E: bordos · F: saquear · G: coletar · 1-9: fabricar · ESC: sair",
+        "W/S velas · A/D leme · Q/E bordos · F saquear · G coletar · 1-9 fabricar · Z/X storage · V vender · N cancelar · B comprar · ESC sair",
         12.0,
         Color::srgb(0.85, 0.85, 0.85),
         -170.0,
@@ -85,6 +88,20 @@ fn setup_hud(mut commands: Commands, camera: Query<Entity, With<Camera2d>>) {
         140.0,
     );
     commands.entity(cargo).insert(CargoReadout);
+
+    // Painel de mercado (carteira + quadro): canto direito da tela.
+    commands
+        .spawn((
+            Text2d::new("Ouro: —"),
+            TextFont {
+                font_size: 10.0,
+                ..default()
+            },
+            TextColor(Color::srgb(0.95, 0.87, 0.55)),
+            Transform::from_xyz(210.0, 160.0, 10.0),
+            crate::market::MarketReadout,
+        ))
+        .set_parent(camera);
 }
 
 fn close_on_esc(keys: Res<ButtonInput<KeyCode>>, mut exit: EventWriter<AppExit>) {

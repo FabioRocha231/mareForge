@@ -34,4 +34,13 @@ impl Custody {
     pub fn instance_id(&self) -> ItemInstanceId {
         self.instance.id
     }
+
+    /// A mesma custódia em outra localização (storage → escrow → storage).
+    /// A instância viaja intacta; só o endereço muda (§29).
+    pub fn with_location(&self, location: ItemLocation) -> Custody {
+        Custody {
+            instance: self.instance.clone(),
+            location,
+        }
+    }
 }

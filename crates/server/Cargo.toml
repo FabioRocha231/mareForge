@@ -10,11 +10,13 @@ bevy = { version = "0.15", default-features = false, features = ["bevy_asset", "
 lightyear = "0.19"
 mareforge-domain-combat = { path = "../domain-combat" }
 mareforge-domain-crafting = { path = "../domain-crafting" }
+mareforge-domain-economy = { path = "../domain-economy" }
 mareforge-domain-items = { path = "../domain-items" }
 mareforge-domain-ships = { path = "../domain-ships" }
 mareforge-domain-world = { path = "../domain-world" }
 mareforge-protocol = { path = "../protocol" }
 mareforge-shared = { path = "../shared" }
+chrono = "0.4"
 smallvec = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }

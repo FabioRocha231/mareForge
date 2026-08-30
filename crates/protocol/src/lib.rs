@@ -7,6 +7,7 @@
 use mareforge_domain_combat::weapon::BroadsideSide;
 use mareforge_domain_crafting::recipe::StationKind;
 use mareforge_domain_world::RiskTier;
+use mareforge_shared::ids::ItemDefinitionId;
 use serde::{Deserialize, Serialize};
 
 /// Versão atual do protocolo. Qualquer mudança incompatível deve incrementar
@@ -21,7 +22,10 @@ use serde::{Deserialize, Serialize};
 ///     hello, NodeUpdated em toda mudança), coleta GatherNode/GatherResult.
 /// v6: crafting (MF-021/022) — catálogo de receitas no hello
 ///     (RecipesSnapshot), intents CraftItem e veredito CraftResult.
-pub const PROTOCOL_VERSION: u16 = 6;
+/// v7: mercado regional (MF-023..026) — catálogo de itens e carteira no
+///     hello, intents de storage (Z/X), sell/cancel/buy de orders, e
+///     veredito MarketResult.
+pub const PROTOCOL_VERSION: u16 = 7;
 
 /// Primeira mensagem do client após conectar (ADR-0011).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -227,6 +231,86 @@ pub struct CraftResult {
     pub success: bool,
 }
 
+/// Linha do catálogo de itens (MF-023): id real para os intents, nome e
+/// peso para a UI. Enviada no handshake.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemLine {
+    pub id: ItemDefinitionId,
+    pub name: String,
+    pub weight: u32,
+}
+
+/// Catálogo completo de itens do servidor, no handshake.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CatalogSnapshot {
+    pub items: Vec<ItemLine>,
+}
+
+/// Carteira global do personagem (PRD §31: ouro não afunda com o navio).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WalletUpdated {
+    pub gold: u64,
+}
+
+/// Uma sell order visível (MF-025). `region` é o nome da região; ordens de
+/// regiões diferentes NUNCA cruzam (§44) — a cor local decide a compra.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrderLine {
+    pub order_num: u32,
+    pub region: String,
+    pub item_name: String,
+    pub unit_price: u64,
+    pub quantity: u32,
+    /// A order é deste client (habilita o cancelar).
+    pub mine: bool,
+}
+
+/// Todas as orders abertas, enviadas no hello e a cada mudança (delta no
+/// OrderUpdated seria o próximo passo; o slice reenvia o quadro inteiro).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrdersSnapshot {
+    pub orders: Vec<OrderLine>,
+}
+
+/// Guarda TUDO do porão no storage regional do porto onde está (MF-023).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageDepositAll;
+
+/// Tira do storage tudo que couber de volta no porão (MF-023).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageWithdrawAll;
+
+/// Cria sell order no mercado do porto onde está (MF-024/025). O item sai
+/// do storage regional e entra em escrow atomicamente no servidor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateSellOrder {
+    pub item: ItemDefinitionId,
+    pub quantity: u32,
+    pub unit_price: u64,
+}
+
+/// Cancela sua order; o item volta do escrow pro storage. Fee não volta (§46).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CancelSellOrder {
+    pub order_num: u32,
+}
+
+/// Compra de uma order da região onde está (MF-025): ouro sai da carteira,
+/// item vai pro seu storage local, seller recebe líquido da taxa (§47).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BuySellOrder {
+    pub order_num: u32,
+    pub quantity: u32,
+}
+
+/// Veredito de qualquer operação de storage/mercado. `reason` é texto de
+/// display para HUD/log — a máquina de verdade vive no servidor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MarketResult {
+    pub success: bool,
+    pub reason: String,
+}
+
 /// Snapshot do mundo visível; enviado por tick (PRD §64/§66 — AOI corta o
 /// escopo por proximidade quando entrar).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -241,8 +325,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn current_protocol_version_is_six() {
-        assert_eq!(PROTOCOL_VERSION, 6);
+    fn current_protocol_version_is_seven() {
+        assert_eq!(PROTOCOL_VERSION, 7);
         assert_eq!(ClientHello::current().protocol_version, PROTOCOL_VERSION);
     }
 

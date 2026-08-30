@@ -130,6 +130,13 @@ impl CargoHold {
         Ok(moved)
     }
 
+    /// Esvazia o porão inteiro, devolvendo as custódias (depositar tudo no
+    /// storage regional). As localizações seguem `ShipCargo` do navio — o
+    /// contêiner de destino regrava ao receber.
+    pub fn drain(&mut self) -> Vec<Custody> {
+        std::mem::take(&mut self.slots)
+    }
+
     /// Retira `quantity` unidades de uma definição (primeiro slot que atenda).
     pub fn remove(
         &mut self,
@@ -296,6 +303,24 @@ mod tests {
         assert_eq!(hold.items().len(), 1);
         assert_eq!(hold.items()[0].location, ItemLocation::ShipCargo(ship));
         assert_eq!(hold.used_weight(&catalog).unwrap(), 16);
+    }
+
+    #[test]
+    fn drain_empties_hold_and_returns_everything() {
+        let (catalog, timber) = catalog_with_timber(2);
+        let mut hold = CargoHold::new(ShipInstanceId::new(), 100);
+        hold.insert(&catalog, instance(timber, 10)).unwrap();
+        hold.insert(&catalog, instance(timber, 5)).unwrap();
+
+        let drained = hold.drain();
+
+        assert_eq!(drained.len(), 2);
+        assert!(hold.items().is_empty());
+        assert_eq!(hold.used_weight(&catalog).unwrap(), 0);
+        // Custódias drenadas ainda sabem de onde vieram (auditoria).
+        assert!(drained
+            .iter()
+            .all(|custody| matches!(custody.location, ItemLocation::ShipCargo(_))));
     }
 
     #[test]
