@@ -504,10 +504,13 @@ pub struct WreckIdCounter(pub u32);
 #[derive(Resource, Default)]
 pub struct LiveWreckRecords(pub Vec<crate::persist::WreckRecord>);
 
-/// Telemetria econômica (MF-029, §71): faucets, sinks e perdas contados no
-/// ponto onde acontecem — nada é derivado retroativamente.
+/// Telemetria econômica + gameplay (MF-029, §71+§72): faucets, sinks, perdas
+/// e os contadores derivados de combate contados no ponto onde acontecem.
+/// Nada é derivado retroativamente: cada incremento é um `+= 1` no evento
+/// correspondente.
 #[derive(Resource, Debug, Default, Clone, Copy)]
 pub struct Metrics {
+    // §71 — econômica.
     pub items_gathered: u64,
     pub items_crafted: u64,
     pub items_destroyed: u64,
@@ -515,6 +518,14 @@ pub struct Metrics {
     pub ships_destroyed: u64,
     pub loot_transfers: u64,
     pub npc_bounty_gold_minted: u64,
+    // §72 — gameplay. Apenas navios de player contam em `ship_losses_by_kind`;
+    // o `ships_destroyed` acima inclui NPC. `pvp_engagements` é o número de
+    // impactos projetil-vs-player-em-player (não hits — engagements). Índices
+    // de `ship_losses_by_kind` casam com `ShipKind as usize`:
+    // SmallMerchant=0, Patrol=1, Corsair=2.
+    pub ship_losses_by_kind: [u64; 3],
+    pub wrecks_looted: u64,
+    pub pvp_engagements: u64,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1056,6 +1067,7 @@ fn handle_loot(
     time: Res<Time>,
     wreck_policy: Res<ServerWreckPolicy>,
     tuning: Res<CombatTuning>,
+    mut metrics: ResMut<Metrics>,
     mut ships: Query<&mut ServerShip>,
     mut wrecks: Query<(Entity, &mut ServerWreck)>,
 ) {
@@ -1146,6 +1158,8 @@ fn handle_loot(
                     })
                     .sum::<u32>();
                 let stacks = moved.len() as u32;
+                // §72 wrecks_looted: transferência atômica concluída.
+                metrics.wrecks_looted += 1;
                 // Drenagem imediata do baú (não-deferida): a prova de que o
                 // primeiro saque venceu fica visível para o resto do tick.
                 wreck.chest.drain();
@@ -1306,6 +1320,27 @@ fn simulate_world(
     for (projectile_entity, target_ship_id, damage, killer_ship_id) in impacts {
         commands.entity(projectile_entity).despawn();
 
+        // §72 pvp_engagements: projétil entre players. Calculado ANTES do
+        // borrow mutável do alvo — só lê `client_id`, não precisa do resto.
+        // Owner e target ambos com `client_id.is_some()` excluem auto-dano
+        // e envolvimento com NPC.
+        let (target_is_player, killer_is_player) = {
+            let mut t = false;
+            let mut k = false;
+            for (_, candidate) in &ships {
+                if candidate.ship_id == target_ship_id && candidate.client_id.is_some() {
+                    t = true;
+                }
+                if candidate.ship_id == killer_ship_id && candidate.client_id.is_some() {
+                    k = true;
+                }
+            }
+            (t, k)
+        };
+        if target_is_player && killer_is_player {
+            metrics.pvp_engagements += 1;
+        }
+
         // Escopo: o borrow mutável do navio termina antes de reler a frota
         // (procura do killer) e antes do respawn.
         let sinking = {
@@ -1342,6 +1377,11 @@ fn simulate_world(
                 }
                 DamageOutcome::Destroyed => {
                     metrics.ships_destroyed += 1;
+                    if ship.client_id.is_some() {
+                        // §72 ship_losses_by_kind: conta só navios de player.
+                        // NPC killings já estão em `ships_destroyed`.
+                        metrics.ship_losses_by_kind[ship.kind as usize] += 1;
+                    }
                     info!(ship_id = target_ship_id, damage, "SHIP DESTROYED");
                     // Full loot (§22-§25): casco é perda total; parte da carga
                     // e do EQUIPAMENTO INSTALADO (MF-039) sobrevive e vira
@@ -1612,6 +1652,14 @@ fn world_status(
         ships_constructed = metrics.ships_constructed,
         ships_destroyed = metrics.ships_destroyed,
         npc_bounty_gold_minted = metrics.npc_bounty_gold_minted,
+        merchant_deaths =
+            metrics.ship_losses_by_kind[mareforge_domain_ships::ShipKind::SmallMerchant as usize],
+        patrol_deaths =
+            metrics.ship_losses_by_kind[mareforge_domain_ships::ShipKind::Patrol as usize],
+        corsair_deaths =
+            metrics.ship_losses_by_kind[mareforge_domain_ships::ShipKind::Corsair as usize],
+        wrecks_looted = metrics.wrecks_looted,
+        pvp_engagements = metrics.pvp_engagements,
         "economic pulse"
     );
     for ship in &ships {
@@ -1972,6 +2020,39 @@ mod tests {
             (60i32 - snapshots as i32).abs() <= 1,
             "esperado ~60 snapshots em 3s, veio {snapshots}"
         );
+    }
+
+    /// MF-029 (§72): os novos contadores de telemetria de gameplay
+    /// inicializam zerados e respeitam o índice `ShipKind as usize` para
+    /// `ship_losses_by_kind`. O índice SmallMerchant=0, Patrol=1,
+    /// Corsair=2 é parte do contrato com os chamadores (simulate_world e
+    /// o log de pulse).
+    #[test]
+    fn metrics_gameplay_counters_start_at_zero_and_index_by_kind() {
+        let metrics = Metrics::default();
+        assert_eq!(metrics.ship_losses_by_kind, [0; 3]);
+        assert_eq!(metrics.wrecks_looted, 0);
+        assert_eq!(metrics.pvp_engagements, 0);
+        // Índice por ShipKind (parte do contrato; mantenha em sincronia
+        // com o array no struct).
+        assert_eq!(ShipKind::SmallMerchant as usize, 0);
+        assert_eq!(ShipKind::Patrol as usize, 1);
+        assert_eq!(ShipKind::Corsair as usize, 2);
+
+        // Simulação de contagem: incrementar como o simulate_world faz.
+        let mut metrics = Metrics::default();
+        metrics.ship_losses_by_kind[ShipKind::SmallMerchant as usize] += 1;
+        metrics.ship_losses_by_kind[ShipKind::Corsair as usize] += 1;
+        metrics.wrecks_looted += 3;
+        metrics.pvp_engagements += 7;
+        assert_eq!(
+            metrics.ship_losses_by_kind[ShipKind::SmallMerchant as usize],
+            1
+        );
+        assert_eq!(metrics.ship_losses_by_kind[ShipKind::Patrol as usize], 0);
+        assert_eq!(metrics.ship_losses_by_kind[ShipKind::Corsair as usize], 1);
+        assert_eq!(metrics.wrecks_looted, 3);
+        assert_eq!(metrics.pvp_engagements, 7);
     }
 
     /// MF-043: o snapshot copia a recarga autoritativa do `BroadsideBattery`
