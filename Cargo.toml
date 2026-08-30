@@ -12,6 +12,7 @@ members = [
     "crates/server",
     "crates/client",
     "crates/tools/db-migrate",
+    "crates/tools/mareforge-playtest",
 ]
 
 [workspace.package]
