@@ -6,6 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-bevy = { version = "0.15", default-features = false, features = ["bevy_asset"] }
+bevy = { version = "0.15", default-features = false, features = ["bevy_asset", "bevy_state"] }
+lightyear = "0.19"
+mareforge-domain-items = { path = "../domain-items" }
+mareforge-domain-ships = { path = "../domain-ships" }
+mareforge-protocol = { path = "../protocol" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }

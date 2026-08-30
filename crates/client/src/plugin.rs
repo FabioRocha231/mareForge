@@ -1,17 +1,21 @@
 use bevy::prelude::*;
 
-use crate::ship::{ship_input_and_motion, spawn_local_ship, sync_ship_visual};
+use crate::net::ClientNetPlugin;
+use crate::ship::{lerp_ship_visuals, upsert_ship_visuals};
 
 pub struct ClientPlugin;
 
 impl Plugin for ClientPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(ClearColor(Color::srgb(0.04, 0.13, 0.22)))
-            // ADR-0008: simulação roda a 30 Hz; render continua desacoplado.
+            // ADR-0008: simulação a 30 Hz; render desacoplado.
             .insert_resource(Time::<Fixed>::from_hz(30.0))
-            .add_systems(Startup, (setup_camera, spawn_local_ship, setup_hint))
-            .add_systems(FixedUpdate, ship_input_and_motion)
-            .add_systems(Update, (sync_ship_visual, close_on_esc));
+            .add_plugins(ClientNetPlugin)
+            .add_systems(Startup, (setup_camera, setup_hint))
+            .add_systems(
+                Update,
+                (upsert_ship_visuals, lerp_ship_visuals, close_on_esc),
+            );
     }
 }
 

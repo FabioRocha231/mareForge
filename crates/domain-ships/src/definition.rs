@@ -40,6 +40,37 @@ impl ShipDefinition {
     pub fn slot_count(&self, kind: SlotKind) -> usize {
         self.slots.iter().filter(|s| s.kind == kind).count()
     }
+
+    /// Definição provisória do SmallMerchant do vertical slice. Placeholder
+    /// até o catálogo de navios existir (PRD MF-022); client e server usam
+    /// esta mesma definição para que stats e movimento batam nos dois lados.
+    pub fn small_merchant_placeholder() -> Self {
+        Self {
+            id: ShipDefinitionId::new(),
+            kind: ShipKind::SmallMerchant,
+            display_name: String::from("Small Merchant"),
+            slots: vec![
+                SlotSpec {
+                    kind: SlotKind::Hull,
+                    accepts_tag: None,
+                },
+                SlotSpec {
+                    kind: SlotKind::Sail,
+                    accepts_tag: None,
+                },
+                SlotSpec {
+                    kind: SlotKind::Weapon,
+                    accepts_tag: None,
+                },
+            ],
+            cargo_capacity: 100,
+            base_speed: 6.0,
+            base_turn_rate: 1.0,
+            base_hp: 100,
+            base_weapon_damage: 20,
+            base_weapon_range: 50.0,
+        }
+    }
 }
 
 #[cfg(test)]

@@ -14,5 +14,6 @@ fn main() {
         .add_plugins(MinimalPlugins)
         .add_plugins(TerminalCtrlCHandlerPlugin)
         .add_plugins(mareforge_server::ServerPlugin)
+        .add_plugins(mareforge_server::net::ServerNetPlugin)
         .run();
 }
