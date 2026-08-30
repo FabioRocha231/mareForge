@@ -7,6 +7,7 @@
 use mareforge_domain_combat::weapon::BroadsideSide;
 use mareforge_domain_crafting::recipe::StationKind;
 use mareforge_domain_items::EquipmentSlot;
+use mareforge_domain_ships::ShipKind;
 use mareforge_domain_world::RiskTier;
 use mareforge_shared::ids::ItemDefinitionId;
 use serde::{Deserialize, Serialize};
@@ -70,9 +71,11 @@ pub struct ServerWelcome {
 }
 
 /// O servidor atribui um navio ao jogador aceito (janela com visão própria).
+/// O `kind` alimenta a UI de loadout para filtrar itens compatíveis (MF-039).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AssignShip {
     pub ship_id: u32,
+    pub kind: ShipKind,
 }
 
 /// Intenção de navegação do jogador (PRD §63: ShipInput).
@@ -313,6 +316,9 @@ pub struct ItemLine {
     pub id: ItemDefinitionId,
     pub name: String,
     pub weight: u32,
+    /// Slot do equipamento, quando o item é equipável (MF-038).
+    #[serde(default)]
+    pub equipment_slot: Option<EquipmentSlot>,
 }
 
 /// Catálogo completo de itens do servidor, no handshake.
@@ -345,6 +351,25 @@ pub struct OrderLine {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OrdersSnapshot {
     pub orders: Vec<OrderLine>,
+}
+
+/// Uma linha do storage regional do porto onde está atracado (post-review:
+/// habilita a aba Loadout do PortScreen a oferecer "Equipar" via UI).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageLine {
+    pub item: ItemDefinitionId,
+    pub item_name: String,
+    pub quantity: u32,
+}
+
+/// Snapshot do storage do porto onde o jogador acabou de dockar. Enviado
+/// após `DockResult { success: true, docked: true }`. Sem ele, a aba Loadout
+/// só permite desequipar (post-review: agora também permite equipar itens
+/// compatíveis com os slots do casco).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PortStorageSnapshot {
+    pub region: String,
+    pub lines: Vec<StorageLine>,
 }
 
 /// Atracar no porto onde está (MF-036). O servidor valida: dentro da área
@@ -499,6 +524,63 @@ mod tests {
         let decoded: DockResult = bincode::deserialize(&bytes).unwrap();
         assert!(!decoded.success);
         assert!(!decoded.docked);
+    }
+
+    #[test]
+    fn port_storage_snapshot_roundtrips_through_bincode() {
+        let message = PortStorageSnapshot {
+            region: String::from("Porto da Serra"),
+            lines: vec![
+                StorageLine {
+                    item: ItemDefinitionId::new(),
+                    item_name: String::from("Madeira"),
+                    quantity: 25,
+                },
+                StorageLine {
+                    item: ItemDefinitionId::new(),
+                    item_name: String::from("Casco Reforçado"),
+                    quantity: 1,
+                },
+            ],
+        };
+        let bytes = bincode::serialize(&message).unwrap();
+        assert_eq!(
+            bincode::deserialize::<PortStorageSnapshot>(&bytes).unwrap(),
+            message
+        );
+    }
+
+    /// MF-043 estendeu `ShipState` com `port_cooldown_secs` e
+    /// `starboard_cooldown_secs`. Em Alpha, cliente e servidor são deploy
+    /// juntos, então o caminho "cliente antigo ↔ servidor novo" não
+    /// acontece. Este teste documenta o limite: bytes truncados (simulando
+    /// servidor antigo falando com cliente novo) falham de forma
+    /// recuperável, sem panic nem corrupção silenciosa.
+    #[test]
+    fn ship_state_truncated_bytes_fail_cleanly_not_silently() {
+        let full = ShipState {
+            ship_id: 1,
+            x: 0.0,
+            y: 0.0,
+            heading: 0.0,
+            speed: 0.0,
+            cargo_weight: 0,
+            hp: 100,
+            max_hp: 100,
+            max_speed: 0.0,
+            weapon_damage: 0,
+            weapon_range: 0.0,
+            port_cooldown_secs: 2.5,
+            starboard_cooldown_secs: 1.5,
+        };
+        let bytes = bincode::serialize(&full).expect("encode");
+        // Trunca 8 bytes (dois f32): simula cliente novo lendo servidor antigo.
+        let truncated = &bytes[..bytes.len() - 8];
+        let decoded: Result<ShipState, _> = bincode::deserialize(truncated);
+        assert!(
+            decoded.is_err(),
+            "truncation must surface as Err, not panic"
+        );
     }
 
     #[test]

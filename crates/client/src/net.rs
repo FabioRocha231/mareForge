@@ -17,13 +17,14 @@ use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 use mareforge_domain_combat::BroadsideSide;
 use mareforge_domain_items::EquipmentSlot;
+use mareforge_domain_ships::ShipKind;
 use mareforge_protocol::{
     AssignShip, BuySellOrder, CancelSellOrder, CatalogSnapshot, ClientHello, CraftItem,
     CraftResult, CreateSellOrder, Dock, DockResult, EquipItem, FireBroadside, GatherNode,
     GatherResult, LoadoutResult, LoadoutSnapshot, LootResult, LootWreck, MarketResult, NodeUpdated,
-    NodesSnapshot, OrdersSnapshot, RecipesSnapshot, ServerWelcome, ShipDestroyed, ShipInput,
-    StorageDepositAll, StorageWithdrawAll, Undock, UnequipItem, WalletUpdated, WorldSnapshot,
-    ZoneChanged, PROTOCOL_VERSION,
+    NodesSnapshot, OrdersSnapshot, PortStorageSnapshot, RecipesSnapshot, ServerWelcome,
+    ShipDestroyed, ShipInput, StorageDepositAll, StorageWithdrawAll, Undock, UnequipItem,
+    WalletUpdated, WorldSnapshot, ZoneChanged, PROTOCOL_VERSION,
 };
 
 pub const SERVER_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 5000);
@@ -53,6 +54,11 @@ fn shared_config() -> SharedConfig {
 #[derive(Resource, Debug, Clone, Copy, Default)]
 pub struct MyShip(pub Option<u32>);
 
+/// Tipo do casco do PRÓPRIO navio, vindo do `AssignShip` (MF-039: a UI de
+/// loadout usa os slots aceitos para filtrar itens do storage).
+#[derive(Resource, Debug, Clone, Copy, Default)]
+pub struct KnownShipKind(pub Option<ShipKind>);
+
 pub struct ClientNetPlugin;
 
 impl Plugin for ClientNetPlugin {
@@ -75,6 +81,7 @@ impl Plugin for ClientNetPlugin {
             config: NetcodeConfig::default(),
         };
         app.init_resource::<MyShip>();
+        app.init_resource::<KnownShipKind>();
         app.add_plugins(ClientPlugins::new(ClientConfig {
             shared: shared_config(),
             net: net_config,
@@ -120,6 +127,7 @@ impl Plugin for ClientNetPlugin {
         app.register_message::<CatalogSnapshot>(ChannelDirection::ServerToClient);
         app.register_message::<WalletUpdated>(ChannelDirection::ServerToClient);
         app.register_message::<OrdersSnapshot>(ChannelDirection::ServerToClient);
+        app.register_message::<PortStorageSnapshot>(ChannelDirection::ServerToClient);
         app.register_message::<MarketResult>(ChannelDirection::ServerToClient);
         app.init_resource::<crate::ship::DestroyedShips>();
         app.init_resource::<KnownWrecks>();
@@ -315,10 +323,15 @@ fn handle_loadout_result(mut events: EventReader<ClientReceiveMessage<LoadoutRes
 /// Sessão caiu: o client não tem mais navio atribuído (o servidor mantém o
 /// personagem vivo na janela de graça; o reconnect é um novo processo com
 /// o mesmo token — `identity_token`).
-fn reset_on_disconnect(mut disconnect: EventReader<DisconnectEvent>, mut my_ship: ResMut<MyShip>) {
+fn reset_on_disconnect(
+    mut disconnect: EventReader<DisconnectEvent>,
+    mut my_ship: ResMut<MyShip>,
+    mut ship_kind: ResMut<KnownShipKind>,
+) {
     for _ in disconnect.read() {
         warn!("conexão perdida; personagem segue no servidor dentro da janela de graça");
         my_ship.0 = None;
+        ship_kind.0 = None;
     }
 }
 
@@ -542,6 +555,7 @@ fn handle_handshake(
     mut welcome_events: EventReader<ClientReceiveMessage<ServerWelcome>>,
     mut assign_events: EventReader<ClientReceiveMessage<AssignShip>>,
     mut my_ship: ResMut<MyShip>,
+    mut ship_kind: ResMut<KnownShipKind>,
 ) {
     for event in welcome_events.read() {
         let welcome = event.message();
@@ -559,9 +573,12 @@ fn handle_handshake(
         }
     }
     for event in assign_events.read() {
-        my_ship.0 = Some(event.message().ship_id);
+        let message = event.message();
+        my_ship.0 = Some(message.ship_id);
+        ship_kind.0 = Some(message.kind);
         info!(
-            ship_id = event.message().ship_id,
+            ship_id = message.ship_id,
+            kind = ?message.kind,
             "navio atribuído a este client"
         );
     }

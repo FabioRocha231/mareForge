@@ -35,9 +35,10 @@ use mareforge_protocol::{
     AssignShip, BuySellOrder, CancelSellOrder, CatalogSnapshot, ClientHello, CraftItem,
     CraftResult, CreateSellOrder, Dock, DockResult, EquipItem, FireBroadside, GatherNode,
     GatherResult, LoadoutResult, LoadoutSnapshot, LootResult, LootWreck, MarketResult, NodeUpdated,
-    NodesSnapshot, OrdersSnapshot, ProjectileState, RecipesSnapshot, ServerWelcome, ShipDestroyed,
-    ShipInput, ShipState, StorageDepositAll, StorageWithdrawAll, Undock, UnequipItem,
-    WalletUpdated, WorldSnapshot, WreckState, ZoneChanged, PROTOCOL_VERSION,
+    NodesSnapshot, OrdersSnapshot, PortStorageSnapshot, ProjectileState, RecipesSnapshot,
+    ServerWelcome, ShipDestroyed, ShipInput, ShipState, StorageDepositAll, StorageLine,
+    StorageWithdrawAll, Undock, UnequipItem, WalletUpdated, WorldSnapshot, WreckState, ZoneChanged,
+    PROTOCOL_VERSION,
 };
 use mareforge_shared::ids::{
     CharacterId, DestructionEventId, ItemDefinitionId, ItemInstanceId, ShipInstanceId, WreckId,
@@ -356,6 +357,7 @@ impl Plugin for ServerNetPlugin {
         app.register_message::<CatalogSnapshot>(ChannelDirection::ServerToClient);
         app.register_message::<WalletUpdated>(ChannelDirection::ServerToClient);
         app.register_message::<OrdersSnapshot>(ChannelDirection::ServerToClient);
+        app.register_message::<PortStorageSnapshot>(ChannelDirection::ServerToClient);
         app.register_message::<MarketResult>(ChannelDirection::ServerToClient);
         app.add_systems(Startup, start_server);
         app.add_systems(Startup, crate::nodes::spawn_dev_nodes.after(start_server));
@@ -735,6 +737,7 @@ fn handle_hello(
             ship.client_id = Some(client_id);
             commands.entity(entity).remove::<GraceWindow>();
             let ship_id = ship.ship_id;
+            let reclaimed_kind = ship.kind;
             let position = (ship.motion.x, ship.motion.y);
             let _ = connection_manager.send_message::<ReliableChannel, _>(
                 client_id,
@@ -743,14 +746,18 @@ fn handle_hello(
                     accepted: true,
                 },
             );
-            let _ = connection_manager
-                .send_message::<ReliableChannel, _>(client_id, &AssignShip { ship_id });
+            let _ = connection_manager.send_message::<ReliableChannel, _>(
+                client_id,
+                &AssignShip {
+                    ship_id,
+                    kind: reclaimed_kind,
+                },
+            );
             if let Some(zone) = zone_changed_for(&map.0, ship_id, position.0, position.1) {
                 let _ = connection_manager.send_message::<ReliableChannel, _>(client_id, &zone);
             }
             // Captura ANTES de reemprestar `ships` para o broadcast.
             let equipped: Vec<_> = ship.loadout.items().cloned().collect();
-            let reclaimed_kind = ship.kind;
             send_initial_world(
                 &mut connection_manager,
                 &dev,
@@ -784,10 +791,11 @@ fn handle_hello(
             .0
             .as_ref()
             .and_then(|store| store.load_ship(character).ok().flatten());
-        let (ship_id, position, restored_equipped) = match restored {
+        let (ship_id, position, restored_equipped, ship_kind) = match restored {
             Some(record) => {
                 let position = (record.x, record.y);
                 let equipped = record.equipped.clone();
+                let ship_kind = record.kind;
                 let ship_id = restore_ship_from_record(
                     &mut commands,
                     &mut ship_ids,
@@ -800,7 +808,7 @@ fn handle_hello(
                     ship_id,
                     "navio restaurado do store (personagem volta ao mar)"
                 );
-                (ship_id, position, equipped)
+                (ship_id, position, equipped, ship_kind)
             }
             None => {
                 let ship_id = spawn_ship_for(
@@ -814,7 +822,7 @@ fn handle_hello(
                     character,
                     Vec::new(),
                 );
-                (ship_id, DEV_SPAWN, Vec::new())
+                (ship_id, DEV_SPAWN, Vec::new(), ShipKind::SmallMerchant)
             }
         };
         let _ = connection_manager.send_message::<ReliableChannel, _>(
@@ -824,8 +832,13 @@ fn handle_hello(
                 accepted: true,
             },
         );
-        let _ = connection_manager
-            .send_message::<ReliableChannel, _>(client_id, &AssignShip { ship_id });
+        let _ = connection_manager.send_message::<ReliableChannel, _>(
+            client_id,
+            &AssignShip {
+                ship_id,
+                kind: ship_kind,
+            },
+        );
         if let Some(zone) = zone_changed_for(&map.0, ship_id, position.0, position.1) {
             let _ = connection_manager.send_message::<ReliableChannel, _>(client_id, &zone);
         }
@@ -843,7 +856,7 @@ fn handle_hello(
         crate::loadout::send_loadout_snapshot(
             &mut connection_manager,
             client_id,
-            dev_ships.definition(ShipKind::SmallMerchant),
+            dev_ships.definition(ship_kind),
             &dev.catalog,
             &restored_equipped,
         );
@@ -1411,6 +1424,7 @@ fn simulate_world(
                 victim_client_id,
                 &AssignShip {
                     ship_id: new_ship_id,
+                    kind: ShipKind::SmallMerchant,
                 },
             );
             if let Some(zone) = zone_changed_for(&map.0, new_ship_id, DEV_SPAWN.0, DEV_SPAWN.1) {
@@ -1648,11 +1662,14 @@ fn expire_orders(
 /// Atracar (MF-036): validação pura via `domain-ships::dock` — dentro da
 /// área do porto, devagar o bastante e não estava atracado. Atracado, o
 /// casco congela e os serviços de porto ligam.
+#[allow(clippy::too_many_arguments)]
 fn handle_dock(
     mut dock_events: EventReader<ServerReceiveMessage<Dock>>,
     mut connection_manager: ResMut<ConnectionManager>,
     map: Res<ServerWorldMap>,
     policy: Res<ServerDockPolicy>,
+    dev: Res<DevItems>,
+    market: Res<crate::market::ServerMarket>,
     mut ships: Query<&mut ServerShip>,
 ) {
     for event in dock_events.read() {
@@ -1682,6 +1699,14 @@ fn handle_dock(
                         reason: format!("atracado em {name}"),
                     },
                 );
+                let (region, _) = at_port.expect("dock validou que há porto aqui");
+                let storage = market
+                    .port_storage(ship.character, region)
+                    .unwrap_or_default();
+                let _ = connection_manager.send_message::<ReliableChannel, _>(
+                    client_id,
+                    &port_storage_snapshot(&dev.catalog, name, storage),
+                );
             }
             Err(error) => {
                 info!(ship_id = ship.ship_id, error = %error, "atracagem recusada");
@@ -1695,6 +1720,35 @@ fn handle_dock(
                 );
             }
         }
+    }
+}
+
+/// Linhas de storage para a UI, agregando pilhas por item e omitindo itens
+/// desconhecidos do catálogo (fail-closed: UI não inventa nome).
+fn port_storage_snapshot(
+    catalog: &ItemCatalog,
+    region: &str,
+    storage: &[Custody],
+) -> PortStorageSnapshot {
+    let mut quantities: HashMap<ItemDefinitionId, u32> = HashMap::new();
+    for custody in storage {
+        *quantities.entry(custody.instance.definition).or_default() += custody.instance.quantity;
+    }
+    let mut lines: Vec<StorageLine> = quantities
+        .into_iter()
+        .filter_map(|(item, quantity)| {
+            let item_name = catalog.get(item)?.display_name.clone();
+            Some(StorageLine {
+                item,
+                item_name,
+                quantity,
+            })
+        })
+        .collect();
+    lines.sort_by(|a, b| a.item_name.cmp(&b.item_name));
+    PortStorageSnapshot {
+        region: region.to_owned(),
+        lines,
     }
 }
 
@@ -1743,6 +1797,9 @@ fn handle_undock(
 
 #[cfg(test)]
 mod tests {
+    use mareforge_domain_items::ItemLocation;
+    use mareforge_shared::ids::RegionId;
+
     use super::*;
 
     /// MF-032 (ADR-0008): 3 segundos de simulação a 30 Hz = 90 ticks e
@@ -1833,5 +1890,90 @@ mod tests {
             due.contains(&0),
             "deve haver tick sem snapshot (30 Hz ≠ 20 Hz)"
         );
+    }
+
+    fn storage_catalog() -> (ItemCatalog, ItemDefinitionId, ItemDefinitionId) {
+        let timber = ItemDefinitionId::new();
+        let hull = ItemDefinitionId::new();
+        let mut catalog = ItemCatalog::default();
+        catalog
+            .register(ItemDefinition {
+                id: timber,
+                kind: ItemKind::Resource,
+                equipment: None,
+                max_stack: 100,
+                base_weight: 2,
+                tags: SmallVec::new(),
+                display_name: String::from("Madeira"),
+            })
+            .expect("catálogo de teste não registra duplicatas");
+        catalog
+            .register(ItemDefinition::equipment(
+                hull,
+                String::from("Casco Reforçado"),
+                8,
+                EquipmentSlot::Hull,
+                EquipmentStats::default(),
+            ))
+            .expect("catálogo de teste não registra duplicatas");
+        (catalog, timber, hull)
+    }
+
+    fn custody(item: ItemDefinitionId, quantity: u32, region: RegionId) -> Custody {
+        Custody {
+            instance: ItemInstance::new_resource(ItemInstanceId::new(), item, quantity),
+            location: ItemLocation::PortStorage(region),
+        }
+    }
+
+    #[test]
+    fn port_storage_snapshot_aggregates_duplicate_stacks() {
+        let (catalog, timber, _) = storage_catalog();
+        let region = RegionId::new();
+        let snapshot = port_storage_snapshot(
+            &catalog,
+            "Porto da Serra",
+            &[custody(timber, 10, region), custody(timber, 15, region)],
+        );
+
+        assert_eq!(snapshot.region, "Porto da Serra");
+        assert_eq!(snapshot.lines.len(), 1);
+        assert_eq!(snapshot.lines[0].item, timber);
+        assert_eq!(snapshot.lines[0].item_name, "Madeira");
+        assert_eq!(snapshot.lines[0].quantity, 25);
+    }
+
+    #[test]
+    fn port_storage_snapshot_skips_items_missing_from_catalog() {
+        let (catalog, _, hull) = storage_catalog();
+        let region = RegionId::new();
+        let snapshot = port_storage_snapshot(
+            &catalog,
+            "Porto da Serra",
+            &[
+                custody(hull, 1, region),
+                custody(ItemDefinitionId::new(), 7, region),
+            ],
+        );
+
+        assert_eq!(snapshot.lines.len(), 1);
+        assert_eq!(snapshot.lines[0].item, hull);
+    }
+
+    #[test]
+    fn port_storage_snapshot_includes_equipment_and_resources() {
+        let (catalog, timber, hull) = storage_catalog();
+        let region = RegionId::new();
+        let snapshot = port_storage_snapshot(
+            &catalog,
+            "Porto da Serra",
+            &[custody(hull, 1, region), custody(timber, 5, region)],
+        );
+
+        assert_eq!(snapshot.lines.len(), 2);
+        assert!(snapshot
+            .lines
+            .iter()
+            .any(|line| line.item == hull && line.quantity == 1));
     }
 }

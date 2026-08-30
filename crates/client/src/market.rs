@@ -530,6 +530,7 @@ mod tests {
             id,
             name: String::from(name),
             weight: 2,
+            equipment_slot: None,
         }
     }
 

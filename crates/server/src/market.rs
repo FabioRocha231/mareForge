@@ -376,6 +376,15 @@ impl ServerMarket {
             .unwrap_or(0)
     }
 
+    /// Leitura do storage regional para snapshots de UI (porto atracado).
+    pub(crate) fn port_storage(
+        &self,
+        character: CharacterId,
+        region: RegionId,
+    ) -> Option<&[Custody]> {
+        self.storage.get(&(character, region)).map(Vec::as_slice)
+    }
+
     /// Consome `quantity` de `item` do storage (insumos de oficina, MF-037).
     /// Fail-closed: sem estoque suficiente é erro e nada se move.
     pub fn consume_from_storage(
@@ -1119,6 +1128,10 @@ pub fn catalog_snapshot(catalog: &ItemCatalog) -> CatalogSnapshot {
                 id: definition.id,
                 name: definition.display_name.clone(),
                 weight: definition.base_weight,
+                equipment_slot: definition
+                    .equipment
+                    .as_ref()
+                    .map(|equipment| equipment.slot),
             })
             .collect(),
     }

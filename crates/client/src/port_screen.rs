@@ -10,15 +10,20 @@ use bevy::sprite::Anchor;
 use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 use mareforge_domain_crafting::recipe::StationKind;
-use mareforge_domain_items::EquipmentSlot;
-use mareforge_protocol::{
-    CraftItem, CraftResult, DockResult, LoadoutLine, LoadoutResult, LoadoutSnapshot, MarketResult,
-    RecipeEntry, StorageDepositAll, StorageWithdrawAll, Undock, UnequipItem,
+use mareforge_domain_items::{
+    EquipmentDefinition, EquipmentSlot, EquipmentStats, ItemDefinition, ItemKind,
 };
+use mareforge_domain_ships::{can_equip, ShipDefinition, ShipKind, SlotSpec};
+use mareforge_protocol::{
+    CraftItem, CraftResult, DockResult, EquipItem, ItemLine, LoadoutLine, LoadoutResult,
+    LoadoutSnapshot, MarketResult, PortStorageSnapshot, RecipeEntry, StorageDepositAll,
+    StorageLine, StorageWithdrawAll, Undock, UnequipItem,
+};
+use mareforge_shared::ids::{ItemDefinitionId, ShipDefinitionId};
 
 use crate::crafting::KnownRecipes;
-use crate::market::{MarketFeedback, MarketFormReadout, MarketReadout};
-use crate::net::{MyDocked, MyShip, ReliableChannel};
+use crate::market::{KnownCatalog, MarketFeedback, MarketFormReadout, MarketReadout};
+use crate::net::{KnownShipKind, MyDocked, MyShip, ReliableChannel};
 use crate::ship::ShipVisual;
 
 /// Nome do porto atracado mais recente, extraído do `DockResult.reason`.
@@ -28,6 +33,10 @@ pub struct DockedPortName(pub String);
 /// Último snapshot de loadout do servidor.
 #[derive(Resource, Debug, Default)]
 pub struct KnownLoadout(pub Vec<LoadoutLine>);
+
+/// Último snapshot de storage do porto onde o jogador atracou.
+#[derive(Resource, Debug, Default)]
+pub struct KnownPortStorage(pub Vec<StorageLine>);
 
 /// Último veredito de loadout para a aba correspondente.
 #[derive(Resource, Debug, Default)]
@@ -109,11 +118,12 @@ pub struct PortScreen;
 type MarketPanelQuery<'w, 's> =
     Query<'w, 's, Entity, Or<(With<MarketReadout>, With<MarketFormReadout>)>>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum PortAction {
     DepositAll,
     WithdrawAll,
     Unequip(EquipmentSlot),
+    Equip(ItemDefinitionId, EquipmentSlot, String),
     Craft(u32),
     Undock,
 }
@@ -124,6 +134,7 @@ impl Plugin for PortPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DockedPortName>()
             .init_resource::<KnownLoadout>()
+            .init_resource::<KnownPortStorage>()
             .init_resource::<PortScreenState>()
             .init_resource::<LoadoutFeedback>()
             .init_resource::<CraftFeedback>()
@@ -131,6 +142,7 @@ impl Plugin for PortPlugin {
                 Update,
                 (
                     handle_loadout_snapshot,
+                    handle_port_storage_snapshot,
                     handle_loadout_result,
                     handle_craft_result,
                     handle_dock_result,
@@ -150,6 +162,77 @@ fn handle_loadout_snapshot(
     for event in events.read() {
         known.0 = event.message().slots.clone();
     }
+}
+
+fn handle_port_storage_snapshot(
+    mut events: EventReader<ClientReceiveMessage<PortStorageSnapshot>>,
+    mut known: ResMut<KnownPortStorage>,
+) {
+    for event in events.read() {
+        known.0 = event.message().lines.clone();
+    }
+}
+
+fn ship_definition(kind: Option<ShipKind>, loadout: &[LoadoutLine]) -> Option<ShipDefinition> {
+    let kind = kind?;
+    Some(ShipDefinition {
+        id: ShipDefinitionId::new(),
+        kind,
+        display_name: String::new(),
+        slots: loadout
+            .iter()
+            .map(|line| SlotSpec {
+                kind: line.slot,
+                accepts_tag: None,
+            })
+            .collect(),
+        cargo_capacity: 0,
+        base_speed: 0.0,
+        base_turn_rate: 0.0,
+        base_hp: 0,
+        base_weapon_damage: 0,
+        base_weapon_range: 0.0,
+    })
+}
+
+fn catalog_line(catalog: &KnownCatalog, item: ItemDefinitionId) -> Option<&ItemLine> {
+    catalog.0.values().find(|line| line.id == item)
+}
+
+fn item_definition(line: &ItemLine) -> Option<ItemDefinition> {
+    let slot = line.equipment_slot?;
+    Some(ItemDefinition {
+        id: line.id,
+        kind: ItemKind::Equipment,
+        equipment: Some(EquipmentDefinition {
+            slot,
+            stats: EquipmentStats::default(),
+        }),
+        max_stack: 1,
+        base_weight: line.weight,
+        tags: Default::default(),
+        display_name: line.name.clone(),
+    })
+}
+
+fn compatible_equip(
+    storage: &[StorageLine],
+    catalog: &KnownCatalog,
+    loadout: &[LoadoutLine],
+    kind: Option<ShipKind>,
+) -> Vec<(EquipmentSlot, StorageLine)> {
+    let Some(ship) = ship_definition(kind, loadout) else {
+        return Vec::new();
+    };
+    storage
+        .iter()
+        .filter_map(|storage_line| {
+            let item_line = catalog_line(catalog, storage_line.item)?;
+            let item = item_definition(item_line)?;
+            let slot = can_equip(&ship, &item).ok()?;
+            Some((slot, storage_line.clone()))
+        })
+        .collect()
 }
 
 fn handle_loadout_result(
@@ -251,14 +334,29 @@ fn toggle_market_panel(
     }
 }
 
-fn port_actions(tab: PortTab, loadout: &[LoadoutLine], recipes: &[RecipeEntry]) -> Vec<PortAction> {
+fn port_actions(
+    tab: PortTab,
+    loadout: &[LoadoutLine],
+    recipes: &[RecipeEntry],
+    storage: &[StorageLine],
+    catalog: &KnownCatalog,
+    ship_kind: Option<ShipKind>,
+) -> Vec<PortAction> {
     let mut actions = match tab {
         PortTab::Storage => vec![PortAction::DepositAll, PortAction::WithdrawAll],
-        PortTab::Loadout => loadout
-            .iter()
-            .filter(|line| line.equipped)
-            .map(|line| PortAction::Unequip(line.slot))
-            .collect(),
+        PortTab::Loadout => {
+            let mut actions: Vec<PortAction> = loadout
+                .iter()
+                .filter(|line| line.equipped)
+                .map(|line| PortAction::Unequip(line.slot))
+                .collect();
+            actions.extend(
+                compatible_equip(storage, catalog, loadout, ship_kind)
+                    .into_iter()
+                    .map(|(slot, line)| PortAction::Equip(line.item, slot, line.item_name.clone())),
+            );
+            actions
+        }
         PortTab::Crafting => recipes_for_station(recipes, false)
             .into_iter()
             .map(|entry| PortAction::Craft(entry.recipe_id))
@@ -291,6 +389,9 @@ fn send_port_action(connection_manager: &mut ConnectionManager, action: &PortAct
         PortAction::Unequip(slot) => {
             connection_manager.send_message::<ReliableChannel, _>(&UnequipItem { slot: *slot })
         }
+        PortAction::Equip(_, _, _) => {
+            connection_manager.send_message::<ReliableChannel, _>(&equip_item_for(action).unwrap())
+        }
         PortAction::Craft(recipe_id) => {
             connection_manager.send_message::<ReliableChannel, _>(&CraftItem {
                 recipe_id: *recipe_id,
@@ -300,12 +401,22 @@ fn send_port_action(connection_manager: &mut ConnectionManager, action: &PortAct
     };
 }
 
+fn equip_item_for(action: &PortAction) -> Option<EquipItem> {
+    match action {
+        PortAction::Equip(item, _, _) => Some(EquipItem { item: *item }),
+        _ => None,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn handle_port_input(
     keys: Res<ButtonInput<KeyCode>>,
     docked: Res<MyDocked>,
     mut state: ResMut<PortScreenState>,
     loadout: Res<KnownLoadout>,
+    storage: Res<KnownPortStorage>,
+    catalog: Res<KnownCatalog>,
+    ship_kind: Res<KnownShipKind>,
     recipes: Res<KnownRecipes>,
     screens: Query<Entity, With<PortScreen>>,
     mut connection_manager: ResMut<ConnectionManager>,
@@ -334,7 +445,14 @@ fn handle_port_input(
         return;
     }
 
-    let actions = port_actions(state.active_tab, &loadout.0, &recipes.0);
+    let actions = port_actions(
+        state.active_tab,
+        &loadout.0,
+        &recipes.0,
+        &storage.0,
+        &catalog,
+        ship_kind.0,
+    );
     if keys.just_pressed(KeyCode::ArrowUp) {
         state.selected_action = state.selected_action.saturating_sub(1);
     }
@@ -356,6 +474,9 @@ fn action_label(action: &PortAction, recipes: &[RecipeEntry]) -> String {
         PortAction::DepositAll => String::from("Depositar tudo"),
         PortAction::WithdrawAll => String::from("Retirar tudo"),
         PortAction::Unequip(slot) => format!("Desequipar {}", slot_label(*slot)),
+        PortAction::Equip(_, slot, item_name) => {
+            format!("{}: {item_name} [Equipar]", slot_label(*slot))
+        }
         PortAction::Craft(recipe_id) => {
             let entry = recipes.iter().find(|entry| entry.recipe_id == *recipe_id);
             let verb = if entry.is_some_and(|entry| entry.station == StationKind::Dock) {
@@ -440,13 +561,23 @@ fn storage_lines(
     if let Some(result) = feedback {
         lines.push(feedback_line(result.success, &result.reason));
     }
-    let actions = port_actions(PortTab::Storage, &[], recipes);
+    let actions = port_actions(
+        PortTab::Storage,
+        &[],
+        recipes,
+        &[],
+        &KnownCatalog::default(),
+        None,
+    );
     lines.extend(action_lines(&actions, state.selected_action, recipes));
     lines
 }
 
 fn loadout_lines(
     loadout: &[LoadoutLine],
+    storage: &[StorageLine],
+    catalog: &KnownCatalog,
+    ship_kind: Option<ShipKind>,
     feedback: Option<&LoadoutResult>,
     state: &PortScreenState,
     recipes: &[RecipeEntry],
@@ -462,11 +593,20 @@ fn loadout_lines(
             format!("{}: {name}", slot_label(line.slot))
         })
         .collect::<Vec<_>>();
-    lines.push(String::from("Equipar item novo: use T/Y/U (debug)"));
+    if compatible_equip(storage, catalog, loadout, ship_kind).is_empty() {
+        lines.push(String::from("Storage: nada compatível com este casco"));
+    }
     if let Some(result) = feedback {
         lines.push(feedback_line(result.success, &result.reason));
     }
-    let actions = port_actions(PortTab::Loadout, loadout, recipes);
+    let actions = port_actions(
+        PortTab::Loadout,
+        loadout,
+        recipes,
+        storage,
+        catalog,
+        ship_kind,
+    );
     lines.extend(action_lines(&actions, state.selected_action, recipes));
     lines
 }
@@ -524,15 +664,19 @@ fn recipe_lines(
     } else {
         PortTab::Crafting
     };
-    let actions = port_actions(tab, &[], recipes);
+    let actions = port_actions(tab, &[], recipes, &[], &KnownCatalog::default(), None);
     lines.extend(action_lines(&actions, state.selected_action, recipes));
     lines
 }
 
+#[allow(clippy::too_many_arguments)]
 fn content_lines(
     state: &PortScreenState,
     cargo_weight: Option<u32>,
     loadout: &[LoadoutLine],
+    storage: &[StorageLine],
+    catalog: &KnownCatalog,
+    ship_kind: Option<ShipKind>,
     recipes: &[RecipeEntry],
     loadout_feedback: Option<&LoadoutResult>,
     craft_feedback: Option<&CraftResult>,
@@ -540,7 +684,15 @@ fn content_lines(
 ) -> Vec<String> {
     match state.active_tab {
         PortTab::Storage => storage_lines(cargo_weight, market_feedback, state, recipes),
-        PortTab::Loadout => loadout_lines(loadout, loadout_feedback, state, recipes),
+        PortTab::Loadout => loadout_lines(
+            loadout,
+            storage,
+            catalog,
+            ship_kind,
+            loadout_feedback,
+            state,
+            recipes,
+        ),
         PortTab::Crafting => recipe_lines(recipes, false, craft_feedback, state),
         PortTab::Shipyard => recipe_lines(recipes, true, craft_feedback, state),
         PortTab::Market => vec![String::from("Mercado regional")],
@@ -553,6 +705,9 @@ fn port_screen_text(
     state: &PortScreenState,
     cargo_weight: Option<u32>,
     loadout: &[LoadoutLine],
+    storage: &[StorageLine],
+    catalog: &KnownCatalog,
+    ship_kind: Option<ShipKind>,
     recipes: &[RecipeEntry],
     loadout_feedback: Option<&LoadoutResult>,
     craft_feedback: Option<&CraftResult>,
@@ -568,6 +723,9 @@ fn port_screen_text(
         state,
         cargo_weight,
         loadout,
+        storage,
+        catalog,
+        ship_kind,
         recipes,
         loadout_feedback,
         craft_feedback,
@@ -583,6 +741,9 @@ fn update_port_screen(
     my_ship: Res<MyShip>,
     visuals: Query<&ShipVisual>,
     loadout: Res<KnownLoadout>,
+    storage: Res<KnownPortStorage>,
+    catalog: Res<KnownCatalog>,
+    ship_kind: Res<KnownShipKind>,
     recipes: Res<KnownRecipes>,
     loadout_feedback: Res<LoadoutFeedback>,
     craft_feedback: Res<CraftFeedback>,
@@ -600,6 +761,9 @@ fn update_port_screen(
         &state,
         cargo_weight,
         &loadout.0,
+        &storage.0,
+        &catalog,
+        ship_kind.0,
         &recipes.0,
         loadout_feedback.0.as_ref(),
         craft_feedback.0.as_ref(),
@@ -657,6 +821,23 @@ mod tests {
         ])
     }
 
+    fn storage_line(id: ItemDefinitionId, item_name: &str, quantity: u32) -> StorageLine {
+        StorageLine {
+            item: id,
+            item_name: String::from(item_name),
+            quantity,
+        }
+    }
+
+    fn item_line(id: ItemDefinitionId, item_name: &str, slot: Option<EquipmentSlot>) -> ItemLine {
+        ItemLine {
+            id,
+            name: String::from(item_name),
+            weight: 5,
+            equipment_slot: slot,
+        }
+    }
+
     #[test]
     fn port_screen_visibility_follows_docked_state() {
         let mut world = World::new();
@@ -706,7 +887,14 @@ mod tests {
 
     #[test]
     fn storage_actions_send_deposit_and_withdraw() {
-        let actions = port_actions(PortTab::Storage, &[], &[]);
+        let actions = port_actions(
+            PortTab::Storage,
+            &[],
+            &[],
+            &[],
+            &KnownCatalog::default(),
+            None,
+        );
 
         assert_eq!(actions[0], PortAction::DepositAll);
         assert_eq!(actions[1], PortAction::WithdrawAll);
@@ -724,6 +912,9 @@ mod tests {
             Some(8),
             &loadout.0,
             &[],
+            &KnownCatalog::default(),
+            Some(ShipKind::SmallMerchant),
+            &[],
             None,
             None,
             None,
@@ -733,12 +924,20 @@ mod tests {
             "Sail: (vazio)",
             "Weapon: Canhão de Bronze",
             "Aux: (vazio)",
-            "Equipar item novo: use T/Y/U (debug)",
+            "Storage: nada compatível com este casco",
         ] {
             assert!(text.contains(expected), "{text}");
         }
+        assert!(!text.contains("use T/Y/U (debug)"), "{text}");
 
-        let actions = port_actions(PortTab::Loadout, &loadout.0, &[]);
+        let actions = port_actions(
+            PortTab::Loadout,
+            &loadout.0,
+            &[],
+            &[],
+            &KnownCatalog::default(),
+            Some(ShipKind::SmallMerchant),
+        );
         assert_eq!(actions[0], PortAction::Unequip(EquipmentSlot::Hull));
         assert_eq!(actions[1], PortAction::Unequip(EquipmentSlot::Weapon));
         assert!(!actions
@@ -762,6 +961,9 @@ mod tests {
             },
             None,
             &[],
+            &[],
+            &KnownCatalog::default(),
+            None,
             &recipes,
             None,
             None,
@@ -774,7 +976,14 @@ mod tests {
 
         let entries = recipes_for_station(&recipes, false);
         assert_eq!(entries.len(), 3);
-        let actions = port_actions(PortTab::Crafting, &[], &recipes);
+        let actions = port_actions(
+            PortTab::Crafting,
+            &[],
+            &recipes,
+            &[],
+            &KnownCatalog::default(),
+            None,
+        );
         assert_eq!(actions[0], PortAction::Craft(1));
         assert_eq!(actions[1], PortAction::Craft(3));
     }
@@ -793,6 +1002,9 @@ mod tests {
             },
             None,
             &[],
+            &[],
+            &KnownCatalog::default(),
+            None,
             &recipes,
             None,
             None,
@@ -807,14 +1019,28 @@ mod tests {
 
         let entries = recipes_for_station(&recipes, true);
         assert_eq!(entries.len(), 1);
-        let actions = port_actions(PortTab::Shipyard, &[], &recipes);
+        let actions = port_actions(
+            PortTab::Shipyard,
+            &[],
+            &recipes,
+            &[],
+            &KnownCatalog::default(),
+            None,
+        );
         assert_eq!(actions[0], PortAction::Craft(2));
     }
 
     #[test]
     fn craft_action_sends_craft_item_for_recipe_id() {
         let recipes = vec![recipe(7, StationKind::Workbench)];
-        let actions = port_actions(PortTab::Crafting, &[], &recipes);
+        let actions = port_actions(
+            PortTab::Crafting,
+            &[],
+            &recipes,
+            &[],
+            &KnownCatalog::default(),
+            None,
+        );
 
         assert_eq!(actions[0], PortAction::Craft(7));
     }
@@ -845,8 +1071,97 @@ mod tests {
 
     #[test]
     fn undock_action_sends_undock() {
-        let actions = port_actions(PortTab::Market, &[], &[]);
+        let actions = port_actions(
+            PortTab::Market,
+            &[],
+            &[],
+            &[],
+            &KnownCatalog::default(),
+            None,
+        );
 
         assert_eq!(actions[0], PortAction::Undock);
+    }
+
+    #[test]
+    fn loadout_renders_equip_button_for_matching_storage_items() {
+        let hull = ItemDefinitionId::new();
+        let storage = vec![storage_line(hull, "Casco Reforçado", 1)];
+        let catalog = KnownCatalog(std::collections::HashMap::from([(
+            String::from("Casco Reforçado"),
+            item_line(hull, "Casco Reforçado", Some(EquipmentSlot::Hull)),
+        )]));
+        let text = port_screen_text(
+            "Porto da Serra",
+            &PortScreenState {
+                active_tab: PortTab::Loadout,
+                selected_action: 0,
+            },
+            Some(8),
+            &loadout().0,
+            &storage,
+            &catalog,
+            Some(ShipKind::SmallMerchant),
+            &[],
+            None,
+            None,
+            None,
+        );
+
+        assert!(text.contains("Hull: Casco Reforçado [Equipar]"), "{text}");
+        assert!(!text.contains("use T/Y/U (debug)"), "{text}");
+    }
+
+    #[test]
+    fn equip_button_builds_equip_item_intent() {
+        let hull = ItemDefinitionId::new();
+        let storage = vec![storage_line(hull, "Casco Reforçado", 1)];
+        let catalog = KnownCatalog(std::collections::HashMap::from([(
+            String::from("Casco Reforçado"),
+            item_line(hull, "Casco Reforçado", Some(EquipmentSlot::Hull)),
+        )]));
+        let actions = port_actions(
+            PortTab::Loadout,
+            &loadout().0,
+            &[],
+            &storage,
+            &catalog,
+            Some(ShipKind::SmallMerchant),
+        );
+
+        let equip = actions
+            .iter()
+            .find_map(|action| match action {
+                PortAction::Equip(item, slot, name) => Some((*item, *slot, name.as_str())),
+                _ => None,
+            })
+            .expect("storage compatível gera ação Equipar");
+        assert_eq!(equip.0, hull);
+        assert_eq!(equip.1, EquipmentSlot::Hull);
+        assert_eq!(equip.2, "Casco Reforçado");
+        assert_eq!(
+            equip_item_for(&PortAction::Equip(
+                hull,
+                EquipmentSlot::Hull,
+                String::from("Casco Reforçado")
+            )),
+            Some(EquipItem { item: hull })
+        );
+    }
+
+    #[test]
+    fn items_missing_from_port_storage_do_not_spawn_equip_ui() {
+        let actions = port_actions(
+            PortTab::Loadout,
+            &loadout().0,
+            &[],
+            &[],
+            &KnownCatalog::default(),
+            Some(ShipKind::SmallMerchant),
+        );
+
+        assert!(!actions
+            .iter()
+            .any(|action| matches!(action, PortAction::Equip(_, _, _))));
     }
 }

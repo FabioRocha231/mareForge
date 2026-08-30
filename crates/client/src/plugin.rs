@@ -346,6 +346,7 @@ mod tests {
                 id: item,
                 name: String::from("Madeira"),
                 weight: 2,
+                equipment_slot: None,
             },
         )])));
         world.spawn((SeaReadout, Text2d::new(String::new())));

@@ -384,6 +384,7 @@ fn build_ship_for_job(
             client_id,
             &AssignShip {
                 ship_id: new_ship_id,
+                kind: job.kind,
             },
         );
         if let Some(zone) = crate::net::zone_changed_for(map, new_ship_id, DEV_SPAWN.0, DEV_SPAWN.1)
