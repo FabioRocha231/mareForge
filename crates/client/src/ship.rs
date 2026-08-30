@@ -73,9 +73,11 @@ pub fn upsert_ship_visuals(
             Vec2::new(-10.0, 8.0),
             Vec2::new(-10.0, -8.0),
         )));
-        // Meu navio é madeira; os demais, bruma cinza-azulada.
+        // Meu navio é madeira; NPCs são vermelhos; os demais, bruma cinza-azulada.
         let color = if is_mine {
             Color::srgb(0.85, 0.72, 0.45)
+        } else if state.is_npc {
+            Color::srgb(0.85, 0.2, 0.2)
         } else {
             Color::srgb(0.55, 0.62, 0.7)
         };

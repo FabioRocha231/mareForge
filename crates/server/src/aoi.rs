@@ -87,6 +87,7 @@ mod tests {
             weapon_range: 50.0,
             port_cooldown_secs: 0.0,
             starboard_cooldown_secs: 0.0,
+            is_npc: false,
         }
     }
 

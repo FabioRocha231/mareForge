@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::{Duration, Instant};
 
+use crate::npc::NpcShip;
 use bevy::ecs::prelude::*;
 use bevy::prelude::*;
 use chrono::Utc;
@@ -296,6 +297,9 @@ impl Plugin for ServerNetPlugin {
         app.add_plugins(bevy::state::app::StatesPlugin);
         app.init_resource::<CombatTuning>();
         app.init_resource::<ShipIdCounter>();
+        app.init_resource::<crate::npc::NpcIdCounter>();
+        app.init_resource::<crate::npc::NpcSpawnConfig>();
+        app.init_resource::<crate::npc::NpcRespawnQueue>();
         app.init_resource::<ProjectileIdCounter>();
         app.init_resource::<WreckIdCounter>();
         app.insert_resource(ServerLootPolicy(LootPolicy::default()));
@@ -361,6 +365,7 @@ impl Plugin for ServerNetPlugin {
         app.register_message::<MarketResult>(ChannelDirection::ServerToClient);
         app.add_systems(Startup, start_server);
         app.add_systems(Startup, crate::nodes::spawn_dev_nodes.after(start_server));
+        app.add_systems(Startup, crate::npc::setup_npcs.after(start_server));
         app.add_systems(Startup, crate::market::load_state.after(start_server));
         app.add_systems(Update, crate::market::save_state);
         // (Bevy 0.15 implementa tuplas de sistemas até 15 elementos — o
@@ -381,7 +386,11 @@ impl Plugin for ServerNetPlugin {
             ),
         );
         // Ordem importa: snapshots veem o estado JÁ simulado deste tick.
-        app.add_systems(FixedUpdate, (simulate_world, send_snapshots).chain());
+        app.add_systems(
+            FixedUpdate,
+            (simulate_world, crate::npc::simulate_npcs, send_snapshots).chain(),
+        );
+        app.add_systems(FixedUpdate, crate::npc::respawn_npcs);
         app.add_systems(
             FixedUpdate,
             (expire_ship_grace, expire_wrecks, expire_orders),
@@ -474,6 +483,7 @@ pub struct Metrics {
     pub ships_constructed: u64,
     pub ships_destroyed: u64,
     pub loot_transfers: u64,
+    pub npc_bounty_gold_minted: u64,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1462,6 +1472,7 @@ fn to_ship_state(ship: &ServerShip, catalog: &ItemCatalog) -> ShipState {
         weapon_range: ship.stats.weapon_range,
         port_cooldown_secs: ship.battery.port_cooldown,
         starboard_cooldown_secs: ship.battery.starboard_cooldown,
+        is_npc: false,
     }
 }
 
@@ -1477,6 +1488,7 @@ fn send_snapshots(
     dev: Res<DevItems>,
     time: Res<Time>,
     ships: Query<(Entity, &mut ServerShip)>,
+    npc_ships: Query<&NpcShip>,
     projectiles: Query<(Entity, &mut ServerProjectile)>,
     wrecks: Query<&ServerWreck>,
 ) {
@@ -1493,10 +1505,15 @@ fn send_snapshots(
             stack_count: wreck.chest.items().len() as u32,
         })
         .collect();
-    let ship_states: Vec<ShipState> = ships
+    let mut ship_states: Vec<ShipState> = ships
         .iter()
         .map(|(_, ship)| to_ship_state(ship, &dev.catalog))
         .collect();
+    ship_states.extend(
+        npc_ships
+            .iter()
+            .map(|npc| crate::npc::to_npc_ship_state(npc, &dev.catalog)),
+    );
     let projectile_states: Vec<ProjectileState> = projectiles
         .iter()
         .map(|(_, projectile)| ProjectileState {
@@ -1549,6 +1566,7 @@ fn world_status(
         items_destroyed = metrics.items_destroyed,
         ships_constructed = metrics.ships_constructed,
         ships_destroyed = metrics.ships_destroyed,
+        npc_bounty_gold_minted = metrics.npc_bounty_gold_minted,
         "economic pulse"
     );
     for ship in &ships {
@@ -1871,6 +1889,7 @@ mod tests {
         assert_eq!(state.cargo_weight, 0);
         assert_eq!(state.port_cooldown_secs, 2.5);
         assert_eq!(state.starboard_cooldown_secs, 0.75);
+        assert!(!state.is_npc);
     }
 
     /// Simulação e snapshot não são a mesma cadência: há ticks de 30 Hz em

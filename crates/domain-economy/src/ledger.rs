@@ -15,6 +15,10 @@ pub enum LedgerKind {
     Burn,
     /// Ouro que trocou de dono numa execução de order.
     Trade,
+    /// MF-045: ouro cunhado por matar NPC — faucet auditado, separado do
+    /// bootstrap dev. Auditar NpcBounty ≠ Mint quando a telemetria medir a
+    /// economia (§71).
+    NpcBounty,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -85,6 +89,17 @@ impl Ledger {
                 .sum(),
         )
     }
+
+    /// Total cunhado por bounty de NPC (§71: npc_bounty_gold_minted).
+    pub fn npc_bounties(&self) -> Money {
+        Money(
+            self.entries
+                .iter()
+                .filter(|entry| entry.kind == LedgerKind::NpcBounty)
+                .map(|entry| entry.amount.0)
+                .sum(),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -110,10 +125,16 @@ mod tests {
         ledger.record(LedgerKind::Burn, Money(5), "listing fee");
         ledger.record(LedgerKind::Trade, Money(485), "order 0");
         ledger.record(LedgerKind::Burn, Money(15), "transaction tax");
+        ledger.record(LedgerKind::NpcBounty, Money(50), "npc bounty ship 4");
 
         assert_eq!(ledger.minted(), Money(2_000));
         assert_eq!(ledger.burned(), Money(20));
         assert_eq!(ledger.market_volume(), Money(485));
+        assert_eq!(ledger.npc_bounties(), Money(50));
+        assert!(ledger
+            .entries()
+            .iter()
+            .any(|entry| entry.kind == LedgerKind::NpcBounty && entry.amount == Money(50)));
     }
 
     #[test]
@@ -122,5 +143,6 @@ mod tests {
         assert_eq!(ledger.minted(), Money(0));
         assert_eq!(ledger.burned(), Money(0));
         assert_eq!(ledger.market_volume(), Money(0));
+        assert_eq!(ledger.npc_bounties(), Money(0));
     }
 }

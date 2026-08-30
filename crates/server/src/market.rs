@@ -147,7 +147,7 @@ impl ServerMarket {
     /// Persiste o estado no store ativo (MF-034: operação crítica chega
     /// atomicamente ao banco; arquivo de dev salva no ritmo periódico).
     /// Chamado ao fim de toda mutação econômica.
-    fn persist(&self) {
+    pub(crate) fn persist(&self) {
         if let Some(store) = &self.store {
             let snapshot = self.snapshot();
             if let Err(error) = store.save_market(&snapshot) {
@@ -218,7 +218,7 @@ impl ServerMarket {
         Self::restore_with_store(snapshot, None)
     }
 
-    fn credit(&mut self, character: CharacterId, amount: Money) {
+    pub(crate) fn credit(&mut self, character: CharacterId, amount: Money) {
         let balance = self.balances.entry(character).or_insert(Money(0));
         balance.0 = balance.0.saturating_add(amount.0);
     }
@@ -1090,7 +1090,7 @@ fn order_lines_for(
 
 /// Envia a carteira atualizada ao dono, se ele estiver online (§31: ouro é
 /// da personagem, não do navio — a carteira sobrevive ao respawn).
-fn send_wallet(
+pub(crate) fn send_wallet(
     connection_manager: &mut ConnectionManager,
     market: &ServerMarket,
     viewers: &[(Option<ClientId>, CharacterId)],

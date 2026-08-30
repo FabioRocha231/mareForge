@@ -300,6 +300,7 @@ mod tests {
             weapon_range: 50.0,
             port_cooldown_secs: port_cooldown,
             starboard_cooldown_secs: starboard_cooldown,
+            is_npc: false,
         }
     }
 

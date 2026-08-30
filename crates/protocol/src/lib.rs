@@ -115,6 +115,9 @@ pub struct ShipState {
     pub port_cooldown_secs: f32,
     #[serde(default)]
     pub starboard_cooldown_secs: f32,
+    /// MF-044: NPC é não-player. Aditivo, default false.
+    #[serde(default)]
+    pub is_npc: bool,
 }
 
 /// Instala um item do storage regional no slot dele (MF-039). Só atracado;
@@ -459,12 +462,39 @@ mod tests {
             weapon_range: 55.0,
             port_cooldown_secs: 3.5,
             starboard_cooldown_secs: 1.25,
+            is_npc: false,
         };
         let bytes = bincode::serialize(&state).unwrap();
         let decoded = bincode::deserialize::<ShipState>(&bytes).unwrap();
         assert_eq!(decoded, state);
         assert_eq!(decoded.port_cooldown_secs, 3.5);
         assert_eq!(decoded.starboard_cooldown_secs, 1.25);
+    }
+
+    #[test]
+    fn ship_state_roundtrips_is_npc_flag() {
+        for is_npc in [false, true] {
+            let state = ShipState {
+                ship_id: 3,
+                x: 1.0,
+                y: 2.0,
+                heading: 0.5,
+                speed: 0.0,
+                cargo_weight: 0,
+                hp: 70,
+                max_hp: 70,
+                max_speed: 40.0,
+                weapon_damage: 25,
+                weapon_range: 55.0,
+                port_cooldown_secs: 0.0,
+                starboard_cooldown_secs: 0.0,
+                is_npc,
+            };
+            let bytes = bincode::serialize(&state).unwrap();
+            let decoded = bincode::deserialize::<ShipState>(&bytes).unwrap();
+            assert_eq!(decoded, state);
+            assert_eq!(decoded.is_npc, is_npc);
+        }
     }
 
     #[test]
@@ -572,6 +602,7 @@ mod tests {
             weapon_range: 0.0,
             port_cooldown_secs: 2.5,
             starboard_cooldown_secs: 1.5,
+            is_npc: false,
         };
         let bytes = bincode::serialize(&full).expect("encode");
         // Trunca 8 bytes (dois f32): simula cliente novo lendo servidor antigo.
@@ -634,6 +665,7 @@ mod tests {
                     weapon_range: 50.0,
                     port_cooldown_secs: 0.0,
                     starboard_cooldown_secs: 2.0,
+                    is_npc: false,
                 },
                 ShipState {
                     ship_id: 2,
@@ -649,6 +681,7 @@ mod tests {
                     weapon_range: 55.0,
                     port_cooldown_secs: 0.0,
                     starboard_cooldown_secs: 0.0,
+                    is_npc: false,
                 },
             ],
             projectiles: vec![ProjectileState {

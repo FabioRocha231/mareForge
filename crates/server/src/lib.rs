@@ -4,6 +4,7 @@ pub mod loadout;
 pub mod market;
 pub mod net;
 pub mod nodes;
+pub mod npc;
 pub mod persist;
 pub mod plugin;
 
