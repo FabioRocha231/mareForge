@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
 use crate::crafting::{send_craft_input, CraftPlugin};
-use crate::market::{send_market_input, KnownCatalog, MarketPlugin, Wallet};
+use crate::market::{send_market_input, spawn_market_panel, KnownCatalog, MarketPlugin, Wallet};
 use crate::net::{
     ClientNetPlugin, KnownWrecks, MyDocked, MyShip, GATHER_RADIUS_SQ, LOOT_RADIUS_SQ,
 };
@@ -26,7 +26,10 @@ impl Plugin for ClientPlugin {
             .add_plugins(NodePlugin)
             .add_plugins(CraftPlugin)
             .add_plugins(MarketPlugin)
-            .add_systems(Startup, (setup_camera, setup_hud).chain())
+            .add_systems(
+                Startup,
+                (setup_camera, setup_hud, spawn_market_panel).chain(),
+            )
             .add_systems(
                 Update,
                 (

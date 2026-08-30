@@ -601,7 +601,7 @@ impl ServerMarket {
                 .iter()
                 .find(|(_, id)| **id == order.id)
                 .map(|(num, _)| *num)
-                .unwrap_or(0);
+                .expect("invariant: order_id present in order_nums");
             if let Some(escrowed) = self.escrow.remove(&order_num) {
                 self.storage
                     .entry((order.seller, order.region))

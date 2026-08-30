@@ -1,18 +1,22 @@
 //! Mercado no client (PRD MF-023..026). O client vê catálogo, carteira e o
-//! quadro de orders; storage e execução são do servidor (Pilar 4). Teclas:
-//! Z deposita o porão, X retira, V vende madeira (dev pricing), N cancela
-//! sua order mais antiga, B compra a order mais barata.
+//! quadro de orders; storage e execução são do servidor (Pilar 4). O painel
+//! MF-040 é Text2d + teclado: lista orders, cria/cancela/compra e mostra o
+//! veredito `MarketResult` do servidor. Z/X/V/N/B continuam como atalhos dev
+//! (escondidos do HUD desde MF-043).
 
 use std::collections::HashMap;
 
 use crate::net::ReliableChannel;
 use bevy::ecs::prelude::*;
+use bevy::input::keyboard::{Key, KeyboardInput};
+use bevy::input::ButtonState;
 use bevy::prelude::*;
+use bevy::sprite::Anchor;
 use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 use mareforge_protocol::{
     BuySellOrder, CancelSellOrder, CatalogSnapshot, CreateSellOrder, ItemLine, MarketResult,
-    OrdersSnapshot, StorageDepositAll, StorageWithdrawAll, WalletUpdated,
+    OrderLine, OrdersSnapshot, StorageDepositAll, StorageWithdrawAll, WalletUpdated,
 };
 
 /// Catálogo do servidor: nome → id real (para os intents) + peso (UI).
@@ -27,9 +31,36 @@ pub struct Wallet(pub u64);
 #[derive(Resource, Debug, Default)]
 pub struct KnownOrders(pub Vec<mareforge_protocol::OrderLine>);
 
+/// Estado local do formulário de venda e da seleção de orders.
+#[derive(Resource, Debug, Default, Clone, PartialEq, Eq)]
+pub struct MarketForm {
+    pub item_index: usize,
+    pub quantity: String,
+    pub unit_price: String,
+    pub selected_order: usize,
+    pub focus: FormFocus,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum FormFocus {
+    #[default]
+    Orders,
+    Item,
+    Quantity,
+    Price,
+}
+
+/// Último veredito do servidor, exibido no painel.
+#[derive(Resource, Debug, Default)]
+pub struct MarketFeedback(pub Option<MarketResult>);
+
 /// Texto do HUD de mercado (carteira + quadro), filho da câmera.
 #[derive(Component)]
 pub struct MarketReadout;
+
+/// Texto do formulário de venda, filho da câmera.
+#[derive(Component)]
+pub struct MarketFormReadout;
 
 pub struct MarketPlugin;
 
@@ -38,6 +69,8 @@ impl Plugin for MarketPlugin {
         app.init_resource::<KnownCatalog>()
             .init_resource::<Wallet>()
             .init_resource::<KnownOrders>()
+            .init_resource::<MarketForm>()
+            .init_resource::<MarketFeedback>()
             .add_systems(
                 Update,
                 (
@@ -45,6 +78,7 @@ impl Plugin for MarketPlugin {
                     handle_wallet_updated,
                     handle_orders_snapshot,
                     handle_market_result,
+                    handle_market_panel_input,
                     update_market_readout,
                 ),
             );
@@ -65,6 +99,7 @@ fn dev_price(name: &str) -> u64 {
 fn handle_catalog_snapshot(
     mut catalog_events: EventReader<ClientReceiveMessage<CatalogSnapshot>>,
     mut known: ResMut<KnownCatalog>,
+    mut form: ResMut<MarketForm>,
 ) {
     for event in catalog_events.read() {
         known.0 = event
@@ -73,6 +108,7 @@ fn handle_catalog_snapshot(
             .iter()
             .map(|line| (line.name.clone(), line.clone()))
             .collect();
+        form.item_index = form.item_index.min(known.0.len().saturating_sub(1));
         info!(items = known.0.len(), "catálogo de itens recebido");
     }
 }
@@ -87,9 +123,13 @@ fn handle_wallet_updated(
     }
 }
 
-fn handle_market_result(mut events: EventReader<ClientReceiveMessage<MarketResult>>) {
+fn handle_market_result(
+    mut events: EventReader<ClientReceiveMessage<MarketResult>>,
+    mut feedback: ResMut<MarketFeedback>,
+) {
     for event in events.read() {
         let result = event.message();
+        feedback.0 = Some(result.clone());
         if result.success {
             info!(reason = %result.reason, "mercado: ok");
         } else {
@@ -102,35 +142,285 @@ fn handle_market_result(mut events: EventReader<ClientReceiveMessage<MarketResul
 fn handle_orders_snapshot(
     mut orders_events: EventReader<ClientReceiveMessage<OrdersSnapshot>>,
     mut known: ResMut<KnownOrders>,
+    mut form: ResMut<MarketForm>,
 ) {
     for event in orders_events.read() {
-        known.0 = event.message().orders.clone();
+        known.0 = sorted_orders(event.message().orders.clone());
+        form.selected_order = form.selected_order.min(known.0.len().saturating_sub(1));
     }
 }
 
-/// Painel direito da tela: carteira e quadro de orders.
+/// Ordena o quadro para a UI: minhas primeiro, depois preço unitário.
+fn sorted_orders(mut orders: Vec<OrderLine>) -> Vec<OrderLine> {
+    orders.sort_by_key(|order| (!order.mine, order.unit_price, order.order_num));
+    orders
+}
+
+/// Painel de mercado (MF-040): esquerda lista, direita formulário.
+pub fn spawn_market_panel(mut commands: Commands, camera: Query<Entity, With<Camera2d>>) {
+    let Ok(camera) = camera.get_single() else {
+        return;
+    };
+    commands
+        .spawn((
+            MarketReadout,
+            Text2d::new("Ouro: —\nMercado: —"),
+            TextFont {
+                font_size: 11.0,
+                ..default()
+            },
+            TextColor(Color::srgb(0.9, 0.9, 0.8)),
+            Anchor::CenterLeft,
+            Transform::from_xyz(-300.0, 100.0, 10.0),
+        ))
+        .set_parent(camera);
+    commands
+        .spawn((
+            MarketFormReadout,
+            Text2d::new("VENDER"),
+            TextFont {
+                font_size: 11.0,
+                ..default()
+            },
+            TextColor(Color::srgb(0.95, 0.87, 0.55)),
+            Anchor::CenterLeft,
+            Transform::from_xyz(80.0, 100.0, 10.0),
+        ))
+        .set_parent(camera);
+}
+
+fn catalog_items(catalog: &KnownCatalog) -> Vec<&ItemLine> {
+    let mut items: Vec<_> = catalog.0.values().collect();
+    items.sort_by_key(|line| line.name.as_str());
+    items
+}
+
+/// Texto da lista de orders: ordem, item, qtd, preço, total, região, dono.
 fn update_market_readout(
     wallet: Res<Wallet>,
     known: Res<KnownOrders>,
-    mut readouts: Query<&mut Text2d, With<MarketReadout>>,
+    feedback: Res<MarketFeedback>,
+    form: Res<MarketForm>,
+    catalog: Res<KnownCatalog>,
+    mut readouts: Query<(
+        &mut Text2d,
+        Option<&MarketReadout>,
+        Option<&MarketFormReadout>,
+    )>,
 ) {
-    let Ok(mut text) = readouts.get_single_mut() else {
-        return;
-    };
-    let mut lines = vec![format!("Ouro: {}g", wallet.0)];
-    if known.0.is_empty() {
+    for (mut text, readout, form_readout) in &mut readouts {
+        if readout.is_some() {
+            text.0 = orders_text(wallet.0, &known.0, &feedback.0, &form);
+        } else if form_readout.is_some() {
+            text.0 = form_text(&catalog, &form, &feedback.0);
+        }
+    }
+}
+
+fn orders_text(
+    wallet: u64,
+    orders: &[OrderLine],
+    feedback: &Option<MarketResult>,
+    form: &MarketForm,
+) -> String {
+    let mut lines = vec![format!("Ouro: {}g", wallet)];
+    if orders.is_empty() {
         lines.push(String::from("Mercado: sem orders"));
     } else {
-        lines.push(String::from("Mercado (num: qtd item @preço):"));
-        for order in known.0.iter().take(8) {
-            let mine = if order.mine { " [sua]" } else { "" };
+        lines.push(String::from("Mercado (↑↓ escolhe · Enter executa):"));
+        // ponytail: sem rolagem; adicionar scroll quando houver mais orders que a tela aguenta.
+        for (index, order) in orders.iter().enumerate() {
+            let marker = if index == form.selected_order {
+                ">"
+            } else {
+                " "
+            };
+            let mine = if order.mine { " [MINHA]" } else { "" };
+            let action = if order.mine {
+                "[Cancelar]"
+            } else {
+                "[Comprar]"
+            };
+            let total = order.unit_price.saturating_mul(u64::from(order.quantity));
             lines.push(format!(
-                "{}: {}× {} @{}g{}",
-                order.order_num, order.quantity, order.item_name, order.unit_price, mine
+                "{marker}#{:<3} {:<12} {:>3}× @{}g {:<14} total={}g{}{}",
+                order.order_num,
+                order.item_name,
+                order.quantity,
+                order.unit_price,
+                order.region,
+                total,
+                mine,
+                action,
             ));
         }
     }
-    text.0 = lines.join("\n");
+    if let Some(result) = feedback {
+        let prefix = if result.success { "OK" } else { "ERRO" };
+        lines.push(format!("{prefix}: {}", result.reason));
+    }
+    lines.join("\n")
+}
+
+fn form_text(catalog: &KnownCatalog, form: &MarketForm, feedback: &Option<MarketResult>) -> String {
+    let items = catalog_items(catalog);
+    let item = items
+        .get(form.item_index)
+        .map(|line| line.name.as_str())
+        .unwrap_or("—");
+    let marker = |focus: FormFocus| {
+        if form.focus == focus {
+            ">"
+        } else {
+            " "
+        }
+    };
+    let quantity = if form.quantity.is_empty() {
+        String::from("—")
+    } else {
+        form.quantity.clone()
+    };
+    let price = if form.unit_price.is_empty() {
+        String::from("—")
+    } else {
+        format!("{}g", form.unit_price)
+    };
+    let mut lines = vec![
+        String::from("VENDER (Tab troca campo · Enter enviar)"),
+        format!("{}Item: {}  <-/->", marker(FormFocus::Item), item),
+        format!("{}Qtd: {}", marker(FormFocus::Quantity), quantity),
+        format!("{}Preço: {}", marker(FormFocus::Price), price),
+    ];
+    if let Some(result) = feedback {
+        let prefix = if result.success { "OK" } else { "ERRO" };
+        lines.push(format!("{prefix}: {}", result.reason));
+    }
+    lines.join("\n")
+}
+
+/// Intenção de mercado produzida pelo painel (testável sem rede).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum MarketIntent {
+    Create(CreateSellOrder),
+    Cancel(CancelSellOrder),
+    Buy(BuySellOrder),
+}
+
+/// Sem validação local: o servidor é a lei e responde via `MarketResult`.
+fn form_create_intent(form: &MarketForm, catalog: &KnownCatalog) -> Option<MarketIntent> {
+    let item = catalog_items(catalog).get(form.item_index)?.id;
+    let quantity = form.quantity.parse::<u32>().unwrap_or_default();
+    let unit_price = form.unit_price.parse::<u64>().unwrap_or_default();
+    Some(MarketIntent::Create(CreateSellOrder {
+        item,
+        quantity,
+        unit_price,
+    }))
+}
+
+fn order_intent(order: &OrderLine) -> MarketIntent {
+    if order.mine {
+        MarketIntent::Cancel(CancelSellOrder {
+            order_num: order.order_num,
+        })
+    } else {
+        MarketIntent::Buy(BuySellOrder {
+            order_num: order.order_num,
+            quantity: order.quantity,
+        })
+    }
+}
+
+fn next_focus(focus: FormFocus) -> FormFocus {
+    match focus {
+        FormFocus::Orders => FormFocus::Item,
+        FormFocus::Item => FormFocus::Quantity,
+        FormFocus::Quantity => FormFocus::Price,
+        FormFocus::Price => FormFocus::Orders,
+    }
+}
+
+/// Teclado do painel: Tab troca campo, setas escolhem, Enter envia.
+pub fn handle_market_panel_input(
+    mut keyboard: EventReader<KeyboardInput>,
+    mut form: ResMut<MarketForm>,
+    catalog: Res<KnownCatalog>,
+    orders: Res<KnownOrders>,
+    mut connection_manager: ResMut<ConnectionManager>,
+) {
+    let mut intent = None;
+    for event in keyboard.read() {
+        if event.state != ButtonState::Pressed || event.repeat {
+            continue;
+        }
+        match &event.logical_key {
+            Key::Tab => form.focus = next_focus(form.focus),
+            Key::ArrowUp => {
+                if form.focus == FormFocus::Orders {
+                    form.selected_order = form.selected_order.saturating_sub(1);
+                }
+            }
+            Key::ArrowDown => {
+                if form.focus == FormFocus::Orders {
+                    form.selected_order = form
+                        .selected_order
+                        .saturating_add(1)
+                        .min(orders.0.len().saturating_sub(1));
+                }
+            }
+            Key::ArrowLeft => {
+                if form.focus == FormFocus::Item {
+                    form.item_index = form.item_index.saturating_sub(1);
+                }
+            }
+            Key::ArrowRight => {
+                if form.focus == FormFocus::Item {
+                    form.item_index = form
+                        .item_index
+                        .saturating_add(1)
+                        .min(catalog_items(&catalog).len().saturating_sub(1));
+                }
+            }
+            Key::Enter => {
+                intent = match form.focus {
+                    FormFocus::Orders => orders.0.get(form.selected_order).map(order_intent),
+                    _ => form_create_intent(&form, &catalog),
+                };
+            }
+            Key::Character(chars) => {
+                if let Some(digit) = chars.chars().next().filter(|digit| digit.is_ascii_digit()) {
+                    match form.focus {
+                        FormFocus::Quantity => form.quantity.push(digit),
+                        FormFocus::Price => form.unit_price.push(digit),
+                        _ => {}
+                    }
+                }
+            }
+            Key::Backspace => match form.focus {
+                FormFocus::Quantity => {
+                    form.quantity.pop();
+                }
+                FormFocus::Price => {
+                    form.unit_price.pop();
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    if let Some(intent) = intent {
+        match intent {
+            MarketIntent::Create(message) => {
+                let _ = connection_manager.send_message::<ReliableChannel, _>(&message);
+            }
+            MarketIntent::Cancel(message) => {
+                let _ = connection_manager.send_message::<ReliableChannel, _>(&message);
+            }
+            MarketIntent::Buy(message) => {
+                let _ = connection_manager.send_message::<ReliableChannel, _>(&message);
+            }
+        }
+    }
 }
 
 /// Z/X/V/N/B — a interface de mercado do slice (§45: você opera no porto
@@ -225,4 +515,132 @@ enum AutoStep {
 
 fn automarket_enabled() -> bool {
     std::env::var_os("MAREFORGE_AUTOMARKET").is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use mareforge_shared::ids::ItemDefinitionId;
+
+    use super::*;
+
+    fn line(id: ItemDefinitionId, name: &str) -> ItemLine {
+        ItemLine {
+            id,
+            name: String::from(name),
+            weight: 2,
+        }
+    }
+
+    fn order(
+        order_num: u32,
+        item_name: &str,
+        unit_price: u64,
+        quantity: u32,
+        mine: bool,
+    ) -> OrderLine {
+        OrderLine {
+            order_num,
+            region: String::from("Porto da Serra"),
+            item_name: String::from(item_name),
+            unit_price,
+            quantity,
+            mine,
+        }
+    }
+
+    #[test]
+    fn market_panel_renders_item_quantity_price_total_region_and_mine_tag() {
+        let orders = vec![order(7, "Madeira", 5, 10, true)];
+        let text = orders_text(1_000, &orders, &None, &MarketForm::default());
+
+        for expected in [
+            "#7",
+            "Madeira",
+            "10×",
+            "5g",
+            "Porto da Serra",
+            "50g",
+            "[MINHA]",
+            "[Cancelar]",
+        ] {
+            assert!(text.contains(expected), "{text}");
+        }
+    }
+
+    #[test]
+    fn orders_sort_mine_first_then_cheapest() {
+        let orders = sorted_orders(vec![
+            order(1, "Madeira", 10, 1, false),
+            order(2, "Madeira", 20, 1, true),
+            order(3, "Madeira", 5, 1, false),
+        ]);
+
+        assert_eq!(
+            orders
+                .iter()
+                .map(|order| order.order_num)
+                .collect::<Vec<_>>(),
+            vec![2, 3, 1]
+        );
+    }
+
+    #[test]
+    fn form_submission_triggers_create_sell_order() {
+        let id = ItemDefinitionId::new();
+        let catalog = KnownCatalog(HashMap::from([(
+            String::from("Madeira"),
+            line(id, "Madeira"),
+        )]));
+        let form = MarketForm {
+            item_index: 0,
+            quantity: String::from("12"),
+            unit_price: String::from("5"),
+            ..MarketForm::default()
+        };
+
+        let MarketIntent::Create(intent) =
+            form_create_intent(&form, &catalog).expect("catálogo tem item")
+        else {
+            panic!("esperava CreateSellOrder");
+        };
+        assert_eq!(intent.item, id);
+        assert_eq!(intent.quantity, 12);
+        assert_eq!(intent.unit_price, 5);
+    }
+
+    #[test]
+    fn mine_row_triggers_cancel_sell_order() {
+        let order = order(7, "Madeira", 5, 10, true);
+
+        assert_eq!(
+            order_intent(&order),
+            MarketIntent::Cancel(CancelSellOrder { order_num: 7 })
+        );
+    }
+
+    #[test]
+    fn other_row_triggers_full_buy_sell_order() {
+        let order = order(7, "Madeira", 5, 10, false);
+
+        assert_eq!(
+            order_intent(&order),
+            MarketIntent::Buy(BuySellOrder {
+                order_num: 7,
+                quantity: 10,
+            })
+        );
+    }
+
+    #[test]
+    fn failed_market_result_surfaces_reason_in_readout() {
+        let feedback = Some(MarketResult {
+            success: false,
+            reason: String::from("atraca primeiro (E)"),
+        });
+
+        let text = orders_text(0, &[], &feedback, &MarketForm::default());
+        assert!(text.contains("atraca primeiro (E)"), "{text}");
+    }
 }
