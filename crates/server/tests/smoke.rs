@@ -4,15 +4,19 @@ use mareforge_server::plugin::{TickCounter, TickLimit};
 use mareforge_server::ServerPlugin;
 use std::time::Duration;
 
+/// Passo de relógio manual igual ao período de tick de 30 Hz (ADR-0008),
+/// para o teste avançar exatamente um tick por update.
+fn tick_duration() -> Duration {
+    Duration::from_secs_f64(1.0 / 30.0)
+}
+
 #[test]
 fn stops_after_configured_tick_limit() {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
     app.add_plugins(ServerPlugin);
     app.insert_resource(TickLimit(Some(5)));
-    app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
-        100,
-    )));
+    app.insert_resource(TimeUpdateStrategy::ManualDuration(tick_duration()));
 
     for _ in 0..10 {
         app.update();
@@ -36,9 +40,7 @@ fn ticks_past_five_without_limit() {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
     app.add_plugins(ServerPlugin);
-    app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
-        100,
-    )));
+    app.insert_resource(TimeUpdateStrategy::ManualDuration(tick_duration()));
 
     for _ in 0..8 {
         app.update();

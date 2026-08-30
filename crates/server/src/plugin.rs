@@ -17,7 +17,8 @@ impl Plugin for ServerPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(TickCounter::default());
         app.insert_resource(TickLimit::default());
-        app.insert_resource(Time::<Fixed>::from_seconds(0.1));
+        // ADR-0008: simulação a 30 Hz.
+        app.insert_resource(Time::<Fixed>::from_hz(30.0));
         app.add_systems(Startup, setup);
         app.add_systems(FixedUpdate, tick.run_if(should_tick));
     }
