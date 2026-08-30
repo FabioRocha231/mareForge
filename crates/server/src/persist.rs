@@ -24,7 +24,7 @@ use std::sync::Arc;
 use bevy::ecs::prelude::Resource;
 use mareforge_domain_economy::{LedgerKind, MarketOrder, Money, OrderStatus};
 use mareforge_domain_items::{Custody, ItemInstance};
-use mareforge_domain_ships::ShipKind;
+use mareforge_domain_ships::{ShipKind, VesselPresence};
 use mareforge_shared::ids::{CharacterId, ShipInstanceId, WreckId};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -45,6 +45,11 @@ pub struct ShipRecord {
     pub heading: f32,
     pub cargo: Vec<Custody>,
     pub equipped: Vec<Custody>,
+    /// MF-049: presença no momento da persistência. Restaurada como está;
+    /// se for `AtSea`, o restore normaliza `trip_started_at` para `now`
+    /// (não tentamos reconstruir duração anterior — sem dado persistido
+    /// para isso). `Docked` mantém `trip_started_at = None`.
+    pub presence: VesselPresence,
 }
 
 /// Registro persistido de um wreck (MF-027 cont., PRD §67): apenas os
@@ -542,9 +547,9 @@ impl StateStore for PostgresStateStore {
 
     fn load_ship(&self, character: CharacterId) -> Result<Option<ShipRecord>, String> {
         self.runtime.block_on(async {
-            let Some((id, kind, hp, x, y, heading)) =
-                sqlx::query_as::<_, (Uuid, String, i32, f64, f64, f64)>(
-                    "SELECT id, ship_kind, current_hp, position_x, position_y, heading \
+            let Some((id, kind, hp, x, y, heading, presence)) =
+                sqlx::query_as::<_, (Uuid, String, i32, f64, f64, f64, String)>(
+                    "SELECT id, ship_kind, current_hp, position_x, position_y, heading, presence \
                  FROM ship_instances WHERE character_id = $1 LIMIT 1",
                 )
                 .bind(character.0)
@@ -557,6 +562,8 @@ impl StateStore for PostgresStateStore {
             let Ok(kind) = kind.parse::<StoredShipKind>() else {
                 return Err(format!("navio {id} com ship_kind desconhecido"));
             };
+            let presence: VesselPresence = serde_json::from_str(&presence)
+                .map_err(|error| format!("navio {id} com presence ilegível: {error}"))?;
 
             let rows = sqlx::query_as::<_, (Uuid, Uuid, i32, Option<i16>, serde_json::Value)>(
                 "SELECT id, definition_id, quantity, durability, location FROM item_instances \
@@ -604,6 +611,7 @@ impl StateStore for PostgresStateStore {
                 heading: heading as f32,
                 cargo,
                 equipped,
+                presence,
             }))
         })
     }
@@ -611,14 +619,18 @@ impl StateStore for PostgresStateStore {
     fn save_ship(&self, record: &ShipRecord) -> Result<(), String> {
         self.runtime.block_on(async {
             let mut tx = self.pool.begin().await.map_err(|error| error.to_string())?;
+            let presence = serde_json::to_string(&record.presence)
+                .map_err(|error| format!("presence ilegível: {error}"))?;
             sqlx::query(
                 "INSERT INTO ship_instances \
                  (id, character_id, definition_id, ship_kind, equipped_components, \
-                  current_hp, current_region_id, position_x, position_y, heading) \
-                 VALUES ($1, $2, $3, $4, '{}'::jsonb, $5, $3, $6, $7, $8) \
+                  current_hp, current_region_id, position_x, position_y, heading, \
+                  presence) \
+                 VALUES ($1, $2, $3, $4, '{}'::jsonb, $5, $3, $6, $7, $8, $9) \
                  ON CONFLICT (id) DO UPDATE SET current_hp = EXCLUDED.current_hp, \
                  position_x = EXCLUDED.position_x, position_y = EXCLUDED.position_y, \
-                 heading = EXCLUDED.heading, updated_at = now()",
+                 heading = EXCLUDED.heading, presence = EXCLUDED.presence, \
+                 updated_at = now()",
             )
             .bind(record.ship_instance.0)
             .bind(record.character.0)
@@ -628,6 +640,7 @@ impl StateStore for PostgresStateStore {
             .bind(record.x as f64)
             .bind(record.y as f64)
             .bind(record.heading as f64)
+            .bind(presence)
             .execute(&mut *tx)
             .await
             .map_err(|error| error.to_string())?;

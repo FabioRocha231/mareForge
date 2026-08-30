@@ -242,6 +242,9 @@ fn ship_record_roundtrips_through_postgres() {
                 slot: mareforge_domain_items::EquipmentSlot::Sail,
             },
         }],
+        // MF-049: testa o roundtrip da presença. Navio do teste estava
+        // fora do porto no momento da persistência — restaura igual.
+        presence: mareforge_domain_ships::VesselPresence::AtSea,
     };
 
     store.save_ship(&record).expect("save_ship");
@@ -254,6 +257,10 @@ fn ship_record_roundtrips_through_postgres() {
     assert_eq!(restored.character, character);
     assert_eq!(restored.kind, ShipKind::Corsair);
     assert_eq!(restored.hp, 55);
+    assert_eq!(
+        restored.presence,
+        mareforge_domain_ships::VesselPresence::AtSea
+    );
     assert_eq!(restored.cargo.len(), 1);
     assert_eq!(restored.cargo[0].instance.quantity, 12);
     assert_eq!(restored.equipped.len(), 1, "loadout persistiu");

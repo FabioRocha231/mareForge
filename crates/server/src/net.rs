@@ -387,9 +387,6 @@ impl Plugin for ServerNetPlugin {
         // em memória. O `persist_wrecks` corre após o tick para evitar
         // pressão no hot loop.
         app.add_systems(Startup, load_wrecks.after(crate::market::load_state));
-        // §72 average_trip_duration: preenche trip_started_at dos
-        // player ships após o load (que pode ter restaurado do banco).
-        app.add_systems(Update, init_trip_started_at);
         app.add_systems(Update, persist_wrecks.after(expire_wrecks));
         // (Bevy 0.15 implementa tuplas de sistemas até 15 elementos — o
         // tick do A1 é grande demais para uma tupla só: duas rodadas.)
@@ -545,6 +542,30 @@ pub struct Metrics {
     pub trip_count: u64,
 }
 
+/// MF-049: encerra a trip ativa de um player ship em Dock bem-sucedido ou
+/// Sunk — soma a duração ao `trip_total_secs`, incrementa `trip_count` e
+/// zera `trip_started_at`. No-op se não havia trip ativa. Retorna `true`
+/// quando uma viagem foi contabilizada.
+pub fn finalize_trip(ship: &mut ServerShip, metrics: &mut Metrics, now: f32) -> bool {
+    if let Some(started) = ship.trip_started_at.take() {
+        metrics.trip_total_secs += (now - started) as f64;
+        metrics.trip_count += 1;
+        true
+    } else {
+        false
+    }
+}
+
+/// MF-049: abre uma trip nova em Undock bem-sucedido — `trip_started_at =
+/// now`. Idempotente: se já existe trip ativa, mantém (proteção contra
+/// Undock espúrio durante viagem — não pode acontecer pelo domínio, mas
+/// falhamos em silêncio em vez de resetar medição).
+pub fn start_trip(ship: &mut ServerShip, now: f32) {
+    if ship.trip_started_at.is_none() {
+        ship.trip_started_at = Some(now);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_ship_for(
     commands: &mut Commands,
@@ -612,8 +633,10 @@ pub(crate) fn spawn_ship_for(
         },
         tuning: MotionTuning::default(),
         zone,
-        // §72 average_trip_duration: spawn não tem Time, então o sistema
-        // de tick preenche via init_trip_started_at depois.
+        // MF-049: navios novos não iniciam trip — só Undock bem-sucedido
+        // abre medição. O spawn aqui é o equivalente a "já está fora do
+        // porto"; a primeira trip do personagem começa quando ele Decide
+        // sair novamente.
         trip_started_at: None,
     },));
     ship_id
@@ -631,6 +654,7 @@ pub(crate) fn restore_ship_from_record(
     dev_ships: &crate::crafting::DevShips,
     map: &WorldMap,
     record: crate::persist::ShipRecord,
+    now: f32,
 ) -> u32 {
     let ship_id = ship_ids.0;
     ship_ids.0 += 1;
@@ -664,13 +688,21 @@ pub(crate) fn restore_ship_from_record(
     .expect("loadout restaurado contém definições do catálogo");
     hold.set_capacity(equipped_stats.cargo_capacity);
     let zone = map.zone_at(record.x, record.y).ok().map(|z| z.id);
+    // MF-049: presença persistida é a verdade — restore mantém Docked se
+    // estava atracado, AtSea se estava fora. Trip só começa por evento
+    // explícito, então AtSea restaurado abre nova medição em `now` (não
+    // reconstruímos duração anterior — não há dado persistido para isso).
+    let trip_started_at = match record.presence {
+        VesselPresence::AtSea => Some(now),
+        VesselPresence::Docked(_) => None,
+    };
     commands.spawn((ServerShip {
         ship_id,
         client_id: None,
         character: record.character,
         ship_instance: record.ship_instance,
         kind: record.kind,
-        presence: VesselPresence::AtSea,
+        presence: record.presence,
         loadout,
         input: ShipInput {
             throttle: 0.0,
@@ -688,9 +720,7 @@ pub(crate) fn restore_ship_from_record(
         },
         tuning: MotionTuning::default(),
         zone,
-        // §72 average_trip_duration: spawn não tem Time, então o sistema
-        // de tick preenche via init_trip_started_at depois.
-        trip_started_at: None,
+        trip_started_at,
     },));
     ship_id
 }
@@ -760,6 +790,7 @@ fn handle_hello(
     mut ships: Query<(Entity, &mut ServerShip)>,
     nodes: Query<&crate::nodes::ServerNode>,
     mut ship_ids: ResMut<ShipIdCounter>,
+    time: Res<Time>,
 ) {
     for event in hello_events.read() {
         let client_id = event.from();
@@ -878,6 +909,10 @@ fn handle_hello(
                     &dev_ships,
                     &map.0,
                     record,
+                    // MF-049: passamos o instante atual para que o restore
+                    // normalize `trip_started_at` quando o navio volta
+                    // AtSea.
+                    time.elapsed_secs(),
                 );
                 info!(
                     ship_id,
@@ -1414,13 +1449,9 @@ fn simulate_world(
                         // §72 ship_losses_by_kind: conta só navios de player.
                         // NPC killings já estão em `ships_destroyed`.
                         metrics.ship_losses_by_kind[ship.kind as usize] += 1;
-                        // §72 average_trip_duration: trip termina em sink
-                        // de player ship. Trip seguinte começa no próximo
-                        // spawn ou load_wrecks.
-                        if let Some(started) = ship.trip_started_at.take() {
-                            metrics.trip_total_secs += (time.elapsed_secs() - started) as f64;
-                            metrics.trip_count += 1;
-                        }
+                        // MF-049: trip termina em Sunk de player ship.
+                        // Próxima trip começa no próximo Undock.
+                        finalize_trip(&mut ship, &mut metrics, time.elapsed_secs());
                     }
                     info!(ship_id = target_ship_id, damage, "SHIP DESTROYED");
                     // Full loot (§22-§25): casco é perda total; parte da carga
@@ -1766,6 +1797,9 @@ fn expire_ship_grace(
                 heading: ship.motion.heading,
                 cargo: ship.hold.items().to_vec(),
                 equipped: ship.loadout.items().cloned().collect(),
+                // MF-049: persiste a presença atual; o restore usa isso
+                // para zerar ou iniciar a medição de trip.
+                presence: ship.presence,
             };
             match store.save_ship(&record) {
                 Ok(()) => info!(
@@ -1896,18 +1930,6 @@ fn load_wrecks(
     );
 }
 
-/// §72 average_trip_duration: para cada player ship sem trip_started_at
-/// (acaba de spawnar ou foi restaurado do banco), define como `now`. Roda
-/// no Update para garantir que Time existe.
-fn init_trip_started_at(time: Res<Time>, mut ships: Query<&mut ServerShip>) {
-    let now = time.elapsed_secs();
-    for mut ship in &mut ships {
-        if ship.client_id.is_some() && ship.trip_started_at.is_none() {
-            ship.trip_started_at = Some(now);
-        }
-    }
-}
-
 /// Orders expiradas (MF-041): escrow volta ao storage do seller e o client
 /// recebe o board ativo sem a ordem vencida.
 fn expire_orders(
@@ -1966,12 +1988,9 @@ fn handle_dock(
                 let (_, name) = at_port.expect("dock validou que há porto aqui");
                 ship.presence = presence;
                 info!(ship_id = ship.ship_id, region = name, "navio atracado");
-                // §72 average_trip_duration: trip termina em dock bem
-                // sucedido. Trip seguinte começa no undock.
-                if let Some(started) = ship.trip_started_at.take() {
-                    metrics.trip_total_secs += (time.elapsed_secs() - started) as f64;
-                    metrics.trip_count += 1;
-                }
+                // MF-049: trip termina em dock bem-sucedido. Próxima trip
+                // começa no undock.
+                finalize_trip(&mut ship, &mut metrics, time.elapsed_secs());
                 let _ = connection_manager.send_message::<ReliableChannel, _>(
                     client_id,
                     &DockResult {
@@ -2038,6 +2057,7 @@ fn port_storage_snapshot(
 fn handle_undock(
     mut undock_events: EventReader<ServerReceiveMessage<Undock>>,
     mut connection_manager: ResMut<ConnectionManager>,
+    time: Res<Time>,
     mut ships: Query<&mut ServerShip>,
 ) {
     for event in undock_events.read() {
@@ -2051,6 +2071,10 @@ fn handle_undock(
         match undock_vessel(&ship.presence) {
             Ok(presence) => {
                 ship.presence = presence;
+                // MF-049: trip começa em undock bem-sucedido. Dock anterior
+                // já zerou `trip_started_at`, então `start_trip` é o ponto
+                // de partida autoritativo.
+                start_trip(&mut ship, time.elapsed_secs());
                 info!(ship_id = ship.ship_id, "navio desatracou");
                 let _ = connection_manager.send_message::<ReliableChannel, _>(
                     client_id,
