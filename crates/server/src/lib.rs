@@ -7,6 +7,7 @@ pub mod nodes;
 pub mod npc;
 pub mod persist;
 pub mod plugin;
+pub mod sets;
 
 pub use plugin::ServerPlugin;
 

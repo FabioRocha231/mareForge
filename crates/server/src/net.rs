@@ -13,6 +13,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::{Duration, Instant};
 
 use crate::npc::NpcShip;
+use crate::sets::SimulationSet;
 use bevy::ecs::prelude::*;
 use bevy::prelude::*;
 use chrono::Utc;
@@ -327,6 +328,8 @@ impl Plugin for ServerNetPlugin {
         app.init_resource::<Metrics>();
         app.init_resource::<crate::nodes::NodeIdCounter>();
         app.init_resource::<LiveWreckRecords>();
+        app.init_resource::<CombatImpacts>();
+        app.init_resource::<PendingShipDestructions>();
         let economy = crate::market::ServerEconomyConfig::default();
         app.insert_resource(crate::market::ServerPriceIndex(MarketPriceIndex::new(
             economy.price_index_window_size,
@@ -413,9 +416,12 @@ impl Plugin for ServerNetPlugin {
             ),
         );
         // Ordem importa: snapshots veem o estado JÁ simulado deste tick.
+        simulate_world(app);
         app.add_systems(
             FixedUpdate,
-            (simulate_world, crate::npc::simulate_npcs, send_snapshots).chain(),
+            (crate::npc::simulate_npcs, send_snapshots)
+                .chain()
+                .after(SimulationSet::Destruction),
         );
         app.add_systems(FixedUpdate, crate::npc::respawn_npcs);
         app.add_systems(
@@ -516,6 +522,33 @@ pub struct WreckIdCounter(pub u32);
 /// de SystemParams do Bevy 0.15 (15 por sistema).
 #[derive(Resource, Default)]
 pub struct LiveWreckRecords(pub Vec<crate::persist::WreckRecord>);
+
+/// Impactos de projéteis coletados no set `Combat` e consumidos no set
+/// `Destruction` (MF-054). Desacopla a colisão (borrow mutável em projéteis)
+/// da resolução de dano (borrow mutável em navios) sem estourar o limite de
+/// SystemParams do Bevy 0.15.
+///
+/// Tupla: (entidade do projétil, alvo ship_id, dano, dono do projétil ship_id).
+#[derive(Resource, Default)]
+pub struct CombatImpacts(pub Vec<(Entity, u32, u32, u32)>);
+
+/// Naufrágio decidido em `apply_combat_damage` (MF-054): só marca e despawna
+/// o navio. `resolve_destructions` materializa wreck + mensagem;
+/// `respawn_destroyed_ships` recria o casco do dono.
+#[derive(Resource, Default)]
+pub struct PendingShipDestructions(pub Vec<PendingShipDestruction>);
+
+pub struct PendingShipDestruction {
+    pub target_ship_id: u32,
+    pub victim_client_id: Option<ClientId>,
+    pub victim_character: CharacterId,
+    pub victim_x: f32,
+    pub victim_y: f32,
+    pub equipment: Vec<ItemDefinitionId>,
+    pub cargo: Vec<ItemInstance>,
+    pub audience: Vec<ClientId>,
+    pub exclusive_looter: Option<CharacterId>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TradeRouteKey {
@@ -1387,48 +1420,54 @@ fn handle_loot(
     }
 }
 
-/// Simulação autoritativa (30 Hz): move navios e projéteis, resolve
-/// impactos e destruição com resolução de loot (MF-013). O snapshot de rede
-/// é OUTRO sistema ([`send_snapshots`], 20 Hz) — cadências separadas
-/// (ADR-0008, MF-032), recorte por AOI (ADR-0009, MF-031).
-#[allow(clippy::too_many_arguments)]
-fn simulate_world(
-    mut commands: Commands,
-    mut connection_manager: ResMut<ConnectionManager>,
-    mut counter: ResMut<crate::plugin::TickCounter>,
-    mut ship_ids: ResMut<ShipIdCounter>,
-    mut wreck_ids: ResMut<WreckIdCounter>,
-    dev: Res<DevItems>,
-    dev_ships: Res<crate::crafting::DevShips>,
-    loot_policy: Res<ServerLootPolicy>,
-    tuning: Res<CombatTuning>,
-    map: Res<ServerWorldMap>,
-    risk_policy: Res<ServerRiskPolicy>,
-    mut live_wrecks: ResMut<LiveWreckRecords>,
-    mut metrics: ResMut<Metrics>,
-    time: Res<Time>,
-    mut ships: Query<(Entity, &mut ServerShip)>,
-    mut projectiles: Query<(Entity, &mut ServerProjectile)>,
-) {
+/// Registra a cadeia que decompõe o antigo `simulate_world` (MF-054,
+/// ADR-0008). Os sets rodam em ordem via `.chain()`: os handlers de input já
+/// consumiram as mensagens do client, então aqui entram movimento → zonas →
+/// combate → destruição.
+fn simulate_world(app: &mut App) {
+    app.configure_sets(
+        FixedUpdate,
+        (
+            SimulationSet::Movement,
+            SimulationSet::Zones,
+            SimulationSet::Combat,
+            SimulationSet::Destruction,
+        )
+            .chain(),
+    );
+
+    app.add_systems(
+        FixedUpdate,
+        (
+            simulate_movement.in_set(SimulationSet::Movement),
+            simulate_zones.in_set(SimulationSet::Zones),
+            simulate_combat.in_set(SimulationSet::Combat),
+            (
+                apply_combat_damage,
+                resolve_destructions,
+                respawn_destroyed_ships,
+            )
+                .chain()
+                .in_set(SimulationSet::Destruction),
+        ),
+    );
+}
+
+/// Avança física dos navios (MF-017): casco atracado fica imóvel com recarga
+/// de canhão; os demais aplicam o input ao `step_motion`.
+fn simulate_movement(time: Res<Time>, mut ships: Query<&mut ServerShip>) {
     let dt = time.delta_secs();
 
-    // 1. Física dos navios + geografia de risco (MF-017).
-    for (_, mut ship) in &mut ships {
+    for mut ship in &mut ships {
         let ServerShip {
-            ship_id,
-            client_id,
             presence,
             input,
             stats,
             motion,
-            tuning: motion_tuning,
+            tuning,
             battery,
-            zone,
             ..
         } = ship.as_mut();
-        // §72 zone_transitions: capturamos a zona no início do tick para
-        // comparar com a nova logo após o motion step.
-        let zone_before = *zone;
         if matches!(presence, VesselPresence::Docked(_)) {
             // MF-036: atracado = casco imóvel. O input é ignorado (o dono
             // precisa desatracar para navegar); recarga de canhão corre.
@@ -1443,36 +1482,44 @@ fn simulate_world(
                 throttle: input.throttle,
                 turn: input.turn,
             },
-            motion_tuning,
+            tuning,
             dt,
         );
         battery.advance(dt);
+    }
+}
 
-        // O servidor é quem calcula a zona real (PRD §10). Mudou a zona,
-        // o dono é avisado por canal confiável; saiu do mar declarado,
-        // o estado legal fica indefinido (fail-closed no combate).
-        match map.0.zone_at(motion.x, motion.y) {
+/// O servidor é quem calcula a zona real (PRD §10). Mudou a zona, o dono é
+/// avisado por canal confiável; saiu do mar declarado, o estado legal fica
+/// indefinido (fail-closed no combate).
+fn simulate_zones(
+    mut connection_manager: ResMut<ConnectionManager>,
+    mut metrics: ResMut<Metrics>,
+    map: Res<ServerWorldMap>,
+    mut ships: Query<&mut ServerShip>,
+) {
+    for mut ship in &mut ships {
+        // §72 zone_transitions: zona capturada antes da comparação para não
+        // contar a entrada inicial a partir de zona desconhecida.
+        let zone_before = ship.zone;
+        match map.0.zone_at(ship.motion.x, ship.motion.y) {
             Ok(found) => {
-                if *zone != Some(found.id) {
-                    // §72 zone_transitions: cruzou fronteira entre zonas
-                    // conhecidas. Conta player ships apenas (NPC não
-                    // entram no gameplay metrics), e só quando a zona
-                    // anterior era conhecida (não conta entrada inicial).
-                    if client_id.is_some() && zone_before.is_some() {
+                if ship.zone != Some(found.id) {
+                    if ship.client_id.is_some() && zone_before.is_some() {
                         metrics.zone_transitions += 1;
                     }
-                    *zone = Some(found.id);
+                    ship.zone = Some(found.id);
                     info!(
-                        ship_id = *ship_id,
+                        ship_id = ship.ship_id,
                         zone = found.name,
                         tier = ?found.tier,
                         "navio cruzou uma fronteira"
                     );
-                    if let Some(client_id) = client_id {
+                    if let Some(client_id) = ship.client_id {
                         let _ = connection_manager.send_message::<ReliableChannel, _>(
-                            *client_id,
+                            client_id,
                             &ZoneChanged {
-                                ship_id: *ship_id,
+                                ship_id: ship.ship_id,
                                 tier: found.tier,
                                 zone_name: found.name.to_string(),
                             },
@@ -1481,27 +1528,37 @@ fn simulate_world(
                 }
             }
             Err(_) => {
-                if zone.is_some() {
-                    warn!(ship_id = *ship_id, "navio saiu do mar declarado");
-                    *zone = None;
+                if ship.zone.is_some() {
+                    warn!(ship_id = ship.ship_id, "navio saiu do mar declarado");
+                    ship.zone = None;
                 }
             }
         }
     }
+}
 
-    // 2. Projéteis: avançam, expiram, colidem (decisão imutável primeiro).
+/// Projéteis avançam, expiram e colidem (decisão imutável primeiro). Os
+/// impactos são bufferizados em `CombatImpacts` para o set `Destruction`.
+fn simulate_combat(
+    mut commands: Commands,
+    time: Res<Time>,
+    tuning: Res<CombatTuning>,
+    ships: Query<&ServerShip>,
+    mut projectiles: Query<(Entity, &mut ServerProjectile)>,
+    mut impacts: ResMut<CombatImpacts>,
+) {
+    let dt = time.delta_secs();
+
     let ship_positions: HashMap<u32, (f32, f32)> = ships
         .iter()
-        .map(|(_, ship)| (ship.ship_id, (ship.motion.x, ship.motion.y)))
+        .map(|ship| (ship.ship_id, (ship.motion.x, ship.motion.y)))
         .collect();
 
-    let mut expired: Vec<Entity> = Vec::new();
-    // (projétil, alvo ship_id, dano, dono do projétil ship_id)
-    let mut impacts: Vec<(Entity, u32, u32, u32)> = Vec::new();
+    impacts.0.clear();
     for (projectile_entity, mut projectile) in &mut projectiles {
         projectile.0.advance(dt);
         if projectile.0.expired() {
-            expired.push(projectile_entity);
+            commands.entity(projectile_entity).despawn();
             continue;
         }
 
@@ -1510,7 +1567,7 @@ fn simulate_world(
                 continue;
             }
             if projectile.0.hit_ship(*x, *y, tuning.hit_radius) {
-                impacts.push((
+                impacts.0.push((
                     projectile_entity,
                     *ship_id,
                     projectile.0.damage,
@@ -1520,8 +1577,25 @@ fn simulate_world(
             }
         }
     }
+}
 
-    // 3. Impactos e destruição com resolução de full loot (MF-013).
+/// Aplica dano e decide naufrágios (MF-013). Marca as destruições em
+/// `PendingShipDestructions` e despawna projétil + casco; a materialização
+/// de wreck/mensagem/respawn fica nos próximos sistemas.
+#[allow(clippy::too_many_arguments)]
+fn apply_combat_damage(
+    mut commands: Commands,
+    mut metrics: ResMut<Metrics>,
+    map: Res<ServerWorldMap>,
+    risk_policy: Res<ServerRiskPolicy>,
+    time: Res<Time>,
+    mut impacts: ResMut<CombatImpacts>,
+    mut pending: ResMut<PendingShipDestructions>,
+    mut ships: Query<(Entity, &mut ServerShip)>,
+) {
+    pending.0.clear();
+    let impacts = std::mem::take(&mut impacts.0);
+
     for (projectile_entity, target_ship_id, damage, killer_ship_id) in impacts {
         commands.entity(projectile_entity).despawn();
 
@@ -1546,8 +1620,7 @@ fn simulate_world(
             metrics.pvp_engagements += 1;
         }
 
-        // Escopo: o borrow mutável do navio termina antes de reler a frota
-        // (procura do killer) e antes do respawn.
+        // Escopo: o borrow mutável do navio termina antes de reler a frota.
         let sinking = {
             let Some((entity, mut ship)) = ships
                 .iter_mut()
@@ -1556,7 +1629,6 @@ fn simulate_world(
                 continue;
             };
             // A zona da VÍTIMA decide (MF-017, §9): proteção é da vítima.
-            // Fora do mar declarado, fail-closed — nenhum dano legal.
             let pvp_here = map
                 .0
                 .zone_at(ship.motion.x, ship.motion.y)
@@ -1649,23 +1721,63 @@ fn simulate_world(
             })
             .filter_map(|(_, witness)| witness.client_id)
             .collect();
+
+        let exclusive_looter = ships
+            .iter()
+            .find(|(_, candidate)| candidate.ship_id == killer_ship_id)
+            .map(|(_, candidate)| candidate.character);
+
+        pending.0.push(PendingShipDestruction {
+            target_ship_id,
+            victim_client_id,
+            victim_character,
+            victim_x,
+            victim_y,
+            equipment: victim_equipment,
+            cargo,
+            audience,
+            exclusive_looter,
+        });
+
+        commands.entity(entity).despawn();
+    }
+}
+
+/// Materializa o naufrágio: mensagem `ShipDestroyed` (AOI), resolução de
+/// full loot e spawn do wreck no mar.
+#[allow(clippy::too_many_arguments)]
+fn resolve_destructions(
+    mut commands: Commands,
+    mut connection_manager: ResMut<ConnectionManager>,
+    mut wreck_ids: ResMut<WreckIdCounter>,
+    loot_policy: Res<ServerLootPolicy>,
+    mut live_wrecks: ResMut<LiveWreckRecords>,
+    mut metrics: ResMut<Metrics>,
+    time: Res<Time>,
+    pending: Res<PendingShipDestructions>,
+) {
+    for destruction in &pending.0 {
         let _ = connection_manager.send_message_to_target::<ReliableChannel, _>(
             &ShipDestroyed {
-                ship_id: target_ship_id,
+                ship_id: destruction.target_ship_id,
             },
-            NetworkTarget::Only(audience),
+            NetworkTarget::Only(destruction.audience.clone()),
         );
 
-        let destruction = DestructionEventId::new();
-        let outcome =
-            resolve_ship_destruction(destruction, &victim_equipment, &cargo, &loot_policy.0);
+        let event = DestructionEventId::new();
+        let outcome = resolve_ship_destruction(
+            event,
+            &destruction.equipment,
+            &destruction.cargo,
+            &loot_policy.0,
+        );
         metrics.items_destroyed += outcome.destroyed_items.len() as u64;
         info!(
-            ship_id = target_ship_id,
-            event = ?destruction,
+            ship_id = destruction.target_ship_id,
+            event = ?event,
             afundados = outcome.destroyed_items.len(),
             sobreviventes = outcome.wreck_items.len(),
-            equipamento = victim_equipment.len(),
+            equipamento = destruction.equipment.len(),
             "resolução de loot determinística"
         );
 
@@ -1677,74 +1789,84 @@ fn simulate_world(
             for survivor in &outcome.wreck_items {
                 chest.insert(*survivor, ItemInstanceId::new());
             }
-            let exclusive = ships
-                .iter()
-                .find(|(_, candidate)| candidate.ship_id == killer_ship_id)
-                .map(|(_, candidate)| candidate.character);
             let spawned_at_secs = time.elapsed_secs();
             commands.spawn((ServerWreck {
                 wreck_num,
                 wreck_id,
                 chest,
-                exclusive_looter: exclusive,
+                exclusive_looter: destruction.exclusive_looter,
                 spawned_at_secs,
-                x: victim_x,
-                y: victim_y,
+                x: destruction.victim_x,
+                y: destruction.victim_y,
             },));
             // Buffer atualizado em memória; a persistência acontece no
-            // sistema `persist_wrecks` (corre fora do simulate_world para
+            // sistema `persist_wrecks` (corre fora do hot loop para
             // respeitar o limite de SystemParams).
             live_wrecks.0.push(crate::persist::WreckRecord {
                 wreck_num,
                 wreck_id,
-                x: victim_x,
-                y: victim_y,
-                exclusive_looter: exclusive,
+                x: destruction.victim_x,
+                y: destruction.victim_y,
+                exclusive_looter: destruction.exclusive_looter,
                 spawned_at_secs: spawned_at_secs as f64,
             });
             // WreckSpawned não existe mais (MF-031): o wreck aparece no
             // snapshot de quem o enxerga, com o mesmo recorte de AOI.
             info!(
                 wreck_num,
-                x = victim_x,
-                y = victim_y,
+                x = destruction.victim_x,
+                y = destruction.victim_y,
                 "wreck no mar aguardando saqueadores"
             );
         }
-
-        commands.entity(entity).despawn();
-        // Dev respawn (PRD §39): conveniência de teste — o loop do
-        // vertical slice não pode matar a sessão do jogador. A regra
-        // definitiva de reconstrução é o Dock (PRD §38, Phase 7).
-        if let Some(victim_client_id) = victim_client_id {
-            let new_ship_id = spawn_ship_for(
-                &mut commands,
-                &mut ship_ids,
-                &dev,
-                &dev_ships,
-                &map.0,
-                ShipKind::SmallMerchant,
-                Some(victim_client_id),
-                victim_character,
-                Vec::new(),
-            );
-            let _ = connection_manager.send_message::<ReliableChannel, _>(
-                victim_client_id,
-                &AssignShip {
-                    ship_id: new_ship_id,
-                    kind: ShipKind::SmallMerchant,
-                },
-            );
-            if let Some(zone) = zone_changed_for(&map.0, new_ship_id, DEV_SPAWN.0, DEV_SPAWN.1) {
-                let _ =
-                    connection_manager.send_message::<ReliableChannel, _>(victim_client_id, &zone);
-            }
-            info!(client = ?victim_client_id, new_ship_id, "dev respawn (PRD §39)");
-        }
     }
+}
 
-    for entity in expired {
-        commands.entity(entity).despawn();
+/// Dev respawn (PRD §39): conveniência de teste — o loop do vertical slice
+/// não pode matar a sessão do jogador. A regra definitiva de reconstrução é
+/// o Dock (PRD §38, Phase 7). Também avança o `TickCounter` no fim do tick.
+#[allow(clippy::too_many_arguments)]
+fn respawn_destroyed_ships(
+    mut commands: Commands,
+    mut connection_manager: ResMut<ConnectionManager>,
+    mut ship_ids: ResMut<ShipIdCounter>,
+    dev: Res<DevItems>,
+    dev_ships: Res<crate::crafting::DevShips>,
+    map: Res<ServerWorldMap>,
+    pending: Res<PendingShipDestructions>,
+    mut counter: ResMut<crate::plugin::TickCounter>,
+) {
+    for destruction in &pending.0 {
+        let Some(victim_client_id) = destruction.victim_client_id else {
+            continue;
+        };
+
+        let new_ship_id = spawn_ship_for(
+            &mut commands,
+            &mut ship_ids,
+            &dev,
+            &dev_ships,
+            &map.0,
+            ShipKind::SmallMerchant,
+            Some(victim_client_id),
+            destruction.victim_character,
+            Vec::new(),
+        );
+        let _ = connection_manager.send_message::<ReliableChannel, _>(
+            victim_client_id,
+            &AssignShip {
+                ship_id: new_ship_id,
+                kind: ShipKind::SmallMerchant,
+            },
+        );
+        if let Some(zone) = zone_changed_for(&map.0, new_ship_id, DEV_SPAWN.0, DEV_SPAWN.1) {
+            let _ = connection_manager.send_message::<ReliableChannel, _>(victim_client_id, &zone);
+        }
+        info!(
+            client = ?victim_client_id,
+            new_ship_id,
+            "dev respawn (PRD §39)"
+        );
     }
 
     counter.0 += 1;
