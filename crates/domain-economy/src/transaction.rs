@@ -1,5 +1,7 @@
 use chrono::{DateTime, Utc};
-use mareforge_shared::ids::{CharacterId, ItemDefinitionId, MarketOrderId, TransactionId};
+use mareforge_shared::ids::{
+    CharacterId, ItemDefinitionId, MarketOrderId, RegionId, TransactionId,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::currency::Money;
@@ -14,6 +16,10 @@ pub struct Transaction {
     pub quantity: u32,
     pub unit_price: Money,
     pub total: Money,
+    /// MF-051: região do porto onde a execução ocorreu. Carregada
+    /// explicitamente — o evento de trade é auto-contido e nunca depende
+    /// de lookup em order antiga para descobrir a região.
+    pub region: RegionId,
     pub executed_at: DateTime<Utc>,
 }
 
@@ -37,6 +43,7 @@ mod tests {
             quantity: 5,
             unit_price: Money(10),
             total: Money(total),
+            region: RegionId::new(),
             executed_at: Utc::now(),
         }
     }

@@ -19,7 +19,8 @@ use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 use mareforge_domain_crafting::{craft_in_storage, CraftError, Recipe, StationKind};
 use mareforge_domain_economy::{
-    validate_new_order, FeePolicy, Ledger, LedgerKind, MarketError, MarketOrder, Money, OrderStatus,
+    validate_new_order, FeePolicy, Ledger, LedgerKind, MarketError, MarketOrder, MarketPriceIndex,
+    Money, OrderStatus,
 };
 use mareforge_domain_items::{
     put_stack, CargoHold, Custody, ItemCatalog, ItemInstance, ItemLocation,
@@ -34,6 +35,73 @@ use mareforge_shared::ids::{CharacterId, ItemDefinitionId, MarketOrderId, Region
 use tracing::{info, warn};
 
 use crate::net::{DevItems, ReliableChannel, ServerShip, ServerWorldMap};
+
+// ====================================================================
+// MF-051 — Regional Market Price Index
+// ====================================================================
+
+/// Configuração econômica do servidor (MF-051). Hoje carrega apenas o
+/// tamanho da janela VWAP do index de preços; cresce conforme mais knobs
+/// forem aparecendo.
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct ServerEconomyConfig {
+    /// Janela rolante do VWAP, em unidades negociadas. Default 100.
+    pub price_index_window_size: u32,
+}
+
+impl Default for ServerEconomyConfig {
+    fn default() -> Self {
+        Self {
+            price_index_window_size: MarketPriceIndex::DEFAULT_WINDOW_SIZE,
+        }
+    }
+}
+
+/// Wrapper Bevy-Resource para o `MarketPriceIndex` puro do domain-economy
+/// (MF-051). Mantém o domínio livre de dependência em Bevy; só a casca é
+/// `Resource`. Deref/deferMut expõem os métodos do index no resource.
+#[derive(Resource, Debug)]
+pub struct ServerPriceIndex(pub MarketPriceIndex);
+
+impl std::ops::Deref for ServerPriceIndex {
+    type Target = MarketPriceIndex;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for ServerPriceIndex {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+/// Trade executado (MF-051). Carregado explicitamente com `region` —
+/// auto-contido: consumidores (telemetria, index de preço, replay) não
+/// precisam revisitar a order original para descobrir a região. Fail-closed
+/// pelo tipo: `region` é obrigatório.
+#[derive(Event, Debug, Clone, PartialEq, Eq)]
+pub struct TradeExecuted {
+    pub region: RegionId,
+    pub item: ItemDefinitionId,
+    pub unit_price: Money,
+    pub quantity: u32,
+    pub buyer: CharacterId,
+    pub seller: CharacterId,
+    pub total: Money,
+    pub order_num: u32,
+}
+
+/// Consome `TradeExecuted` e atualiza o `MarketPriceIndex`. Sistema puro
+/// de telemetria — não mexe em storage, ledger ou rede.
+pub fn update_price_index_from_trades(
+    mut trades: EventReader<TradeExecuted>,
+    mut index: ResMut<ServerPriceIndex>,
+) {
+    for trade in trades.read() {
+        index.record_trade(trade.region, trade.item, trade.unit_price, trade.quantity);
+    }
+}
 
 /// Bootstrap dev de ouro (PRD §48: development bootstrap, não é design de
 /// produção).
@@ -587,9 +655,11 @@ impl ServerMarket {
             seller: order.seller,
             item: order.item,
             quantity,
+            unit_price: order.unit_price,
             total,
             net,
             tax,
+            region: order.region,
         })
         .inspect(|_| self.persist())
     }
@@ -640,9 +710,15 @@ pub struct BuyReceipt {
     pub seller: CharacterId,
     pub item: ItemDefinitionId,
     pub quantity: u32,
+    /// MF-051: preço unitário pago. Auto-contido no recibo — o handler não
+    /// precisa revisitar a order original para alimentar o `TradeExecuted`.
+    pub unit_price: Money,
     pub total: Money,
     pub net: Money,
     pub tax: Money,
+    /// MF-051: região do porto onde a execução ocorreu. Auto-contido — o
+    /// handler não precisa revisitar a order original para descobrir.
+    pub region: RegionId,
 }
 
 /// A região cujo porto contém o navio (§45: você opera onde está).
@@ -912,6 +988,7 @@ pub fn handle_buy(
     mut buy_events: EventReader<ServerReceiveMessage<BuySellOrder>>,
     mut connection_manager: ResMut<ConnectionManager>,
     mut market: ResMut<ServerMarket>,
+    mut trade_events: EventWriter<TradeExecuted>,
     dev: Res<DevItems>,
     map: Res<ServerWorldMap>,
     ships: Query<&ServerShip>,
@@ -939,6 +1016,19 @@ pub fn handle_buy(
         let buyer = ship.character;
         match market.buy(buyer, buyer_region_id, message.order_num, message.quantity) {
             Ok(receipt) => {
+                // MF-051: trade event auto-contido. Todos os campos vêm do
+                // recibo — sem lookup em order original. O index de preço
+                // e qualquer futura telemetria consomem este evento.
+                trade_events.send(TradeExecuted {
+                    region: receipt.region,
+                    item: receipt.item,
+                    unit_price: receipt.unit_price,
+                    quantity: receipt.quantity,
+                    buyer,
+                    seller: receipt.seller,
+                    total: receipt.total,
+                    order_num: receipt.order_num,
+                });
                 info!(
                     order_num = receipt.order_num,
                     region = buyer_region_name,
@@ -1357,5 +1447,111 @@ mod tests {
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].order_num, open_num);
         assert!(lines.iter().all(|line| line.order_num != expired_num));
+    }
+
+    // ===== MF-051 — BuyReceipt auto-contido =====
+
+    #[test]
+    fn buy_receipt_carries_region_and_unit_price() {
+        let mut market = ServerMarket::new();
+        let seller = market.character("seller");
+        let buyer = market.character("buyer");
+        let region = RegionId::new();
+        let (catalog, item) = catalog_with_item();
+        put_in_storage(&mut market, seller, region, item, &catalog, 10);
+        let (order_num, _) = market
+            .create_order(seller, region, item, 10, Money(7))
+            .expect("seller tem estoque");
+
+        let receipt = market
+            .buy(buyer, region, order_num, 4)
+            .expect("compra atômica");
+
+        // MF-051: recibo auto-contido — handler não consulta a order depois.
+        assert_eq!(receipt.region, region, "region preservada no recibo");
+        assert_eq!(receipt.unit_price, Money(7), "preço unitário preservado");
+        assert_eq!(receipt.quantity, 4);
+        assert_eq!(receipt.total, Money(28));
+    }
+
+    #[test]
+    fn buy_receipt_is_region_specific_not_derived_from_order_lookup() {
+        // Garante que o region vem do order.region no momento da execução,
+        // não de qualquer cache/lookup posterior. Duas regiões distintas
+        // produzem recibos com regions distintas.
+        let mut market = ServerMarket::new();
+        let seller = market.character("seller");
+        let buyer = market.character("buyer");
+        let region_a = RegionId::new();
+        let region_b = RegionId::new();
+        let (catalog, item) = catalog_with_item();
+        put_in_storage(&mut market, seller, region_a, item, &catalog, 5);
+        put_in_storage(&mut market, seller, region_b, item, &catalog, 5);
+        let (order_a, _) = market
+            .create_order(seller, region_a, item, 5, Money(3))
+            .expect("order região A");
+        let (order_b, _) = market
+            .create_order(seller, region_b, item, 5, Money(9))
+            .expect("order região B");
+
+        let receipt_a = market
+            .buy(buyer, region_a, order_a, 1)
+            .expect("compra na região A");
+        let receipt_b = market
+            .buy(buyer, region_b, order_b, 1)
+            .expect("compra na região B");
+
+        assert_ne!(receipt_a.region, receipt_b.region);
+        assert_eq!(receipt_a.region, region_a);
+        assert_eq!(receipt_b.region, region_b);
+        assert_eq!(receipt_a.unit_price, Money(3));
+        assert_eq!(receipt_b.unit_price, Money(9));
+    }
+
+    #[test]
+    fn trade_executed_event_round_trip_with_all_required_fields() {
+        // O evento de trade é o contrato do MF-051: region obrigatória
+        // (fail-closed pelo tipo). Aqui só validamos que ele carrega tudo
+        // o que o index e a telemetria precisam.
+        let region = RegionId::new();
+        let item = ItemDefinitionId::new();
+        let event = TradeExecuted {
+            region,
+            item,
+            unit_price: Money(5),
+            quantity: 3,
+            buyer: CharacterId::new(),
+            seller: CharacterId::new(),
+            total: Money(15),
+            order_num: 42,
+        };
+        assert_eq!(event.region, region);
+        assert_eq!(event.unit_price, Money(5));
+        assert_eq!(event.quantity, 3);
+        assert_eq!(event.total, Money(15));
+    }
+
+    #[test]
+    fn server_economy_config_defaults_to_alpha_window() {
+        let config = ServerEconomyConfig::default();
+        assert_eq!(
+            config.price_index_window_size,
+            MarketPriceIndex::DEFAULT_WINDOW_SIZE,
+            "default do alpha é 100 (MF-051)"
+        );
+        assert_eq!(config.price_index_window_size, 100);
+    }
+
+    #[test]
+    fn server_price_index_wrapper_delegates_to_inner() {
+        // Casca de Resource: Deref/DerefMut devem permitir chamar os métodos
+        // do index puro sem ceremony.
+        let mut wrapped = ServerPriceIndex(MarketPriceIndex::new(50));
+        let r = RegionId::new();
+        let it = ItemDefinitionId::new();
+        wrapped.record_trade(r, it, Money(10), 20);
+        let vwap = wrapped.vwap(r, it).expect("há trade");
+        assert_eq!(vwap.unit_price, Money(10));
+        assert_eq!(vwap.sample_quantity, 20);
     }
 }
