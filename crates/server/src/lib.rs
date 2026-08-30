@@ -6,6 +6,7 @@ pub mod net;
 pub mod nodes;
 pub mod npc;
 pub mod persist;
+mod playtest;
 pub mod plugin;
 pub mod sets;
 
@@ -24,10 +25,18 @@ pub fn run_headless() {
         )
         .init();
 
-    App::new()
-        .add_plugins(MinimalPlugins)
+    let playtest = std::env::args().any(|arg| arg == "--playtest");
+
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins)
         .add_plugins(TerminalCtrlCHandlerPlugin)
         .add_plugins(ServerPlugin)
-        .add_plugins(net::ServerNetPlugin)
-        .run();
+        .add_plugins(net::ServerNetPlugin);
+
+    if playtest {
+        playtest::install(&mut app);
+        tracing::info!("playtest session recorder enabled");
+    }
+
+    app.run();
 }

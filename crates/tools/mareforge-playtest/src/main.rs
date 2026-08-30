@@ -26,6 +26,7 @@ impl ServerProcess {
         let exe = std::env::current_exe().expect("current playtest binary");
         let child = Command::new(exe)
             .arg(SERVER_ARG)
+            .arg("--playtest")
             .spawn()
             .expect("start playtest server child");
         Self(child)
@@ -34,7 +35,11 @@ impl ServerProcess {
 
 impl Drop for ServerProcess {
     fn drop(&mut self) {
-        let _ = self.0.kill();
+        // SIGTERM (não SIGKILL) para que o child `--playtest` grave o resumo
+        // JSON no encerramento ordenado antes de sair.
+        unsafe {
+            libc::kill(self.0.id() as libc::pid_t, libc::SIGTERM);
+        }
         let _ = self.0.wait();
     }
 }

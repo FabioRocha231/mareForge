@@ -3781,6 +3781,7 @@ dependencies = [
 name = "mareforge-playtest"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "mareforge-client",
  "mareforge-server",
 ]
@@ -3806,6 +3807,7 @@ dependencies = [
  "bevy",
  "chrono",
  "crossbeam-channel",
+ "libc",
  "lightyear",
  "mareforge-client",
  "mareforge-domain-combat",

@@ -10,5 +10,6 @@ name = "mareforge_playtest"
 path = "src/main.rs"
 
 [dependencies]
+libc = "0.2"
 mareforge-client = { path = "../../client" }
 mareforge-server = { path = "../../server" }
