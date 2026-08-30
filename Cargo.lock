@@ -3257,8 +3257,10 @@ dependencies = [
 name = "mareforge-domain-ships"
 version = "0.1.0"
 dependencies = [
+ "mareforge-domain-items",
  "mareforge-shared",
  "serde",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

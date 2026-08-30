@@ -85,6 +85,7 @@ mod tests {
         ItemDefinition {
             id: ItemDefinitionId::new(),
             kind,
+            equipment: None,
             max_stack,
             base_weight: 1,
             tags: smallvec![],

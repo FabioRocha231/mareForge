@@ -24,17 +24,51 @@ pub enum Tag {
     // Adicione outros conforme necessidade da vertical slice; mantenha esta lista pequena.
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EquipmentStats {
+    /// Pontos aditivos de dano de arma.
+    pub damage: i32,
+    /// Offsets percentuais de velocidade: cada unidade equivale a 0,01 m/s.
+    pub speed: i32,
+    /// Pontos aditivos de capacidade de carga.
+    pub cargo: i32,
+    /// Pontos aditivos de HP máximo.
+    pub hp: i32,
+    /// Offsets percentuais de alcance: cada unidade equivale a 0,01 m.
+    pub range: i32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ItemDefinition {
     pub id: ItemDefinitionId,
     pub kind: ItemKind,
-    pub max_stack: u32,   // 1 para não-fungíveis
-    pub base_weight: u32, // peso unitário em gramas
+    /// Modificadores de stats — presente somente quando `kind` é `Equipment`.
+    /// Fonte de verdade dos modificadores; não se duplica em instâncias.
+    pub equipment: Option<EquipmentStats>,
+    pub max_stack: u32,
+    pub base_weight: u32,
     pub tags: SmallVec<[Tag; 4]>,
-    pub display_name: String, // nome para UI
+    pub display_name: String,
 }
 
 impl ItemDefinition {
+    pub fn equipment(
+        id: ItemDefinitionId,
+        display_name: String,
+        base_weight: u32,
+        stats: EquipmentStats,
+    ) -> Self {
+        Self {
+            id,
+            kind: ItemKind::Equipment,
+            equipment: Some(stats),
+            max_stack: 1,
+            base_weight,
+            tags: SmallVec::new(),
+            display_name,
+        }
+    }
+
     pub fn is_fungible(&self) -> bool {
         matches!(
             self.kind,
@@ -55,6 +89,7 @@ mod tests {
         ItemDefinition {
             id: ItemDefinitionId::new(),
             kind,
+            equipment: None,
             max_stack: 1,
             base_weight: 1,
             tags: SmallVec::new(),
