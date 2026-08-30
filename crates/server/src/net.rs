@@ -387,6 +387,9 @@ impl Plugin for ServerNetPlugin {
         // em memória. O `persist_wrecks` corre após o tick para evitar
         // pressão no hot loop.
         app.add_systems(Startup, load_wrecks.after(crate::market::load_state));
+        // §72 average_trip_duration: preenche trip_started_at dos
+        // player ships após o load (que pode ter restaurado do banco).
+        app.add_systems(Update, init_trip_started_at);
         app.add_systems(Update, persist_wrecks.after(expire_wrecks));
         // (Bevy 0.15 implementa tuplas de sistemas até 15 elementos — o
         // tick do A1 é grande demais para uma tupla só: duas rodadas.)
@@ -455,6 +458,11 @@ pub struct ServerShip {
     /// Zona atual conforme o mapa (MF-017). `None` = fora das águas
     /// declaradas (UnknownZone): combate fail-closed, nenhuma UI nova.
     pub zone: Option<ZoneId>,
+    /// §72 average_trip_duration: instante (em `Time::elapsed_secs()`)
+    /// em que o player ship entrou no mar pela última vez. `None` para
+    /// NPC ou antes do primeiro tick do sistema. Zera em dock/sink para
+    /// acumular uma viagem por vez.
+    pub trip_started_at: Option<f32>,
 }
 
 /// Dono desconectado; o navio fica no mar por [`DISCONNECT_GRACE_SECS`],
@@ -526,6 +534,15 @@ pub struct Metrics {
     pub ship_losses_by_kind: [u64; 3],
     pub wrecks_looted: u64,
     pub pvp_engagements: u64,
+    /// §72 route_usage: total de cruzamentos de fronteira de zona por
+    /// player ships. Counter agregado; pares (from, to) ficariam em
+    /// outra estrutura se gepeto quiser granularidade.
+    pub zone_transitions: u64,
+    /// §72 average_trip_duration: soma de durações de trips encerradas
+    /// (dock ou sink). Dividido por `trip_count` no log para a média.
+    pub trip_total_secs: f64,
+    /// §72 average_trip_duration: denominador da média de duração.
+    pub trip_count: u64,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -595,6 +612,9 @@ pub(crate) fn spawn_ship_for(
         },
         tuning: MotionTuning::default(),
         zone,
+        // §72 average_trip_duration: spawn não tem Time, então o sistema
+        // de tick preenche via init_trip_started_at depois.
+        trip_started_at: None,
     },));
     ship_id
 }
@@ -668,6 +688,9 @@ pub(crate) fn restore_ship_from_record(
         },
         tuning: MotionTuning::default(),
         zone,
+        // §72 average_trip_duration: spawn não tem Time, então o sistema
+        // de tick preenche via init_trip_started_at depois.
+        trip_started_at: None,
     },));
     ship_id
 }
@@ -1231,6 +1254,9 @@ fn simulate_world(
             zone,
             ..
         } = ship.as_mut();
+        // §72 zone_transitions: capturamos a zona no início do tick para
+        // comparar com a nova logo após o motion step.
+        let zone_before = *zone;
         if matches!(presence, VesselPresence::Docked(_)) {
             // MF-036: atracado = casco imóvel. O input é ignorado (o dono
             // precisa desatracar para navegar); recarga de canhão corre.
@@ -1256,6 +1282,13 @@ fn simulate_world(
         match map.0.zone_at(motion.x, motion.y) {
             Ok(found) => {
                 if *zone != Some(found.id) {
+                    // §72 zone_transitions: cruzou fronteira entre zonas
+                    // conhecidas. Conta player ships apenas (NPC não
+                    // entram no gameplay metrics), e só quando a zona
+                    // anterior era conhecida (não conta entrada inicial).
+                    if client_id.is_some() && zone_before.is_some() {
+                        metrics.zone_transitions += 1;
+                    }
                     *zone = Some(found.id);
                     info!(
                         ship_id = *ship_id,
@@ -1381,6 +1414,13 @@ fn simulate_world(
                         // §72 ship_losses_by_kind: conta só navios de player.
                         // NPC killings já estão em `ships_destroyed`.
                         metrics.ship_losses_by_kind[ship.kind as usize] += 1;
+                        // §72 average_trip_duration: trip termina em sink
+                        // de player ship. Trip seguinte começa no próximo
+                        // spawn ou load_wrecks.
+                        if let Some(started) = ship.trip_started_at.take() {
+                            metrics.trip_total_secs += (time.elapsed_secs() - started) as f64;
+                            metrics.trip_count += 1;
+                        }
                     }
                     info!(ship_id = target_ship_id, damage, "SHIP DESTROYED");
                     // Full loot (§22-§25): casco é perda total; parte da carga
@@ -1642,6 +1682,23 @@ fn world_status(
         return;
     }
     *timer = 0.0;
+    let avg_trip_secs = if metrics.trip_count > 0 {
+        metrics.trip_total_secs / metrics.trip_count as f64
+    } else {
+        0.0
+    };
+    // §72 players_per_zone: snapshot por pulso, não persiste entre pulsos.
+    let mut players_per_zone: std::collections::BTreeMap<&'static str, u32> =
+        std::collections::BTreeMap::new();
+    for ship in &ships {
+        if ship.client_id.is_some() {
+            if let Ok(zone) = map.0.zone_at(ship.motion.x, ship.motion.y) {
+                *players_per_zone.entry(zone.name).or_insert(0) += 1;
+            } else {
+                *players_per_zone.entry("fora do mar declarado").or_insert(0) += 1;
+            }
+        }
+    }
     info!(
         gold_minted = market.ledger.minted().0,
         gold_burned = market.ledger.burned().0,
@@ -1660,6 +1717,10 @@ fn world_status(
             metrics.ship_losses_by_kind[mareforge_domain_ships::ShipKind::Corsair as usize],
         wrecks_looted = metrics.wrecks_looted,
         pvp_engagements = metrics.pvp_engagements,
+        zone_transitions = metrics.zone_transitions,
+        avg_trip_secs,
+        trip_count = metrics.trip_count,
+        players_per_zone = ?players_per_zone,
         "economic pulse"
     );
     for ship in &ships {
@@ -1835,6 +1896,18 @@ fn load_wrecks(
     );
 }
 
+/// §72 average_trip_duration: para cada player ship sem trip_started_at
+/// (acaba de spawnar ou foi restaurado do banco), define como `now`. Roda
+/// no Update para garantir que Time existe.
+fn init_trip_started_at(time: Res<Time>, mut ships: Query<&mut ServerShip>) {
+    let now = time.elapsed_secs();
+    for mut ship in &mut ships {
+        if ship.client_id.is_some() && ship.trip_started_at.is_none() {
+            ship.trip_started_at = Some(now);
+        }
+    }
+}
+
 /// Orders expiradas (MF-041): escrow volta ao storage do seller e o client
 /// recebe o board ativo sem a ordem vencida.
 fn expire_orders(
@@ -1870,6 +1943,8 @@ fn handle_dock(
     policy: Res<ServerDockPolicy>,
     dev: Res<DevItems>,
     market: Res<crate::market::ServerMarket>,
+    time: Res<Time>,
+    mut metrics: ResMut<Metrics>,
     mut ships: Query<&mut ServerShip>,
 ) {
     for event in dock_events.read() {
@@ -1891,6 +1966,12 @@ fn handle_dock(
                 let (_, name) = at_port.expect("dock validou que há porto aqui");
                 ship.presence = presence;
                 info!(ship_id = ship.ship_id, region = name, "navio atracado");
+                // §72 average_trip_duration: trip termina em dock bem
+                // sucedido. Trip seguinte começa no undock.
+                if let Some(started) = ship.trip_started_at.take() {
+                    metrics.trip_total_secs += (time.elapsed_secs() - started) as f64;
+                    metrics.trip_count += 1;
+                }
                 let _ = connection_manager.send_message::<ReliableChannel, _>(
                     client_id,
                     &DockResult {
@@ -2095,6 +2176,7 @@ mod tests {
             },
             tuning: MotionTuning::default(),
             zone: None,
+            trip_started_at: None,
         };
 
         let state = to_ship_state(&ship, &ItemCatalog::default());
