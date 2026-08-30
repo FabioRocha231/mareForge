@@ -7,6 +7,7 @@
 //! Nota: canais e registros de mensagens devem ser um espelho exato do
 //! `server/src/net.rs`.
 
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
@@ -16,8 +17,8 @@ use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 use mareforge_domain_combat::BroadsideSide;
 use mareforge_protocol::{
-    AssignShip, ClientHello, FireBroadside, ServerWelcome, ShipDestroyed, ShipInput, WorldSnapshot,
-    PROTOCOL_VERSION,
+    AssignShip, ClientHello, FireBroadside, LootResult, LootWreck, ServerWelcome, ShipDestroyed,
+    ShipInput, WorldSnapshot, WreckRemoved, WreckSpawned, PROTOCOL_VERSION,
 };
 
 pub const SERVER_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 5000);
@@ -85,19 +86,41 @@ impl Plugin for ClientNetPlugin {
         app.register_message::<ClientHello>(ChannelDirection::ClientToServer);
         app.register_message::<ShipInput>(ChannelDirection::ClientToServer);
         app.register_message::<FireBroadside>(ChannelDirection::ClientToServer);
+        app.register_message::<LootWreck>(ChannelDirection::ClientToServer);
         app.register_message::<ServerWelcome>(ChannelDirection::ServerToClient);
         app.register_message::<AssignShip>(ChannelDirection::ServerToClient);
         app.register_message::<WorldSnapshot>(ChannelDirection::ServerToClient);
         app.register_message::<ShipDestroyed>(ChannelDirection::ServerToClient);
+        app.register_message::<WreckSpawned>(ChannelDirection::ServerToClient);
+        app.register_message::<WreckRemoved>(ChannelDirection::ServerToClient);
+        app.register_message::<LootResult>(ChannelDirection::ServerToClient);
         app.init_resource::<crate::ship::DestroyedShips>();
+        app.init_resource::<KnownWrecks>();
         app.add_systems(Startup, (connect, log_connecting));
         app.add_systems(
             FixedUpdate,
-            (send_hello_on_connect, send_ship_input, send_fire_input),
+            (
+                send_hello_on_connect,
+                send_ship_input,
+                send_fire_input,
+                send_loot_input,
+            ),
         );
-        app.add_systems(Update, (handle_handshake, handle_ship_destroyed));
+        app.add_systems(
+            Update,
+            (
+                handle_handshake,
+                handle_ship_destroyed,
+                handle_wreck_lifecycle,
+                handle_loot_result,
+            ),
+        );
     }
 }
+
+/// Wrecks conhecidos pelo client (posições para saque e visuais).
+#[derive(Resource, Debug, Default)]
+pub struct KnownWrecks(pub HashMap<u32, Vec2>);
 
 fn connect(mut commands: Commands) {
     commands.connect_client();
@@ -192,6 +215,99 @@ fn handle_ship_destroyed(
                 commands.entity(entity).despawn();
             }
         }
+    }
+}
+
+/// Ciclo de vida dos wrecks: memoriza posições e remove os que somirem.
+fn handle_wreck_lifecycle(
+    mut spawned: EventReader<ClientReceiveMessage<WreckSpawned>>,
+    mut removed: EventReader<ClientReceiveMessage<WreckRemoved>>,
+    mut known: ResMut<KnownWrecks>,
+    mut commands: Commands,
+    visuals: Query<(Entity, &crate::ship::WreckVisual)>,
+) {
+    for event in spawned.read() {
+        let wreck = event.message();
+        info!(
+            wreck_id = wreck.wreck_id,
+            stacks = wreck.stack_count,
+            "wreck avistado — carga esperando saqueador"
+        );
+        known.0.insert(wreck.wreck_id, Vec2::new(wreck.x, wreck.y));
+    }
+    for event in removed.read() {
+        let wreck_id = event.message().wreck_id;
+        known.0.remove(&wreck_id);
+        for (entity, visual) in &visuals {
+            if visual.wreck_num == wreck_id {
+                commands.entity(entity).despawn();
+            }
+        }
+    }
+}
+
+fn handle_loot_result(mut events: EventReader<ClientReceiveMessage<LootResult>>) {
+    for event in events.read() {
+        let result = event.message();
+        if result.success {
+            info!(
+                wreck_id = result.wreck_id,
+                "saque concluído: carga no porão"
+            );
+        } else {
+            warn!(wreck_id = result.wreck_id, "saque recusado pelo servidor");
+        }
+    }
+}
+
+/// F saqueia o wreck mais próximo (PRD §27). No modo dev (PRD §39), o
+/// autofire também saqueia sozinho para o smoke do loop econômico.
+fn send_loot_input(
+    keys: Res<ButtonInput<KeyCode>>,
+    time: Res<Time>,
+    my_ship: Res<MyShip>,
+    known_wrecks: Res<KnownWrecks>,
+    visuals: Query<&crate::ship::ShipVisual>,
+    mut autofire_timer: Local<f32>,
+    mut connection_manager: ResMut<ConnectionManager>,
+) {
+    let manual = keys.just_pressed(KeyCode::KeyF);
+    let mut auto = false;
+    if autofire_enabled() {
+        *autofire_timer += time.delta_secs();
+        if *autofire_timer >= 2.0 {
+            *autofire_timer = 0.0;
+            auto = true;
+        }
+    }
+    if !manual && !auto {
+        return;
+    }
+
+    let Some(my_id) = my_ship.0 else { return };
+    let Some(my_visual) = visuals.iter().find(|v| v.target.ship_id == my_id) else {
+        return;
+    };
+    let mine = Vec2::new(my_visual.target.x, my_visual.target.y);
+
+    // Raio de interação do servidor (30 m) com folga para o lerp visual.
+    const INTERACT_RADIUS_SQ: f32 = 28.0 * 28.0;
+    let nearest = known_wrecks
+        .0
+        .iter()
+        .filter(|(_, pos)| mine.distance_squared(**pos) <= INTERACT_RADIUS_SQ)
+        .min_by(|a, b| {
+            let da = mine.distance_squared(*a.1);
+            let db = mine.distance_squared(*b.1);
+            da.total_cmp(&db)
+        })
+        .map(|(id, _)| *id);
+
+    if let Some(wreck_id) = nearest {
+        if manual {
+            info!(wreck_id, "saqueando wreck");
+        }
+        let _ = connection_manager.send_message::<ReliableChannel, _>(&LootWreck { wreck_id });
     }
 }
 

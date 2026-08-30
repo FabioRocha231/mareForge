@@ -11,7 +11,9 @@ use serde::{Deserialize, Serialize};
 /// este número (semântica: quebra de contrato = +1).
 ///
 /// v2: combate — FireBroadside, ShipDestroyed e projéteis no snapshot.
-pub const PROTOCOL_VERSION: u16 = 2;
+/// v3: economia do naufrágio — cargo_weight no ShipState, ciclo de vida de
+///     Wreck (WreckSpawned/WreckRemoved) e loot (LootWreck/LootResult).
+pub const PROTOCOL_VERSION: u16 = 3;
 
 /// Primeira mensagem do client após conectar (ADR-0011).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,6 +64,8 @@ pub struct ShipState {
     pub heading: f32,
     /// m/s.
     pub speed: f32,
+    /// Peso atual da carga (unidades de peso; o limite é do navio).
+    pub cargo_weight: u32,
 }
 
 /// Comando de disparo de bordo do jogador (PRD §19). Confiável: é um clique,
@@ -81,11 +85,40 @@ pub struct ProjectileState {
     pub heading: f32,
 }
 
-/// Navio afundou (PRD §21). O servidor retransmite a todos; loot vem na
-/// MF-013.
+/// Navio afundou (PRD §21). O servidor retransmite a todos; a resolução de
+/// loot acontece do lado do servidor (MF-013).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShipDestroyed {
     pub ship_id: u32,
+}
+
+/// Wreck surgiu no mar com a carga que sobreviveu ao naufrágio (PRD §26).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct WreckSpawned {
+    pub wreck_id: u32,
+    pub x: f32,
+    pub y: f32,
+    /// Quantidade de pilhas de itens dentro do baú (para UI).
+    pub stack_count: u32,
+}
+
+/// Wreck desapareceu (saqueado até esvaziar ou expirado — PRD §26).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WreckRemoved {
+    pub wreck_id: u32,
+}
+
+/// Jogador quer saquear um wreck (PRD §27: precisa estar nele, com porão).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LootWreck {
+    pub wreck_id: u32,
+}
+
+/// Resultado da tentativa de saque (MF-015: atômico, capacity-aware).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LootResult {
+    pub wreck_id: u32,
+    pub success: bool,
 }
 
 /// Snapshot do mundo visível; enviado por tick (PRD §64/§66 — AOI corta o
@@ -102,8 +135,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn current_protocol_version_is_two() {
-        assert_eq!(PROTOCOL_VERSION, 2);
+    fn current_protocol_version_is_three() {
+        assert_eq!(PROTOCOL_VERSION, 3);
         assert_eq!(ClientHello::current().protocol_version, PROTOCOL_VERSION);
     }
 
@@ -149,6 +182,7 @@ mod tests {
                     y: -3.25,
                     heading: 0.1,
                     speed: 4.0,
+                    cargo_weight: 36,
                 },
                 ShipState {
                     ship_id: 2,
@@ -156,6 +190,7 @@ mod tests {
                     y: 0.0,
                     heading: 3.0,
                     speed: 0.0,
+                    cargo_weight: 0,
                 },
             ],
             projectiles: vec![ProjectileState {
@@ -168,6 +203,39 @@ mod tests {
         let bytes = bincode::serialize(&message).unwrap();
         let decoded: WorldSnapshot = bincode::deserialize(&bytes).unwrap();
         assert_eq!(decoded, message);
+    }
+
+    #[test]
+    fn wreck_lifecycle_messages_roundtrip() {
+        let spawned = WreckSpawned {
+            wreck_id: 9,
+            x: -4.0,
+            y: 8.5,
+            stack_count: 2,
+        };
+        let bytes = bincode::serialize(&spawned).unwrap();
+        assert_eq!(
+            bincode::deserialize::<WreckSpawned>(&bytes).unwrap(),
+            spawned
+        );
+
+        let removed = WreckRemoved { wreck_id: 9 };
+        let bytes = bincode::serialize(&removed).unwrap();
+        assert_eq!(
+            bincode::deserialize::<WreckRemoved>(&bytes).unwrap(),
+            removed
+        );
+
+        let loot = LootWreck { wreck_id: 9 };
+        let bytes = bincode::serialize(&loot).unwrap();
+        assert_eq!(bincode::deserialize::<LootWreck>(&bytes).unwrap(), loot);
+
+        let result = LootResult {
+            wreck_id: 9,
+            success: true,
+        };
+        let bytes = bincode::serialize(&result).unwrap();
+        assert_eq!(bincode::deserialize::<LootResult>(&bytes).unwrap(), result);
     }
 
     #[test]

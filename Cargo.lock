@@ -3716,7 +3716,10 @@ dependencies = [
 name = "mareforge-domain-combat"
 version = "0.1.0"
 dependencies = [
+ "mareforge-domain-items",
+ "mareforge-shared",
  "serde",
+ "uuid",
 ]
 
 [[package]]
@@ -3778,6 +3781,8 @@ dependencies = [
  "mareforge-domain-items",
  "mareforge-domain-ships",
  "mareforge-protocol",
+ "mareforge-shared",
+ "smallvec",
  "tracing",
  "tracing-subscriber",
 ]

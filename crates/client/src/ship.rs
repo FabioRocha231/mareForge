@@ -7,8 +7,7 @@ use std::collections::HashSet;
 use bevy::ecs::prelude::*;
 use bevy::prelude::*;
 use lightyear::prelude::ClientReceiveMessage;
-use mareforge_protocol::{ProjectileState, ShipState, WorldSnapshot};
-
+use mareforge_protocol::{ProjectileState, ShipState, WorldSnapshot, WreckSpawned};
 /// Entidade visual de um navio autoritativo. `target` é o último estado
 /// autoritativo conhecido (alvo do lerp visual).
 #[derive(Component)]
@@ -173,4 +172,53 @@ fn apply_lerp(transform: &mut Transform, x: &f32, y: &f32, heading: &f32, factor
         .lerp(Vec3::new(*x, *y, transform.translation.z), factor);
     let target_rotation = Quat::from_rotation_z(*heading);
     transform.rotation = transform.rotation.slerp(target_rotation, factor);
+}
+
+/// Destroço flutuando no mar (PRD §26): carga esperando um saqueador.
+#[derive(Component)]
+pub struct WreckVisual {
+    pub wreck_num: u32,
+}
+
+pub fn spawn_wreck_visuals(
+    mut commands: Commands,
+    mut spawned: EventReader<ClientReceiveMessage<WreckSpawned>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+) {
+    for event in spawned.read() {
+        let wreck = event.message();
+        let debris = meshes.add(Rectangle::new(14.0, 14.0));
+        let soaked_wood = materials.add(Color::srgb(0.38, 0.27, 0.16));
+        commands.spawn((
+            WreckVisual {
+                wreck_num: wreck.wreck_id,
+            },
+            Mesh2d(debris),
+            MeshMaterial2d(soaked_wood),
+            Transform::from_xyz(wreck.x, wreck.y, -0.5),
+        ));
+        info!(wreck_id = wreck.wreck_id, "destroço visível no mar");
+    }
+}
+
+/// Leitor de peso de carga do próprio navio (feedback do loop econômico).
+#[derive(Component)]
+pub struct CargoReadout;
+
+pub fn update_cargo_readout(
+    my_ship: Res<crate::net::MyShip>,
+    visuals: Query<&ShipVisual>,
+    mut readout: Query<&mut Text2d, With<CargoReadout>>,
+) {
+    let Some(my_id) = my_ship.0 else { return };
+    let Some(weight) = visuals
+        .iter()
+        .find(|visual| visual.target.ship_id == my_id)
+        .map(|visual| visual.target.cargo_weight)
+    else {
+        return;
+    };
+    let mut text = readout.single_mut();
+    text.0 = format!("Carga: {weight}");
 }

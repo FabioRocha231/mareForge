@@ -12,5 +12,7 @@ mareforge-domain-combat = { path = "../domain-combat" }
 mareforge-domain-items = { path = "../domain-items" }
 mareforge-domain-ships = { path = "../domain-ships" }
 mareforge-protocol = { path = "../protocol" }
+mareforge-shared = { path = "../shared" }
+smallvec = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
