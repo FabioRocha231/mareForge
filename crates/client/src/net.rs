@@ -14,8 +14,10 @@ use bevy::ecs::prelude::*;
 use bevy::prelude::*;
 use lightyear::prelude::client::*;
 use lightyear::prelude::*;
+use mareforge_domain_combat::BroadsideSide;
 use mareforge_protocol::{
-    AssignShip, ClientHello, ServerWelcome, ShipInput, WorldSnapshot, PROTOCOL_VERSION,
+    AssignShip, ClientHello, FireBroadside, ServerWelcome, ShipDestroyed, ShipInput, WorldSnapshot,
+    PROTOCOL_VERSION,
 };
 
 pub const SERVER_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 5000);
@@ -82,12 +84,18 @@ impl Plugin for ClientNetPlugin {
         });
         app.register_message::<ClientHello>(ChannelDirection::ClientToServer);
         app.register_message::<ShipInput>(ChannelDirection::ClientToServer);
+        app.register_message::<FireBroadside>(ChannelDirection::ClientToServer);
         app.register_message::<ServerWelcome>(ChannelDirection::ServerToClient);
         app.register_message::<AssignShip>(ChannelDirection::ServerToClient);
         app.register_message::<WorldSnapshot>(ChannelDirection::ServerToClient);
+        app.register_message::<ShipDestroyed>(ChannelDirection::ServerToClient);
+        app.init_resource::<crate::ship::DestroyedShips>();
         app.add_systems(Startup, (connect, log_connecting));
-        app.add_systems(FixedUpdate, (send_hello_on_connect, send_ship_input));
-        app.add_systems(Update, (handle_handshake,));
+        app.add_systems(
+            FixedUpdate,
+            (send_hello_on_connect, send_ship_input, send_fire_input),
+        );
+        app.add_systems(Update, (handle_handshake, handle_ship_destroyed));
     }
 }
 
@@ -123,6 +131,68 @@ fn send_ship_input(
     };
     let turn = (keys.pressed(KeyCode::KeyA) as i32 - keys.pressed(KeyCode::KeyD) as i32) as f32;
     let _ = connection_manager.send_message::<UnreliableChannel, _>(&ShipInput { throttle, turn });
+}
+
+/// Comando de tiro (PRD §19): Q = bordo esquerdo, E = bordo direito.
+/// Confiável: cada apertada é um tiro.
+fn send_fire_input(
+    keys: Res<ButtonInput<KeyCode>>,
+    time: Res<Time>,
+    mut autofire_timer: Local<f32>,
+    mut autofire_side: Local<u8>,
+    mut connection_manager: ResMut<ConnectionManager>,
+) {
+    let side = if keys.just_pressed(KeyCode::KeyQ) {
+        Some(BroadsideSide::Port)
+    } else if keys.just_pressed(KeyCode::KeyE) {
+        Some(BroadsideSide::Starboard)
+    } else if autofire_enabled() {
+        // Dev tooling (PRD §39): MAREFORGE_AUTOFIRE=1 dispara bordos
+        // alternados sozinho, respeitando a recarga — smoke/playtest sem
+        // interação. Não é mecânica de jogo.
+        *autofire_timer += time.delta_secs();
+        if *autofire_timer >= 4.2 {
+            *autofire_timer = 0.0;
+            *autofire_side ^= 1;
+            Some(if *autofire_side == 0 {
+                BroadsideSide::Port
+            } else {
+                BroadsideSide::Starboard
+            })
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    if let Some(side) = side {
+        info!(?side, "disparando bordo");
+        let _ = connection_manager.send_message::<ReliableChannel, _>(&FireBroadside { side });
+    }
+}
+
+fn autofire_enabled() -> bool {
+    std::env::var_os("MAREFORGE_AUTOFIRE").is_some()
+}
+
+/// Navio afundou: remove o visual e memoriza o id (snapshots antigos ainda
+/// podem trazer o casco; ids não são reutilizados — o respawn tem id novo).
+fn handle_ship_destroyed(
+    mut events: EventReader<ClientReceiveMessage<ShipDestroyed>>,
+    mut destroyed: ResMut<crate::ship::DestroyedShips>,
+    mut commands: Commands,
+    visuals: Query<(Entity, &crate::ship::ShipVisual)>,
+) {
+    for event in events.read() {
+        let ship_id = event.message().ship_id;
+        warn!(ship_id, "navio destruído no horizonte");
+        destroyed.0.insert(ship_id);
+        for (entity, visual) in &visuals {
+            if visual.target.ship_id == ship_id {
+                commands.entity(entity).despawn();
+            }
+        }
+    }
 }
 
 fn handle_handshake(

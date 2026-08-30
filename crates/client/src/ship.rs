@@ -1,11 +1,13 @@
-//! Visual dos navios replicados (PRD MF-006). Cada `ShipState` do snapshot
-//! tem uma entidade visual aqui; o client faz lerp suave entre snapshots.
-//! Sem predição local — a verdade é o servidor (Pilar 4).
+//! Visual dos navios e projéteis replicados (PRD MF-006/009). Cada estado do
+//! snapshot tem uma entidade visual aqui; o client faz lerp suave entre
+//! snapshots. Sem predição local — a verdade é o servidor (Pilar 4).
+
+use std::collections::HashSet;
 
 use bevy::ecs::prelude::*;
 use bevy::prelude::*;
 use lightyear::prelude::ClientReceiveMessage;
-use mareforge_protocol::{ShipState, WorldSnapshot};
+use mareforge_protocol::{ProjectileState, ShipState, WorldSnapshot};
 
 /// Entidade visual de um navio autoritativo. `target` é o último estado
 /// autoritativo conhecido (alvo do lerp visual).
@@ -14,9 +16,14 @@ pub struct ShipVisual {
     pub target: ShipState,
 }
 
+/// Navios que já afundaram: snapshots em voo não podem ressuscitá-los.
+#[derive(Resource, Debug, Default)]
+pub struct DestroyedShips(pub HashSet<u32>);
+
 pub fn upsert_ship_visuals(
     mut commands: Commands,
     my_ship: Res<crate::net::MyShip>,
+    destroyed: Res<DestroyedShips>,
     mut snapshot_events: EventReader<ClientReceiveMessage<WorldSnapshot>>,
     mut existing: Query<(Entity, &mut ShipVisual)>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -33,6 +40,9 @@ pub fn upsert_ship_visuals(
         return;
     };
     for state in &event.message().ships {
+        if destroyed.0.contains(&state.ship_id) {
+            continue;
+        }
         let mut updated = false;
         for (_, mut visual) in existing.iter_mut() {
             if visual.target.ship_id == state.ship_id {
@@ -77,10 +87,90 @@ pub fn lerp_ship_visuals(time: Res<Time>, mut ships: Query<(&mut Transform, &Shi
     // desaparece em ~0.15s, o bastante para disfarçar 30 Hz sem atrasar.
     let factor = 1.0 - (-20.0 * time.delta_secs()).exp();
     for (mut transform, visual) in &mut ships {
-        let target = &visual.target;
-        let target_pos = Vec3::new(target.x, target.y, 0.0);
-        transform.translation = transform.translation.lerp(target_pos, factor);
-        let target_rotation = Quat::from_rotation_z(target.heading);
-        transform.rotation = transform.rotation.slerp(target_rotation, factor);
+        apply_lerp(
+            &mut transform,
+            &visual.target.x,
+            &visual.target.y,
+            &visual.target.heading,
+            factor,
+        );
     }
+}
+
+/// Entidade visual de um projétil autoritativo (PRD §20: client interpola).
+#[derive(Component)]
+pub struct ProjectileVisual {
+    pub target: ProjectileState,
+}
+
+pub fn upsert_projectile_visuals(
+    mut commands: Commands,
+    mut snapshot_events: EventReader<ClientReceiveMessage<WorldSnapshot>>,
+    mut existing: Query<(Entity, &mut ProjectileVisual)>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+) {
+    let Some(event) = snapshot_events.read().last() else {
+        return;
+    };
+    let message = event.message();
+    let seen: HashSet<u32> = message
+        .projectiles
+        .iter()
+        .map(|p| p.projectile_id)
+        .collect();
+
+    // Projéteis que saíram do snapshot (impacto ou expiração) somem.
+    for (entity, visual) in existing.iter() {
+        if !seen.contains(&visual.target.projectile_id) {
+            commands.entity(entity).despawn();
+        }
+    }
+
+    for state in &message.projectiles {
+        let mut updated = false;
+        for (_, mut visual) in existing.iter_mut() {
+            if visual.target.projectile_id == state.projectile_id {
+                visual.target = *state;
+                updated = true;
+                break;
+            }
+        }
+        if updated {
+            continue;
+        }
+        let ball = meshes.add(Circle::new(2.5));
+        let smoke = materials.add(Color::srgb(0.15, 0.15, 0.18));
+        commands.spawn((
+            ProjectileVisual { target: *state },
+            Mesh2d(ball),
+            MeshMaterial2d(smoke),
+            Transform::from_xyz(state.x, state.y, 1.0),
+        ));
+    }
+}
+
+pub fn lerp_projectile_visuals(
+    time: Res<Time>,
+    mut projectiles: Query<(&mut Transform, &ProjectileVisual)>,
+) {
+    // Projéteis voam rápido: lerp mais agressivo que navios.
+    let factor = 1.0 - (-40.0 * time.delta_secs()).exp();
+    for (mut transform, projectile) in &mut projectiles {
+        apply_lerp(
+            &mut transform,
+            &projectile.target.x,
+            &projectile.target.y,
+            &projectile.target.heading,
+            factor,
+        );
+    }
+}
+
+fn apply_lerp(transform: &mut Transform, x: &f32, y: &f32, heading: &f32, factor: f32) {
+    transform.translation = transform
+        .translation
+        .lerp(Vec3::new(*x, *y, transform.translation.z), factor);
+    let target_rotation = Quat::from_rotation_z(*heading);
+    transform.rotation = transform.rotation.slerp(target_rotation, factor);
 }

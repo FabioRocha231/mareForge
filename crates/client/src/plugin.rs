@@ -1,7 +1,9 @@
 use bevy::prelude::*;
 
 use crate::net::ClientNetPlugin;
-use crate::ship::{lerp_ship_visuals, upsert_ship_visuals};
+use crate::ship::{
+    lerp_projectile_visuals, lerp_ship_visuals, upsert_projectile_visuals, upsert_ship_visuals,
+};
 
 pub struct ClientPlugin;
 
@@ -14,7 +16,13 @@ impl Plugin for ClientPlugin {
             .add_systems(Startup, (setup_camera, setup_hint))
             .add_systems(
                 Update,
-                (upsert_ship_visuals, lerp_ship_visuals, close_on_esc),
+                (
+                    upsert_ship_visuals,
+                    lerp_ship_visuals,
+                    upsert_projectile_visuals,
+                    lerp_projectile_visuals,
+                    close_on_esc,
+                ),
             );
     }
 }
@@ -25,7 +33,7 @@ fn setup_camera(mut commands: Commands) {
 
 fn setup_hint(mut commands: Commands) {
     commands.spawn((
-        Text2d::new("W/S: velas · A/D: leme · ESC: sair"),
+        Text2d::new("W/S: velas · A/D: leme · Q/E: bordos · ESC: sair"),
         TextFont {
             font_size: 24.0,
             ..default()

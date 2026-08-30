@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 bevy = "0.15"
 lightyear = "0.19"
+mareforge-domain-combat = { path = "../domain-combat" }
 mareforge-domain-items = { path = "../domain-items" }
 mareforge-domain-ships = { path = "../domain-ships" }
 mareforge-protocol = { path = "../protocol" }
