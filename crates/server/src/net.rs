@@ -392,12 +392,21 @@ impl Plugin for ServerNetPlugin {
         app.add_systems(Startup, crate::market::load_state.after(start_server));
         app.add_systems(Update, crate::market::save_state);
         app.add_event::<crate::market::TradeExecuted>();
-        app.add_systems(FixedUpdate, crate::market::update_price_index_from_trades);
+        app.add_systems(
+            FixedUpdate,
+            crate::market::update_price_index_from_trades
+                .in_set(SimulationSet::EconomyConsequences),
+        );
         // MF-027 cont.: wrecks persistem como snapshot derivado do estado
         // em memória. O `persist_wrecks` corre após o tick para evitar
         // pressão no hot loop.
         app.add_systems(Startup, load_wrecks.after(crate::market::load_state));
-        app.add_systems(Update, persist_wrecks.after(expire_wrecks));
+        app.add_systems(
+            FixedUpdate,
+            persist_wrecks
+                .after(expire_wrecks)
+                .in_set(SimulationSet::Persistence),
+        );
         // (Bevy 0.15 implementa tuplas de sistemas até 15 elementos — o
         // tick do A1 é grande demais para uma tupla só: duas rodadas.)
         app.add_systems(
@@ -413,23 +422,35 @@ impl Plugin for ServerNetPlugin {
                 crate::nodes::handle_gather,
                 crate::crafting::handle_craft,
                 crate::market::handle_storage,
-            ),
+            )
+                .in_set(SimulationSet::Input),
         );
         // Ordem importa: snapshots veem o estado JÁ simulado deste tick.
         simulate_world(app);
         app.add_systems(
             FixedUpdate,
-            (crate::npc::simulate_npcs, send_snapshots)
-                .chain()
-                .after(SimulationSet::Destruction),
+            crate::npc::simulate_npcs
+                .after(respawn_destroyed_ships)
+                .in_set(SimulationSet::Destruction),
         );
-        app.add_systems(FixedUpdate, crate::npc::respawn_npcs);
         app.add_systems(
             FixedUpdate,
-            (expire_ship_grace, expire_wrecks, expire_orders),
+            crate::npc::respawn_npcs
+                .after(crate::npc::simulate_npcs)
+                .in_set(SimulationSet::Destruction),
         );
-        app.add_systems(FixedUpdate, world_status);
-        app.add_systems(FixedUpdate, crate::nodes::respawn_nodes);
+        app.add_systems(
+            FixedUpdate,
+            (expire_orders, crate::nodes::respawn_nodes).in_set(SimulationSet::EconomyConsequences),
+        );
+        app.add_systems(FixedUpdate, world_status.in_set(SimulationSet::Telemetry));
+        app.add_systems(FixedUpdate, send_snapshots.in_set(SimulationSet::Snapshot));
+        app.add_systems(
+            FixedUpdate,
+            (expire_ship_grace, expire_wrecks)
+                .chain()
+                .in_set(SimulationSet::Persistence),
+        );
     }
 }
 
@@ -1423,15 +1444,20 @@ fn handle_loot(
 /// Registra a cadeia que decompõe o antigo `simulate_world` (MF-054,
 /// ADR-0008). Os sets rodam em ordem via `.chain()`: os handlers de input já
 /// consumiram as mensagens do client, então aqui entram movimento → zonas →
-/// combate → destruição.
+/// combate → destruição → economia → telemetria → snapshot → persistência.
 fn simulate_world(app: &mut App) {
     app.configure_sets(
         FixedUpdate,
         (
+            SimulationSet::Input,
             SimulationSet::Movement,
             SimulationSet::Zones,
             SimulationSet::Combat,
             SimulationSet::Destruction,
+            SimulationSet::EconomyConsequences,
+            SimulationSet::Telemetry,
+            SimulationSet::Snapshot,
+            SimulationSet::Persistence,
         )
             .chain(),
     );
@@ -2139,7 +2165,7 @@ fn expire_wrecks(
 }
 
 /// Persiste o buffer `LiveWreckRecords` para o store ativo (MF-027 cont.).
-/// Roda após `expire_wrecks` no `Update` schedule para que a lista em
+/// Roda após `expire_wrecks` no fim do `FixedUpdate`, para que a lista em
 /// memória reflita as remoções do tick antes da escrita.
 fn persist_wrecks(store: Res<crate::persist::StoreHandle>, live_wrecks: Res<LiveWreckRecords>) {
     store.save_wreck_quiet(&live_wrecks.0);

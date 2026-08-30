@@ -14,6 +14,7 @@ use mareforge_protocol::{EquipItem, LoadoutLine, LoadoutResult, LoadoutSnapshot,
 use tracing::info;
 
 use crate::net::{DevItems, ReliableChannel, ServerShip};
+use crate::sets::SimulationSet;
 
 /// Envia o snapshot do loadout a partir de uma lista de custódias instaladas
 /// — usado no hello (navio recém-restaurado ainda não está no ECS).
@@ -34,7 +35,10 @@ pub struct LoadoutPlugin;
 
 impl Plugin for LoadoutPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(FixedUpdate, (handle_equip, handle_unequip));
+        app.add_systems(
+            FixedUpdate,
+            (handle_equip, handle_unequip).in_set(SimulationSet::Input),
+        );
     }
 }
 

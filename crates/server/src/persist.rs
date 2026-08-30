@@ -562,7 +562,7 @@ impl StateStore for PostgresStateStore {
             let Ok(kind) = kind.parse::<StoredShipKind>() else {
                 return Err(format!("navio {id} com ship_kind desconhecido"));
             };
-            let presence: VesselPresence = serde_json::from_str(&presence)
+            let presence = decode_presence(&presence)
                 .map_err(|error| format!("navio {id} com presence ilegível: {error}"))?;
 
             let rows = sqlx::query_as::<_, (Uuid, Uuid, i32, Option<i16>, serde_json::Value)>(
@@ -733,6 +733,19 @@ impl StateStore for PostgresStateStore {
     }
 }
 
+/// Aceita a representação JSON atual e o default textual da primeira
+/// migração MF-049. Bancos que já receberam `AtSea` não perdem o navio no
+/// restore antes do primeiro salvamento pelo servidor novo.
+fn decode_presence(value: &str) -> Result<VesselPresence, serde_json::Error> {
+    serde_json::from_str(value).or_else(|json_error| {
+        if value == "AtSea" {
+            Ok(VesselPresence::AtSea)
+        } else {
+            Err(json_error)
+        }
+    })
+}
+
 /// Wrapper para parse do kind de ledger armazenado ("mint"/"burn"/"trade").
 struct StoredLedgerKind(LedgerKind);
 
@@ -849,4 +862,21 @@ pub fn store_from_env() -> StoreHandle {
     }
     tracing::info!("persistência: nenhuma (dev puro, mundo descartável)");
     StoreHandle(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_text_presence_default_decodes_without_discarding_ship() {
+        assert_eq!(
+            decode_presence("AtSea").expect("default da migração é compatível"),
+            VesselPresence::AtSea
+        );
+        assert_eq!(
+            decode_presence("\"AtSea\"").expect("formato JSON atual é compatível"),
+            VesselPresence::AtSea
+        );
+    }
 }

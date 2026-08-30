@@ -9,12 +9,12 @@ use std::time::Instant;
 
 use bevy::app::{App, AppExit, TerminalCtrlCHandlerPlugin};
 use bevy::ecs::event::EventReader;
-use bevy::prelude::{IntoSystemConfigs, Res, Resource, Update};
+use bevy::prelude::{IntoSystemConfigs, Query, Res, Resource, Update};
 use mareforge_domain_economy::Ledger;
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::net::Metrics;
+use crate::net::{Metrics, ServerShip, TripTelemetry};
 
 /// Identidade de sessão gerada no boot quando `--playtest` está ativo.
 #[derive(Resource, Debug, Clone, Copy)]
@@ -51,13 +51,38 @@ struct PlaytestReport {
 /// Monta o resumo a partir do `Metrics` e do `Ledger` já existentes. Não
 /// adiciona nenhuma medição nova: valores que não existem em nenhuma fonte
 /// autoritativa ficariam em zero.
-fn build_report(session_duration: f64, metrics: &Metrics, ledger: &Ledger) -> PlaytestReport {
+fn build_report<'a>(
+    session_duration: f64,
+    metrics: &Metrics,
+    ledger: &Ledger,
+    active_trips: impl Iterator<Item = &'a TripTelemetry>,
+) -> PlaytestReport {
     let completed_routes = metrics.completed_routes.values().sum::<u64>();
     let average_trip_duration = if metrics.trip_count == 0 {
         0.0
     } else {
         metrics.trip_total_secs / metrics.trip_count as f64
     };
+    let active = active_trips.fold((0u64, 0u64, 0u64), |totals, trip| {
+        let (value_at_risk, priced, unpriced) = totals;
+        (
+            value_at_risk.saturating_add(if trip.unpriced_quantity == 0 {
+                trip.marked_cargo_value
+            } else {
+                0
+            }),
+            priced.saturating_add(u64::from(trip.priced_quantity)),
+            unpriced.saturating_add(u64::from(trip.unpriced_quantity)),
+        )
+    });
+    let priced_items = metrics.cargo_value_priced_items.saturating_add(active.1);
+    let unpriced_items = metrics.cargo_value_unpriced_items.saturating_add(active.2);
+    let cargo_value_coverage = if priced_items + unpriced_items == 0 {
+        100.0
+    } else {
+        priced_items as f32 / (priced_items + unpriced_items) as f32 * 100.0
+    };
+
     PlaytestReport {
         session_duration,
         // TODO(MF-055): a contagem de jogadores distintos não existe na
@@ -66,8 +91,8 @@ fn build_report(session_duration: f64, metrics: &Metrics, ledger: &Ledger) -> Pl
         trips: metrics.trip_count,
         completed_routes,
         average_trip_duration,
-        cargo_value_at_risk: metrics.cargo_value_at_risk_total,
-        cargo_value_coverage: metrics.cargo_value_coverage_pct,
+        cargo_value_at_risk: metrics.cargo_value_at_risk_total.saturating_add(active.0),
+        cargo_value_coverage,
         pvp_engagements: metrics.pvp_engagements,
         ship_losses_by_kind: metrics.ship_losses_by_kind,
         wrecks_looted: metrics.wrecks_looted,
@@ -110,11 +135,17 @@ fn dump_on_exit(
     boot: Res<PlaytestBoot>,
     metrics: Res<Metrics>,
     market: Res<crate::market::ServerMarket>,
+    ships: Query<&ServerShip>,
 ) {
     if exits.read().next().is_none() {
         return;
     }
-    let report = build_report(boot.0.elapsed().as_secs_f64(), &metrics, &market.ledger);
+    let report = build_report(
+        boot.0.elapsed().as_secs_f64(),
+        &metrics,
+        &market.ledger,
+        ships.iter().filter_map(|ship| ship.trip.as_ref()),
+    );
     match write_report(&report, session.0) {
         Ok(()) => tracing::info!(session = %session.0, "playtest report written"),
         Err(error) => tracing::error!(error = %error, "failed to write playtest report"),
@@ -145,7 +176,7 @@ mod tests {
 
     #[test]
     fn report_builder_emits_zero_fields_for_empty_metrics() {
-        let report = build_report(0.0, &Metrics::default(), &Ledger::default());
+        let report = build_report(0.0, &Metrics::default(), &Ledger::default(), [].iter());
 
         assert_eq!(report.session_duration, 0.0);
         assert_eq!(report.players_seen, 0);
@@ -173,7 +204,7 @@ mod tests {
             ..Metrics::default()
         };
 
-        let report = build_report(10.0, &metrics, &Ledger::default());
+        let report = build_report(10.0, &metrics, &Ledger::default(), [].iter());
 
         assert_eq!(report.average_trip_duration, 0.0);
         assert_eq!(report.cargo_value_at_risk, 500);
@@ -201,9 +232,40 @@ mod tests {
             5,
         );
 
-        let report = build_report(0.0, &metrics, &Ledger::default());
+        let report = build_report(0.0, &metrics, &Ledger::default(), [].iter());
 
         assert_eq!(report.completed_routes, 8);
         assert_eq!(report.average_trip_duration, 10.0);
+    }
+
+    #[test]
+    fn report_includes_priced_active_trip_without_counting_it_as_completed() {
+        let active = [TripTelemetry {
+            started_at: 0.0,
+            origin: RegionId::new(),
+            marked_cargo_value: 250,
+            priced_quantity: 5,
+            unpriced_quantity: 0,
+        }];
+        let report = build_report(0.0, &Metrics::default(), &Ledger::default(), active.iter());
+
+        assert_eq!(report.trips, 0);
+        assert_eq!(report.cargo_value_at_risk, 250);
+        assert_eq!(report.cargo_value_coverage, 100.0);
+    }
+
+    #[test]
+    fn report_includes_unpriced_active_trip_in_coverage_without_zero_valuation() {
+        let active = [TripTelemetry {
+            started_at: 0.0,
+            origin: RegionId::new(),
+            marked_cargo_value: 0,
+            priced_quantity: 0,
+            unpriced_quantity: 4,
+        }];
+        let report = build_report(0.0, &Metrics::default(), &Ledger::default(), active.iter());
+
+        assert_eq!(report.cargo_value_at_risk, 0);
+        assert_eq!(report.cargo_value_coverage, 0.0);
     }
 }
