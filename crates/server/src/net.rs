@@ -325,6 +325,7 @@ impl Plugin for ServerNetPlugin {
         app.init_resource::<SnapshotClock>();
         app.init_resource::<Metrics>();
         app.init_resource::<crate::nodes::NodeIdCounter>();
+        app.init_resource::<LiveWreckRecords>();
         // Persistência (MF-033/034): o store nasce do ambiente (Postgres de
         // produção, arquivo de dev, ou nenhum) e amarra mercado e navios.
         let store = crate::persist::store_from_env();
@@ -382,6 +383,11 @@ impl Plugin for ServerNetPlugin {
         app.add_systems(Startup, crate::npc::setup_npcs.after(start_server));
         app.add_systems(Startup, crate::market::load_state.after(start_server));
         app.add_systems(Update, crate::market::save_state);
+        // MF-027 cont.: wrecks persistem como snapshot derivado do estado
+        // em memória. O `persist_wrecks` corre após o tick para evitar
+        // pressão no hot loop.
+        app.add_systems(Startup, load_wrecks.after(crate::market::load_state));
+        app.add_systems(Update, persist_wrecks.after(expire_wrecks));
         // (Bevy 0.15 implementa tuplas de sistemas até 15 elementos — o
         // tick do A1 é grande demais para uma tupla só: duas rodadas.)
         app.add_systems(
@@ -473,7 +479,10 @@ pub struct ServerWreck {
     /// Personagem com direito exclusivo de saque na janela inicial (MF-035:
     /// o killer é o personagem, não a conexão).
     pub exclusive_looter: Option<CharacterId>,
-    pub spawned_at: Instant,
+    /// Segundos decorridos no momento do spawn, relativos ao
+    /// `Bevy::Time::elapsed_secs()` no momento do spawn. Persistido para
+    /// permitir restore após restart com o tempo de vida restante correto.
+    pub spawned_at_secs: f32,
     pub x: f32,
     pub y: f32,
 }
@@ -486,6 +495,14 @@ pub struct ProjectileIdCounter(pub u32);
 
 #[derive(Resource, Default)]
 pub struct WreckIdCounter(pub u32);
+
+/// Buffer em memória do snapshot de wrecks persistidos (MF-027 cont.).
+/// `simulate_world` e `expire_wrecks` mantêm este Resource em sincronia
+/// com os `ServerWreck` ativos; o sistema `persist_wrecks` drena para o
+/// store. Separar a escrita do store do simulate_world mantém o limite
+/// de SystemParams do Bevy 0.15 (15 por sistema).
+#[derive(Resource, Default)]
+pub struct LiveWreckRecords(pub Vec<crate::persist::WreckRecord>);
 
 /// Telemetria econômica (MF-029, §71): faucets, sinks e perdas contados no
 /// ponto onde acontecem — nada é derivado retroativamente.
@@ -1036,6 +1053,7 @@ fn handle_loot(
     mut loot_events: EventReader<ServerReceiveMessage<LootWreck>>,
     mut connection_manager: ResMut<ConnectionManager>,
     dev: Res<DevItems>,
+    time: Res<Time>,
     wreck_policy: Res<ServerWreckPolicy>,
     tuning: Res<CombatTuning>,
     mut ships: Query<&mut ServerShip>,
@@ -1066,7 +1084,7 @@ fn handle_loot(
             continue;
         };
 
-        let elapsed = wreck.spawned_at.elapsed().as_secs_f32();
+        let elapsed = time.elapsed_secs() - wreck.spawned_at_secs;
         if !can_loot(
             elapsed,
             &wreck_policy.0,
@@ -1177,6 +1195,7 @@ fn simulate_world(
     tuning: Res<CombatTuning>,
     map: Res<ServerWorldMap>,
     risk_policy: Res<ServerRiskPolicy>,
+    mut live_wrecks: ResMut<LiveWreckRecords>,
     mut metrics: ResMut<Metrics>,
     time: Res<Time>,
     mut ships: Query<(Entity, &mut ServerShip)>,
@@ -1409,15 +1428,27 @@ fn simulate_world(
                 .iter()
                 .find(|(_, candidate)| candidate.ship_id == killer_ship_id)
                 .map(|(_, candidate)| candidate.character);
+            let spawned_at_secs = time.elapsed_secs();
             commands.spawn((ServerWreck {
                 wreck_num,
                 wreck_id,
                 chest,
                 exclusive_looter: exclusive,
-                spawned_at: Instant::now(),
+                spawned_at_secs,
                 x: victim_x,
                 y: victim_y,
             },));
+            // Buffer atualizado em memória; a persistência acontece no
+            // sistema `persist_wrecks` (corre fora do simulate_world para
+            // respeitar o limite de SystemParams).
+            live_wrecks.0.push(crate::persist::WreckRecord {
+                wreck_num,
+                wreck_id,
+                x: victim_x,
+                y: victim_y,
+                exclusive_looter: exclusive,
+                spawned_at_secs: spawned_at_secs as f64,
+            });
             // WreckSpawned não existe mais (MF-031): o wreck aparece no
             // snapshot de quem o enxerga, com o mesmo recorte de AOI.
             info!(
@@ -1653,18 +1684,107 @@ fn expire_ship_grace(
 /// Sem broadcast (MF-031): cada client percebe pela ausência no snapshot.
 fn expire_wrecks(
     mut commands: Commands,
+    time: Res<Time>,
     wreck_policy: Res<ServerWreckPolicy>,
+    mut live_wrecks: ResMut<LiveWreckRecords>,
     wrecks: Query<(Entity, &ServerWreck)>,
 ) {
+    let mut any_expired = false;
     for (entity, wreck) in &wrecks {
-        if is_expired(wreck.spawned_at.elapsed().as_secs_f32(), &wreck_policy.0) {
+        let elapsed = time.elapsed_secs() - wreck.spawned_at_secs;
+        if is_expired(elapsed, &wreck_policy.0) {
             info!(
                 wreck_num = wreck.wreck_num,
                 "wreck expirou e afundou de vez"
             );
             commands.entity(entity).despawn();
+            any_expired = true;
         }
     }
+    if any_expired {
+        // Reconstrói o buffer em memória a partir dos wrecks que sobraram.
+        live_wrecks.0.clear();
+        for (_, wreck) in &wrecks {
+            live_wrecks.0.push(crate::persist::WreckRecord {
+                wreck_num: wreck.wreck_num,
+                wreck_id: wreck.wreck_id,
+                x: wreck.x,
+                y: wreck.y,
+                exclusive_looter: wreck.exclusive_looter,
+                spawned_at_secs: wreck.spawned_at_secs as f64,
+            });
+        }
+    }
+}
+
+/// Persiste o buffer `LiveWreckRecords` para o store ativo (MF-027 cont.).
+/// Roda após `expire_wrecks` no `Update` schedule para que a lista em
+/// memória reflita as remoções do tick antes da escrita.
+fn persist_wrecks(store: Res<crate::persist::StoreHandle>, live_wrecks: Res<LiveWreckRecords>) {
+    store.save_wreck_quiet(&live_wrecks.0);
+}
+
+/// Carrega os wrecks persistidos e respawna os que ainda não expiraram
+/// (MF-027 cont., PRD §67). O `spawned_at_secs` preservado é interpretado
+/// como "tempo decorrido no boot anterior"; o novo `spawned_at_secs` é
+/// calculado como `now - elapsed_in_old_boot` para preservar o tempo de
+/// vida restante.
+fn load_wrecks(
+    mut commands: Commands,
+    store: Res<crate::persist::StoreHandle>,
+    time: Res<Time>,
+    wreck_policy: Res<ServerWreckPolicy>,
+    mut wreck_ids: ResMut<WreckIdCounter>,
+    mut live_wrecks: ResMut<LiveWreckRecords>,
+) {
+    let Some(store) = store.0.clone() else {
+        return;
+    };
+    let records = match store.load_wreck_snapshot() {
+        Ok(records) => records,
+        Err(error) => {
+            warn!(error = %error, "snapshot de wrecks ilegível; mundo sem wrecks");
+            return;
+        }
+    };
+    let now = time.elapsed_secs();
+    let mut respawned = 0u32;
+    let mut dropped = 0u32;
+    for record in records {
+        let elapsed_in_old_boot = record.spawned_at_secs as f32;
+        let remaining = wreck_policy.0.total_lifetime_secs - elapsed_in_old_boot;
+        if remaining <= 0.0 {
+            dropped += 1;
+            continue;
+        }
+        let new_spawned_at_secs = now - elapsed_in_old_boot;
+        let chest = WreckChest::new(record.wreck_id);
+        commands.spawn((ServerWreck {
+            wreck_num: record.wreck_num,
+            wreck_id: record.wreck_id,
+            chest,
+            exclusive_looter: record.exclusive_looter,
+            spawned_at_secs: new_spawned_at_secs,
+            x: record.x,
+            y: record.y,
+        },));
+        live_wrecks.0.push(crate::persist::WreckRecord {
+            wreck_num: record.wreck_num,
+            wreck_id: record.wreck_id,
+            x: record.x,
+            y: record.y,
+            exclusive_looter: record.exclusive_looter,
+            spawned_at_secs: record.spawned_at_secs,
+        });
+        respawned += 1;
+    }
+    if let Some(max) = live_wrecks.0.iter().map(|w| w.wreck_num).max() {
+        wreck_ids.0 = wreck_ids.0.max(max + 1);
+    }
+    info!(
+        respawned,
+        dropped, "wrecks restaurados do store (MF-027 cont.)"
+    );
 }
 
 /// Orders expiradas (MF-041): escrow volta ao storage do seller e o client

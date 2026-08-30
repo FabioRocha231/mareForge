@@ -25,7 +25,8 @@ use bevy::ecs::prelude::Resource;
 use mareforge_domain_economy::{LedgerKind, MarketOrder, Money, OrderStatus};
 use mareforge_domain_items::{Custody, ItemInstance};
 use mareforge_domain_ships::ShipKind;
-use mareforge_shared::ids::{CharacterId, ShipInstanceId};
+use mareforge_shared::ids::{CharacterId, ShipInstanceId, WreckId};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::market::MarketSnapshot;
@@ -46,6 +47,23 @@ pub struct ShipRecord {
     pub equipped: Vec<Custody>,
 }
 
+/// Registro persistido de um wreck (MF-027 cont., PRD §67): apenas os
+/// metadados do destroço. O conteúdo econômico do baú (`WreckChest`) já
+/// vive em `item_instances` filtrado por `ItemLocation::Wreck`; esta
+/// tabela guarda só o invólucro para que o wreck reapareça após restart
+/// com killer, posição e janela corretos.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WreckRecord {
+    pub wreck_num: u32,
+    pub wreck_id: WreckId,
+    pub x: f32,
+    pub y: f32,
+    pub exclusive_looter: Option<CharacterId>,
+    /// Segundos decorridos no momento do spawn, relativos ao boot do
+    /// server. Permite recompor o tempo de vida restante após restart.
+    pub spawned_at_secs: f64,
+}
+
 /// O contrato de persistência do servidor (MF-033). Síncrono de propósito:
 /// o loop Bevy chama e espera; implementações bloqueantes (Postgres) rodam
 /// em runtime próprio.
@@ -61,6 +79,13 @@ pub trait StateStore: Send + Sync {
     /// `true` = salvamento periódico aceitável (arquivo de dev);
     /// `false` = persistência por operação crítica (produção).
     fn periodic_saving(&self) -> bool;
+    /// Snapshot completo de wrecks ativos. Vazio = nenhum wreck vivo.
+    fn load_wreck_snapshot(&self) -> Result<Vec<WreckRecord>, String>;
+    /// Persiste o snapshot de wrecks, substituindo o anterior atomicamente.
+    fn save_wreck_snapshot(&self, wrecks: &[WreckRecord]) -> Result<(), String>;
+    /// Remove um wreck específico (expiração pontual antes do próximo
+    /// snapshot completo).
+    fn delete_wreck(&self, wreck_num: u32) -> Result<(), String>;
 }
 
 /// Snapshot JSON em arquivo (`MAREFORGE_STATE_PATH`), escrita atômica via
@@ -108,6 +133,38 @@ impl StateStore for FileStateStore {
 
     fn periodic_saving(&self) -> bool {
         true
+    }
+
+    fn load_wreck_snapshot(&self) -> Result<Vec<WreckRecord>, String> {
+        let mut path = self.path.clone();
+        path.set_extension("wrecks.json");
+        match std::fs::read(&path) {
+            Ok(bytes) => serde_json::from_slice(&bytes)
+                .map_err(|error| format!("wreck snapshot ilegível: {error}")),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn save_wreck_snapshot(&self, wrecks: &[WreckRecord]) -> Result<(), String> {
+        let bytes = serde_json::to_vec_pretty(wrecks).map_err(|error| error.to_string())?;
+        let mut path = self.path.clone();
+        path.set_extension("wrecks.json");
+        let mut temp = path.clone();
+        temp.set_extension("wrecks.tmp");
+        // Escrita atômica via rename: o snapshot de wrecks é arquivo
+        // separado do mercado; o crash entre as duas escritas deixa cada
+        // arquivo consistente (rename é atômico por arquivo).
+        std::fs::write(&temp, bytes)
+            .and_then(|()| std::fs::rename(&temp, &path))
+            .map_err(|error| error.to_string())
+    }
+
+    fn delete_wreck(&self, _wreck_num: u32) -> Result<(), String> {
+        // No store de arquivo, a remoção individual é aplicada no próximo
+        // save_wreck_snapshot completo. Mantemos a no-op para não quebrar
+        // o contrato.
+        Ok(())
     }
 }
 
@@ -595,6 +652,72 @@ impl StateStore for PostgresStateStore {
     fn periodic_saving(&self) -> bool {
         false
     }
+
+    fn load_wreck_snapshot(&self) -> Result<Vec<WreckRecord>, String> {
+        self.runtime.block_on(async {
+            let rows = sqlx::query_as::<
+                _,
+                (i32, Uuid, f64, f64, Option<Uuid>, f64),
+            >(
+                "SELECT wreck_num, wreck_id, position_x, position_y,                  exclusive_looter, spawned_at_secs FROM wrecks",
+            )
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|error| error.to_string())?;
+
+            rows.into_iter()
+                .map(|(num, id, x, y, looter, spawned)| {
+                    Ok(WreckRecord {
+                        wreck_num: num.max(0) as u32,
+                        wreck_id: WreckId(id),
+                        x: x as f32,
+                        y: y as f32,
+                        exclusive_looter: looter.map(CharacterId),
+                        spawned_at_secs: spawned.max(0.0),
+                    })
+                })
+                .collect()
+        })
+    }
+
+    fn save_wreck_snapshot(&self, wrecks: &[WreckRecord]) -> Result<(), String> {
+        self.runtime.block_on(async {
+            // Mesma semântica do save_market: DELETE+INSERT dentro de uma
+            // transação. O snapshot é pequeno (uma linha por wreck ativo).
+            let mut tx = self.pool.begin().await.map_err(|error| error.to_string())?;
+            sqlx::query("DELETE FROM wrecks")
+                .execute(&mut *tx)
+                .await
+                .map_err(|error| error.to_string())?;
+            for wreck in wrecks {
+                sqlx::query(
+                    "INSERT INTO wrecks                      (wreck_num, wreck_id, position_x, position_y,                       exclusive_looter, spawned_at_secs)                      VALUES ($1, $2, $3, $4, $5, $6)                      ON CONFLICT (wreck_num) DO UPDATE SET                      wreck_id = EXCLUDED.wreck_id,                      position_x = EXCLUDED.position_x,                      position_y = EXCLUDED.position_y,                      exclusive_looter = EXCLUDED.exclusive_looter,                      spawned_at_secs = EXCLUDED.spawned_at_secs",
+                )
+                .bind(wreck.wreck_num as i32)
+                .bind(wreck.wreck_id.0)
+                .bind(wreck.x as f64)
+                .bind(wreck.y as f64)
+                .bind(wreck.exclusive_looter.map(|c| c.0))
+                .bind(wreck.spawned_at_secs)
+                .execute(&mut *tx)
+                .await
+                .map_err(|error| error.to_string())?;
+            }
+            tx.commit().await.map_err(|error| error.to_string())?;
+            Ok(())
+        })
+    }
+
+    fn delete_wreck(&self, wreck_num: u32) -> Result<(), String> {
+        self.runtime.block_on(async {
+            sqlx::query("DELETE FROM wrecks WHERE wreck_num = $1")
+                .bind(wreck_num as i32)
+                .execute(&self.pool)
+                .await
+                .map_err(|error| error.to_string())?;
+            Ok(())
+        })
+    }
 }
 
 /// Wrapper para parse do kind de ledger armazenado ("mint"/"burn"/"trade").
@@ -673,6 +796,17 @@ impl StoreHandle {
         if let Some(store) = &self.0 {
             if let Err(error) = store.save_market(snapshot) {
                 tracing::warn!(error = %error, "falha ao persistir estado econômico");
+            }
+        }
+    }
+
+    /// Persiste o snapshot de wrecks ativos, logando falha (mesma
+    /// filosofia do save_market_quiet: a memória é a verdade da sessão,
+    /// o store é a âncora).
+    pub fn save_wreck_quiet(&self, wrecks: &[WreckRecord]) {
+        if let Some(store) = &self.0 {
+            if let Err(error) = store.save_wreck_snapshot(wrecks) {
+                tracing::warn!(error = %error, "falha ao persistir wrecks");
             }
         }
     }

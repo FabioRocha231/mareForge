@@ -328,3 +328,57 @@ fn expired_order_roundtrips_with_escrow_returned() {
         .sum::<u32>();
     assert_eq!(storage_quantity, 10);
 }
+
+/// MF-027 cont.: o snapshot de wrecks sobrevive ao banco. Dois wrecks
+/// ativos (com e sem exclusive_looter) roundtrippam com todos os campos,
+/// e `delete_wreck` remove pontualmente.
+#[test]
+fn wreck_snapshot_roundtrips_through_postgres() {
+    let _guard = test_lock();
+    let Some((store, url)) = store_or_skip() else {
+        return;
+    };
+    reset_database(&url);
+
+    let killer = CharacterId::new();
+    let records = vec![
+        mareforge_server::persist::WreckRecord {
+            wreck_num: 0,
+            wreck_id: mareforge_shared::ids::WreckId::new(),
+            x: 120.0,
+            y: -45.0,
+            exclusive_looter: Some(killer),
+            spawned_at_secs: 12.5,
+        },
+        mareforge_server::persist::WreckRecord {
+            wreck_num: 1,
+            wreck_id: mareforge_shared::ids::WreckId::new(),
+            x: -300.0,
+            y: 80.0,
+            exclusive_looter: None,
+            spawned_at_secs: 90.25,
+        },
+    ];
+
+    store
+        .save_wreck_snapshot(&records)
+        .expect("save_wreck_snapshot grava dois wrecks");
+
+    let restored = store
+        .load_wreck_snapshot()
+        .expect("load_wreck_snapshot lê o snapshot");
+    assert_eq!(restored.len(), 2);
+    assert_eq!(restored[0].wreck_num, 0);
+    assert_eq!(restored[0].x, 120.0);
+    assert_eq!(restored[0].y, -45.0);
+    assert_eq!(restored[0].exclusive_looter, Some(killer));
+    assert!((restored[0].spawned_at_secs - 12.5).abs() < 1e-6);
+    assert_eq!(restored[1].wreck_num, 1);
+    assert_eq!(restored[1].x, -300.0);
+    assert_eq!(restored[1].exclusive_looter, None);
+
+    store.delete_wreck(0).expect("delete_wreck");
+    let remaining = store.load_wreck_snapshot().expect("load após delete");
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].wreck_num, 1);
+}
