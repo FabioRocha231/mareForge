@@ -38,6 +38,8 @@ id_type!(SessionId);
 id_type!(PlayerId);
 id_type!(ShipInstanceId);
 id_type!(ShipDefinitionId);
+id_type!(WreckId);
+id_type!(DestructionEventId);
 id_type!(ItemInstanceId);
 id_type!(ItemDefinitionId);
 id_type!(RegionId);
