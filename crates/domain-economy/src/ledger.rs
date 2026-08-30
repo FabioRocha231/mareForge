@@ -27,7 +27,7 @@ pub struct LedgerEntry {
 }
 
 /// Append-only: `record` é a única mutação; nada remove nem edita.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Ledger {
     entries: Vec<LedgerEntry>,
 }

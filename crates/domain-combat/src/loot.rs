@@ -187,6 +187,12 @@ impl WreckChest {
         self.items.is_empty()
     }
 
+    /// Drena o baú de uma vez (§70: a operação de loot é a única vencedora —
+    /// o segundo saque encontra o baú vazio e falha, sem duplicar item).
+    pub fn drain(&mut self) -> Vec<Custody> {
+        std::mem::take(&mut self.items)
+    }
+
     /// Materializa um sobrevivente como instância real no baú.
     pub fn insert(&mut self, survivor: SurvivorItem, instance_id: ItemInstanceId) {
         self.items.push(Custody::new(

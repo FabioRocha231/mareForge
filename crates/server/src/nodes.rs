@@ -130,6 +130,7 @@ pub fn handle_gather(
     mut connection_manager: ResMut<ConnectionManager>,
     dev: Res<DevItems>,
     policy: Res<ServerGatherPolicy>,
+    mut metrics: ResMut<crate::net::Metrics>,
     mut ships: Query<&mut ServerShip>,
     mut nodes: Query<&mut ServerNode>,
 ) {
@@ -199,6 +200,7 @@ pub fn handle_gather(
                 ItemInstance::new_resource(ItemInstanceId::new(), server_node.node.resource, taken),
             )
             .expect("cabe: o espaço foi conferido acima");
+        metrics.items_gathered += u64::from(taken);
         if server_node.node.is_depleted() {
             server_node.respawn_at =
                 Some(Instant::now() + Duration::from_secs_f32(policy.0.respawn_secs));

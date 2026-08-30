@@ -17,6 +17,8 @@ mareforge-domain-world = { path = "../domain-world" }
 mareforge-protocol = { path = "../protocol" }
 mareforge-shared = { path = "../shared" }
 chrono = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 smallvec = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }

@@ -137,38 +137,53 @@ impl CargoHold {
         std::mem::take(&mut self.slots)
     }
 
-    /// Retira `quantity` unidades de uma definição (primeiro slot que atenda).
+    /// Retira `quantity` unidades de uma definição, agregando pilhas
+    /// quando necessário (coleta fracionada tem que permitir craft inteiro).
     pub fn remove(
         &mut self,
         definition: mareforge_shared::ids::ItemDefinitionId,
         quantity: u32,
     ) -> Result<ItemInstance, CargoError> {
-        let Some(position) = self
+        let available: u32 = self
             .slots
             .iter()
-            .position(|custody| custody.instance.definition == definition)
-        else {
-            return Err(CargoError::NotEnoughItems {
-                requested: quantity,
-            });
-        };
-        let slot = &mut self.slots[position];
-        if slot.instance.quantity < quantity {
+            .filter(|custody| custody.instance.definition == definition)
+            .map(|custody| custody.instance.quantity)
+            .sum();
+        if available < quantity {
             return Err(CargoError::NotEnoughItems {
                 requested: quantity,
             });
         }
-        slot.instance.quantity -= quantity;
-        let taken = ItemInstance {
-            id: slot.instance.id,
+        // Identidade e durabilidade vêm da primeira pilha tocada.
+        let mut remaining = quantity;
+        let mut index = 0;
+        let mut source_id = None;
+        let mut source_durability = None;
+        while remaining > 0 {
+            if self.slots[index].instance.definition != definition {
+                index += 1;
+                continue;
+            }
+            if source_id.is_none() {
+                source_id = Some(self.slots[index].instance.id);
+                source_durability = self.slots[index].instance.durability;
+            }
+            let take = self.slots[index].instance.quantity.min(remaining);
+            self.slots[index].instance.quantity -= take;
+            remaining -= take;
+            if self.slots[index].instance.quantity == 0 {
+                self.slots.remove(index);
+            } else {
+                index += 1;
+            }
+        }
+        Ok(ItemInstance {
+            id: source_id.expect("há pelo menos uma pilha (verificado acima)"),
             definition,
             quantity,
-            durability: slot.instance.durability,
-        };
-        if slot.instance.quantity == 0 {
-            self.slots.remove(position);
-        }
-        Ok(taken)
+            durability: source_durability,
+        })
     }
 }
 
@@ -321,6 +336,26 @@ mod tests {
         assert!(drained
             .iter()
             .all(|custody| matches!(custody.location, ItemLocation::ShipCargo(_))));
+    }
+
+    #[test]
+    fn remove_aggregates_across_stacks() {
+        let (catalog, timber) = catalog_with_timber(1);
+        let mut hold = CargoHold::new(ShipInstanceId::new(), 100);
+        hold.insert(&catalog, instance(timber, 10)).unwrap();
+        hold.insert(&catalog, instance(timber, 10)).unwrap();
+        hold.insert(&catalog, instance(timber, 10)).unwrap();
+
+        // Três coletas de 10 têm que permitir retirar 15 de uma vez.
+        let taken = hold.remove(timber, 15).unwrap();
+        assert_eq!(taken.quantity, 15);
+        let total: u32 = hold
+            .items()
+            .iter()
+            .map(|custody| custody.instance.quantity)
+            .sum();
+        assert_eq!(total, 15);
+        assert!(hold.remove(timber, 16).is_err());
     }
 
     #[test]

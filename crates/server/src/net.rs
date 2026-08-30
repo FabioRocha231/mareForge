@@ -256,6 +256,7 @@ impl Plugin for ServerNetPlugin {
         app.insert_resource(ServerRiskPolicy(RiskPolicy::default()));
         app.insert_resource(ServerGatherPolicy(GatheringPolicy::default()));
         app.insert_resource(crate::market::ServerMarket::new());
+        app.init_resource::<Metrics>();
         app.init_resource::<crate::nodes::NodeIdCounter>();
         let dev_items = DevItems::new();
         app.insert_resource(crate::crafting::DevShips::new());
@@ -299,6 +300,8 @@ impl Plugin for ServerNetPlugin {
         app.register_message::<MarketResult>(ChannelDirection::ServerToClient);
         app.add_systems(Startup, start_server);
         app.add_systems(Startup, crate::nodes::spawn_dev_nodes.after(start_server));
+        app.add_systems(Startup, crate::market::load_state.after(start_server));
+        app.add_systems(Update, crate::market::save_state);
         app.add_systems(
             FixedUpdate,
             (
@@ -372,6 +375,18 @@ pub struct ProjectileIdCounter(pub u32);
 
 #[derive(Resource, Default)]
 pub struct WreckIdCounter(pub u32);
+
+/// Telemetria econômica (MF-029, §71): faucets, sinks e perdas contados no
+/// ponto onde acontecem — nada é derivado retroativamente.
+#[derive(Resource, Debug, Default, Clone, Copy)]
+pub struct Metrics {
+    pub items_gathered: u64,
+    pub items_crafted: u64,
+    pub items_destroyed: u64,
+    pub ships_constructed: u64,
+    pub ships_destroyed: u64,
+    pub loot_transfers: u64,
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_ship_for(
@@ -692,7 +707,7 @@ fn handle_loot(
         let Some(mut ship) = ships.iter_mut().find(|ship| ship.client_id == client_id) else {
             continue;
         };
-        let Some((wreck_entity, wreck)) = wrecks
+        let Some((wreck_entity, mut wreck)) = wrecks
             .iter_mut()
             .find(|(_, wreck)| wreck.wreck_num == wreck_num)
         else {
@@ -739,6 +754,23 @@ fn handle_loot(
             continue;
         }
 
+        // §70/MF-028: só um vencedor. O despawn do Bevy é DEFERIDO — dois
+        // LootWreck no mesmo tick encontrariam a mesma entidade. O baú esvazia
+        // NA HORA; o segundo evento bate no guard de vazio abaixo.
+        if wreck.chest.is_empty() {
+            warn!(
+                wreck_num,
+                "wreck já saqueado neste tick (double loot barrado)"
+            );
+            let _ = connection_manager.send_message::<ReliableChannel, _>(
+                client_id,
+                &LootResult {
+                    wreck_id: wreck_num,
+                    success: false,
+                },
+            );
+            continue;
+        }
         // Transferência atômica: clona a intenção; só drena o baú se tudo couber.
         let incoming: Vec<Custody> = wreck.chest.items().to_vec();
         match ship.hold.take_all(&dev.catalog, incoming) {
@@ -752,6 +784,9 @@ fn handle_loot(
                     })
                     .sum::<u32>();
                 let stacks = moved.len() as u32;
+                // Drenagem imediata do baú (não-deferida): a prova de que o
+                // primeiro saque venceu fica visível para o resto do tick.
+                wreck.chest.drain();
                 commands.entity(wreck_entity).despawn();
                 let _ = connection_manager.send_message_to_target::<ReliableChannel, _>(
                     &WreckRemoved {
@@ -800,6 +835,7 @@ fn simulate_and_snapshot(
     tuning: Res<CombatTuning>,
     map: Res<ServerWorldMap>,
     risk_policy: Res<ServerRiskPolicy>,
+    mut metrics: ResMut<Metrics>,
     time: Res<Time>,
     mut ships: Query<(Entity, &mut ServerShip)>,
     mut projectiles: Query<(Entity, &mut ServerProjectile)>,
@@ -958,6 +994,7 @@ fn simulate_and_snapshot(
                     None
                 }
                 DamageOutcome::Destroyed => {
+                    metrics.ships_destroyed += 1;
                     info!(ship_id = target_ship_id, damage, "SHIP DESTROYED");
                     let _ = connection_manager.send_message_to_target::<ReliableChannel, _>(
                         &ShipDestroyed {
@@ -989,6 +1026,7 @@ fn simulate_and_snapshot(
 
         let destruction = DestructionEventId::new();
         let outcome = resolve_ship_destruction(destruction, &[], &cargo, &loot_policy.0);
+        metrics.items_destroyed += outcome.destroyed_items.len() as u64;
         info!(
             ship_id = target_ship_id,
             event = ?destruction,
@@ -1079,6 +1117,7 @@ fn world_status(
     time: Res<Time>,
     map: Res<ServerWorldMap>,
     market: Res<crate::market::ServerMarket>,
+    metrics: Res<Metrics>,
     ships: Query<&ServerShip>,
     mut timer: Local<f32>,
 ) {
@@ -1091,7 +1130,11 @@ fn world_status(
         gold_minted = market.ledger.minted().0,
         gold_burned = market.ledger.burned().0,
         market_volume = market.ledger.market_volume().0,
-        open_orders = market.ledger.entries().len(),
+        items_gathered = metrics.items_gathered,
+        items_crafted = metrics.items_crafted,
+        items_destroyed = metrics.items_destroyed,
+        ships_constructed = metrics.ships_constructed,
+        ships_destroyed = metrics.ships_destroyed,
         "economic pulse"
     );
     for ship in &ships {

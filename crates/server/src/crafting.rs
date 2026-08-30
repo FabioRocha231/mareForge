@@ -212,6 +212,7 @@ pub fn handle_craft(
     dev: Res<DevItems>,
     dev_ships: Res<DevShips>,
     dev_recipes: Res<DevRecipes>,
+    mut metrics: ResMut<crate::net::Metrics>,
     map: Res<ServerWorldMap>,
     mut ship_ids: ResMut<crate::net::ShipIdCounter>,
     mut ships: Query<(Entity, &mut ServerShip)>,
@@ -236,6 +237,7 @@ pub fn handle_craft(
             );
             match craft(recipe, &mut ship.hold, &dev.catalog, station) {
                 Ok(output) => {
+                    metrics.items_crafted += u64::from(output.quantity.max(1));
                     let name = dev
                         .catalog
                         .get(output.definition)
@@ -267,6 +269,7 @@ pub fn handle_craft(
             let built = build_ship_for_job(
                 &mut commands,
                 &mut connection_manager,
+                &mut metrics,
                 &dev,
                 &dev_ships,
                 &map.0,
@@ -290,6 +293,7 @@ pub fn handle_craft(
 fn build_ship_for_job(
     commands: &mut Commands,
     connection_manager: &mut ConnectionManager,
+    metrics: &mut crate::net::Metrics,
     dev: &DevItems,
     dev_ships: &DevShips,
     map: &WorldMap,
@@ -347,6 +351,7 @@ fn build_ship_for_job(
     let victim_client_id = old_ship.client_id;
     let old_ship_id = old_ship.ship_id;
     commands.entity(old_entity).despawn();
+    metrics.ships_constructed += 1;
     let new_ship_id = spawn_ship_for(
         commands,
         ship_ids,

@@ -73,6 +73,12 @@ pub enum MarketError {
     RegionMismatch,
     #[error("quantidade insuficiente na order: pediu {requested}, tem {available}")]
     InsufficientQuantity { requested: u32, available: u32 },
+    #[error("item não está no storage local")]
+    NotInStorage,
+    #[error("storage vazio ou inexistente nesta região")]
+    EmptyStorage,
+    #[error("essa order não pertence a este personagem")]
+    NotOrderOwner,
 }
 
 /// Validação de nova order (preço e quantidade positivos).
