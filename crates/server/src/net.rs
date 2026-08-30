@@ -570,6 +570,13 @@ pub struct Metrics {
     pub completed_routes: HashMap<TradeRouteKey, u64>,
     pub same_port_returns: u64,
     pub trips_sunk: u64,
+    /// MF-053: valor marcado no Undock de cada trip que saiu de um porto.
+    pub cargo_value_departed: u64,
+    /// MF-053: valor marcado das trips finalizadas em Dock bem-sucedido.
+    pub cargo_value_arrived: u64,
+    /// MF-053: valor marcado das trips finalizadas em ShipDestroyed. Carga
+    /// afundada não é carga destruída: parte pode sobreviver no wreck.
+    pub cargo_value_sunk: u64,
     /// MF-052: soma dos valores marcados das trips 100% priced e com carga.
     pub cargo_value_at_risk_total: u64,
     /// MF-052: denominador de `average_cargo_value_at_risk`.
@@ -618,17 +625,28 @@ fn finalize_marked_trip(
     metrics.trip_total_secs += (now - trip.started_at) as f64;
     metrics.trip_count += 1;
     match outcome {
-        TripOutcome::Docked(destination) if trip.origin != destination => {
-            *metrics
-                .completed_routes
-                .entry(TradeRouteKey {
-                    origin: trip.origin,
-                    destination,
-                })
-                .or_default() += 1;
+        TripOutcome::Docked(destination) => {
+            metrics.cargo_value_arrived = metrics
+                .cargo_value_arrived
+                .saturating_add(trip.marked_cargo_value);
+            if trip.origin != destination {
+                *metrics
+                    .completed_routes
+                    .entry(TradeRouteKey {
+                        origin: trip.origin,
+                        destination,
+                    })
+                    .or_default() += 1;
+            } else {
+                metrics.same_port_returns += 1;
+            }
         }
-        TripOutcome::Docked(_) => metrics.same_port_returns += 1,
-        TripOutcome::Sunk => metrics.trips_sunk += 1,
+        TripOutcome::Sunk => {
+            metrics.trips_sunk += 1;
+            metrics.cargo_value_sunk = metrics
+                .cargo_value_sunk
+                .saturating_add(trip.marked_cargo_value);
+        }
     }
 
     metrics.cargo_value_priced_items += u64::from(trip.priced_quantity);
@@ -651,6 +669,7 @@ fn finalize_marked_trip(
 /// falhamos em silêncio em vez de resetar medição).
 pub fn start_trip(
     ship: &mut ServerShip,
+    metrics: &mut Metrics,
     price_index: &crate::market::ServerPriceIndex,
     now: f32,
     origin_port: RegionId,
@@ -669,6 +688,9 @@ pub fn start_trip(
                 unpriced_quantity = unpriced_quantity.saturating_add(quantity);
             }
         }
+        metrics.cargo_value_departed = metrics
+            .cargo_value_departed
+            .saturating_add(marked_cargo_value);
         ship.trip = Some(TripTelemetry {
             started_at: now,
             origin: origin_port,
@@ -1876,6 +1898,9 @@ fn world_status(
         completed_routes = ?metrics.completed_routes,
         same_port_returns = metrics.same_port_returns,
         trips_sunk = metrics.trips_sunk,
+        cargo_value_departed = metrics.cargo_value_departed,
+        cargo_value_arrived = metrics.cargo_value_arrived,
+        cargo_value_sunk = metrics.cargo_value_sunk,
         average_cargo_value_at_risk,
         cargo_value_priced_items = metrics.cargo_value_priced_items,
         cargo_value_unpriced_items = metrics.cargo_value_unpriced_items,
@@ -2192,6 +2217,7 @@ fn port_storage_snapshot(
 fn handle_undock(
     mut undock_events: EventReader<ServerReceiveMessage<Undock>>,
     mut connection_manager: ResMut<ConnectionManager>,
+    mut metrics: ResMut<Metrics>,
     price_index: Res<crate::market::ServerPriceIndex>,
     time: Res<Time>,
     mut ships: Query<&mut ServerShip>,
@@ -2215,7 +2241,13 @@ fn handle_undock(
                 // MF-049: trip começa em undock bem-sucedido. Dock anterior
                 // já encerrou a trip anterior, então `start_trip` é o ponto
                 // de partida autoritativo.
-                start_trip(&mut ship, &price_index, time.elapsed_secs(), origin_port);
+                start_trip(
+                    &mut ship,
+                    &mut metrics,
+                    &price_index,
+                    time.elapsed_secs(),
+                    origin_port,
+                );
                 info!(ship_id = ship.ship_id, "navio desatracou");
                 let _ = connection_manager.send_message::<ReliableChannel, _>(
                     client_id,
