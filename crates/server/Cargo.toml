@@ -11,6 +11,7 @@ lightyear = "0.19"
 mareforge-domain-combat = { path = "../domain-combat" }
 mareforge-domain-items = { path = "../domain-items" }
 mareforge-domain-ships = { path = "../domain-ships" }
+mareforge-domain-world = { path = "../domain-world" }
 mareforge-protocol = { path = "../protocol" }
 mareforge-shared = { path = "../shared" }
 smallvec = "1"

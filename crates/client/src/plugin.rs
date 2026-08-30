@@ -5,6 +5,7 @@ use crate::ship::{
     lerp_projectile_visuals, lerp_ship_visuals, spawn_wreck_visuals, update_cargo_readout,
     upsert_projectile_visuals, upsert_ship_visuals, CargoReadout,
 };
+use crate::zone::ZonePlugin;
 
 pub struct ClientPlugin;
 
@@ -14,6 +15,7 @@ impl Plugin for ClientPlugin {
             // ADR-0008: simulação a 30 Hz; render desacoplado.
             .insert_resource(Time::<Fixed>::from_hz(30.0))
             .add_plugins(ClientNetPlugin)
+            .add_plugins(ZonePlugin)
             .add_systems(Startup, (setup_camera, setup_hud))
             .add_systems(
                 Update,

@@ -8,6 +8,7 @@ members = [
     "crates/domain-crafting",
     "crates/domain-ships",
     "crates/domain-combat",
+    "crates/domain-world",
     "crates/server",
     "crates/client",
     "crates/tools/db-migrate",

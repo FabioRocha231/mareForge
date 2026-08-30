@@ -18,7 +18,7 @@ use lightyear::prelude::*;
 use mareforge_domain_combat::BroadsideSide;
 use mareforge_protocol::{
     AssignShip, ClientHello, FireBroadside, LootResult, LootWreck, ServerWelcome, ShipDestroyed,
-    ShipInput, WorldSnapshot, WreckRemoved, WreckSpawned, PROTOCOL_VERSION,
+    ShipInput, WorldSnapshot, WreckRemoved, WreckSpawned, ZoneChanged, PROTOCOL_VERSION,
 };
 
 pub const SERVER_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 5000);
@@ -94,6 +94,7 @@ impl Plugin for ClientNetPlugin {
         app.register_message::<WreckSpawned>(ChannelDirection::ServerToClient);
         app.register_message::<WreckRemoved>(ChannelDirection::ServerToClient);
         app.register_message::<LootResult>(ChannelDirection::ServerToClient);
+        app.register_message::<ZoneChanged>(ChannelDirection::ServerToClient);
         app.init_resource::<crate::ship::DestroyedShips>();
         app.init_resource::<KnownWrecks>();
         app.add_systems(Startup, (connect, log_connecting));

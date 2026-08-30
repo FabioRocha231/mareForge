@@ -5,6 +5,7 @@
 //! client e servidor. Versionamento no handshake conforme ADR-0011.
 
 use mareforge_domain_combat::weapon::BroadsideSide;
+use mareforge_domain_world::RiskTier;
 use serde::{Deserialize, Serialize};
 
 /// Versão atual do protocolo. Qualquer mudança incompatível deve incrementar
@@ -13,7 +14,9 @@ use serde::{Deserialize, Serialize};
 /// v2: combate — FireBroadside, ShipDestroyed e projéteis no snapshot.
 /// v3: economia do naufrágio — cargo_weight no ShipState, ciclo de vida de
 ///     Wreck (WreckSpawned/WreckRemoved) e loot (LootWreck/LootResult).
-pub const PROTOCOL_VERSION: u16 = 3;
+/// v4: geografia de risco (MF-017) — ZoneChanged com tier e nome da zona;
+///     o servidor é quem calcula a zona real (PRD §10), a UI representa.
+pub const PROTOCOL_VERSION: u16 = 4;
 
 /// Primeira mensagem do client após conectar (ADR-0011).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,6 +124,17 @@ pub struct LootResult {
     pub success: bool,
 }
 
+/// A zona real do navio mudou (PRD §10, MF-017). O servidor define a zona;
+/// o client apenas representa. Enviado por canal confiável para o dono do
+/// navio — no spawn (estado inicial) e a cada travessia de fronteira.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ZoneChanged {
+    pub ship_id: u32,
+    pub tier: RiskTier,
+    /// Nome declarado da zona no mapa do servidor (ex.: "Rota da Costa").
+    pub zone_name: String,
+}
+
 /// Snapshot do mundo visível; enviado por tick (PRD §64/§66 — AOI corta o
 /// escopo por proximidade quando entrar).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -135,8 +149,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn current_protocol_version_is_three() {
-        assert_eq!(PROTOCOL_VERSION, 3);
+    fn current_protocol_version_is_four() {
+        assert_eq!(PROTOCOL_VERSION, 4);
         assert_eq!(ClientHello::current().protocol_version, PROTOCOL_VERSION);
     }
 
@@ -257,5 +271,23 @@ mod tests {
         let bytes = bincode::serialize(&message).unwrap();
         let decoded: ShipDestroyed = bincode::deserialize(&bytes).unwrap();
         assert_eq!(decoded, message);
+    }
+
+    #[test]
+    fn zone_changed_roundtrips_with_tier_and_name() {
+        for tier in [
+            mareforge_domain_world::RiskTier::Protected,
+            mareforge_domain_world::RiskTier::Frontier,
+            mareforge_domain_world::RiskTier::Lawless,
+        ] {
+            let message = ZoneChanged {
+                ship_id: 7,
+                tier,
+                zone_name: String::from("Rota da Costa"),
+            };
+            let bytes = bincode::serialize(&message).unwrap();
+            let decoded: ZoneChanged = bincode::deserialize(&bytes).unwrap();
+            assert_eq!(decoded, message);
+        }
     }
 }

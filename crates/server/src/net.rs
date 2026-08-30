@@ -27,13 +27,14 @@ use mareforge_domain_ships::{
     compute_ship_stats, step_motion, EquippedComponents, MotionInput, MotionTuning, ShipMotion,
     ShipStats,
 };
+use mareforge_domain_world::{RiskPolicy, WorldMap};
 use mareforge_protocol::{
     AssignShip, ClientHello, FireBroadside, LootResult, LootWreck, ProjectileState, ServerWelcome,
-    ShipDestroyed, ShipInput, ShipState, WorldSnapshot, WreckRemoved, WreckSpawned,
+    ShipDestroyed, ShipInput, ShipState, WorldSnapshot, WreckRemoved, WreckSpawned, ZoneChanged,
     PROTOCOL_VERSION,
 };
 use mareforge_shared::ids::{
-    DestructionEventId, ItemDefinitionId, ItemInstanceId, ShipInstanceId, WreckId,
+    DestructionEventId, ItemDefinitionId, ItemInstanceId, ShipInstanceId, WreckId, ZoneId,
 };
 use smallvec::SmallVec;
 use tracing::{info, warn};
@@ -119,6 +120,21 @@ pub struct ServerLootPolicy(pub LootPolicy);
 #[derive(Resource, Clone, Copy)]
 pub struct ServerWreckPolicy(pub WreckPolicy);
 
+/// Mapa autoritativo do mundo (MF-016/017): zonas de risco e regiões. O
+/// servidor é quem calcula a zona real (PRD §10) — o client só desenha.
+#[derive(Resource, Clone)]
+pub struct ServerWorldMap(pub WorldMap);
+
+/// Política de risco: PvP em Protected é switch explícito (o slice nunca
+/// liga); Frontier/Lawless são full loot incondicional (§9).
+#[derive(Resource, Clone, Copy)]
+pub struct ServerRiskPolicy(pub RiskPolicy);
+
+/// Doca do Porto da Serra (mapa do triângulo, PRD §6): dentro das águas
+/// protegidas. Jogadores nascem em segurança e escolhem quando se arriscar
+/// (Pilar 3). O mapa fixa em teste que este ponto é Protected.
+pub const DEV_SPAWN: (f32, f32) = (-560.0, 0.0);
+
 pub struct ServerNetPlugin;
 
 impl Plugin for ServerNetPlugin {
@@ -142,6 +158,8 @@ impl Plugin for ServerNetPlugin {
         app.init_resource::<WreckIdCounter>();
         app.insert_resource(ServerLootPolicy(LootPolicy::default()));
         app.insert_resource(ServerWreckPolicy(WreckPolicy::default()));
+        app.insert_resource(ServerWorldMap(WorldMap::vertical_slice()));
+        app.insert_resource(ServerRiskPolicy(RiskPolicy::default()));
         app.insert_resource(DevItems::new());
         app.add_channel::<ReliableChannel>(ChannelSettings {
             mode: ChannelMode::OrderedReliable(ReliableSettings::default()),
@@ -162,6 +180,7 @@ impl Plugin for ServerNetPlugin {
         app.register_message::<WreckSpawned>(ChannelDirection::ServerToClient);
         app.register_message::<WreckRemoved>(ChannelDirection::ServerToClient);
         app.register_message::<LootResult>(ChannelDirection::ServerToClient);
+        app.register_message::<ZoneChanged>(ChannelDirection::ServerToClient);
         app.add_systems(Startup, start_server);
         app.add_systems(
             FixedUpdate,
@@ -200,6 +219,9 @@ pub struct ServerShip {
     pub stats: ShipStats,
     pub motion: ShipMotion,
     pub tuning: MotionTuning,
+    /// Zona atual conforme o mapa (MF-017). `None` = fora das águas
+    /// declaradas (UnknownZone): combate fail-closed, nenhuma UI nova.
+    pub zone: Option<ZoneId>,
 }
 
 #[derive(Component)]
@@ -231,6 +253,7 @@ fn spawn_ship_for(
     commands: &mut Commands,
     ship_ids: &mut ShipIdCounter,
     dev: &DevItems,
+    map: &WorldMap,
     client_id: ClientId,
 ) -> u32 {
     let ship_id = ship_ids.0;
@@ -256,6 +279,10 @@ fn spawn_ship_for(
     )
     .expect("carga dev cabe no porão vazio");
 
+    // Nasce na doca do Porto da Serra, em águas protegidas (Pilar 3: o
+    // risco é escolha do jogador, não condição de nascimento).
+    let zone = map.zone_at(DEV_SPAWN.0, DEV_SPAWN.1).ok().map(|z| z.id);
+
     commands.spawn((ServerShip {
         ship_id,
         client_id,
@@ -269,10 +296,25 @@ fn spawn_ship_for(
         hold,
         battery: BroadsideBattery::default(),
         stats,
-        motion: ShipMotion::default(),
+        motion: ShipMotion {
+            x: DEV_SPAWN.0,
+            y: DEV_SPAWN.1,
+            ..ShipMotion::default()
+        },
         tuning: MotionTuning::default(),
+        zone,
     },));
     ship_id
+}
+
+/// Mensagem inicial de zona para um navio que acabou de nascer (PRD §10: o
+/// client precisa do estado atual, não só das transições).
+fn zone_changed_for(map: &WorldMap, ship_id: u32, x: f32, y: f32) -> Option<ZoneChanged> {
+    map.zone_at(x, y).ok().map(|zone| ZoneChanged {
+        ship_id,
+        tier: zone.tier,
+        zone_name: zone.name.to_string(),
+    })
 }
 
 fn handle_connections(
@@ -301,6 +343,7 @@ fn handle_hello(
     mut hello_events: EventReader<ServerReceiveMessage<ClientHello>>,
     mut connection_manager: ResMut<ConnectionManager>,
     dev: Res<DevItems>,
+    map: Res<ServerWorldMap>,
     ships: Query<&ServerShip>,
     mut ship_ids: ResMut<ShipIdCounter>,
 ) {
@@ -330,7 +373,7 @@ fn handle_hello(
             continue;
         }
 
-        let ship_id = spawn_ship_for(&mut commands, &mut ship_ids, &dev, client_id);
+        let ship_id = spawn_ship_for(&mut commands, &mut ship_ids, &dev, &map.0, client_id);
         let _ = connection_manager.send_message::<ReliableChannel, _>(
             client_id,
             &ServerWelcome {
@@ -340,6 +383,9 @@ fn handle_hello(
         );
         let _ = connection_manager
             .send_message::<ReliableChannel, _>(client_id, &AssignShip { ship_id });
+        if let Some(zone) = zone_changed_for(&map.0, ship_id, DEV_SPAWN.0, DEV_SPAWN.1) {
+            let _ = connection_manager.send_message::<ReliableChannel, _>(client_id, &zone);
+        }
         info!(client = ?client_id, ship_id, "navio autoritativo criado");
     }
 }
@@ -370,11 +416,15 @@ fn handle_input(
 }
 
 /// Disparo de bordo (PRD MF-009): cooldown decide; o projétil nasce
-/// server-authoritative a partir do estado real do navio.
+/// server-authoritative a partir do estado real do navio. A zona do atirador
+/// é a primeira porta (MF-017): de águas protegidas os canhões ficam frios —
+/// e de fora do mapa, fail-closed (§69).
 fn handle_fire(
     mut commands: Commands,
     mut fire_events: EventReader<ServerReceiveMessage<FireBroadside>>,
     tuning: Res<CombatTuning>,
+    map: Res<ServerWorldMap>,
+    risk: Res<ServerRiskPolicy>,
     mut projectile_ids: ResMut<ProjectileIdCounter>,
     mut ships: Query<&mut ServerShip>,
 ) {
@@ -384,6 +434,24 @@ fn handle_fire(
         let Some(mut ship) = ships.iter_mut().find(|ship| ship.client_id == client_id) else {
             continue;
         };
+        match map.0.zone_at(ship.motion.x, ship.motion.y) {
+            Ok(zone) if risk.0.pvp_allowed(zone.tier) => {}
+            Ok(zone) => {
+                info!(
+                    ship_id = ship.ship_id,
+                    zone = zone.name,
+                    "disparo recusado: canhões frios em águas protegidas"
+                );
+                continue;
+            }
+            Err(_) => {
+                warn!(
+                    ship_id = ship.ship_id,
+                    "disparo recusado: fora do mar declarado"
+                );
+                continue;
+            }
+        }
         if !ship.battery.try_fire(side, tuning.cooldown_secs) {
             continue; // recarregando: clique ignorado, sem spam de projétil
         }
@@ -540,6 +608,8 @@ fn simulate_and_snapshot(
     dev: Res<DevItems>,
     loot_policy: Res<ServerLootPolicy>,
     tuning: Res<CombatTuning>,
+    map: Res<ServerWorldMap>,
+    risk_policy: Res<ServerRiskPolicy>,
     time: Res<Time>,
     mut ships: Query<(Entity, &mut ServerShip)>,
     mut projectiles: Query<(Entity, &mut ServerProjectile)>,
@@ -551,16 +621,18 @@ fn simulate_and_snapshot(
         projectiles: Vec::with_capacity(projectiles.iter().count()),
     };
 
-    // 1. Física dos navios.
+    // 1. Física dos navios + geografia de risco (MF-017).
     for (_, mut ship) in &mut ships {
         let ServerShip {
             ship_id,
+            client_id,
             input,
             stats,
             motion,
             tuning: motion_tuning,
             battery,
             hold,
+            zone,
             ..
         } = ship.as_mut();
         step_motion(
@@ -574,6 +646,38 @@ fn simulate_and_snapshot(
             dt,
         );
         battery.advance(dt);
+
+        // O servidor é quem calcula a zona real (PRD §10). Mudou a zona,
+        // o dono é avisado por canal confiável; saiu do mar declarado,
+        // o estado legal fica indefinido (fail-closed no combate).
+        match map.0.zone_at(motion.x, motion.y) {
+            Ok(found) => {
+                if *zone != Some(found.id) {
+                    *zone = Some(found.id);
+                    info!(
+                        ship_id = *ship_id,
+                        zone = found.name,
+                        tier = ?found.tier,
+                        "navio cruzou uma fronteira"
+                    );
+                    let _ = connection_manager.send_message::<ReliableChannel, _>(
+                        *client_id,
+                        &ZoneChanged {
+                            ship_id: *ship_id,
+                            tier: found.tier,
+                            zone_name: found.name.to_string(),
+                        },
+                    );
+                }
+            }
+            Err(_) => {
+                if zone.is_some() {
+                    warn!(ship_id = *ship_id, "navio saiu do mar declarado");
+                    *zone = None;
+                }
+            }
+        }
+
         let cargo_weight = hold
             .used_weight(&dev.catalog)
             .expect("porão só contém definições do catálogo");
@@ -638,6 +742,20 @@ fn simulate_and_snapshot(
             else {
                 continue;
             };
+            // A zona da VÍTIMA decide (MF-017, §9): proteção é da vítima.
+            // Fora do mar declarado, fail-closed — nenhum dano legal.
+            let pvp_here = map
+                .0
+                .zone_at(ship.motion.x, ship.motion.y)
+                .map(|zone| risk_policy.0.pvp_allowed(zone.tier))
+                .unwrap_or(false);
+            if !pvp_here {
+                info!(
+                    ship_id = target_ship_id,
+                    "impacto ignorado: vítima em águas protegidas ou fora do mapa"
+                );
+                continue;
+            }
             match apply_damage(ship.hp, damage) {
                 DamageOutcome::Survived { remaining_hp } => {
                     ship.hp = remaining_hp;
@@ -731,13 +849,17 @@ fn simulate_and_snapshot(
         // Dev respawn (PRD §39): conveniência de teste — o loop do
         // vertical slice não pode matar a sessão do jogador. A regra
         // definitiva de reconstrução é o Dock (PRD §38, Phase 7).
-        let new_ship_id = spawn_ship_for(&mut commands, &mut ship_ids, &dev, victim_client_id);
+        let new_ship_id =
+            spawn_ship_for(&mut commands, &mut ship_ids, &dev, &map.0, victim_client_id);
         let _ = connection_manager.send_message::<ReliableChannel, _>(
             victim_client_id,
             &AssignShip {
                 ship_id: new_ship_id,
             },
         );
+        if let Some(zone) = zone_changed_for(&map.0, new_ship_id, DEV_SPAWN.0, DEV_SPAWN.1) {
+            let _ = connection_manager.send_message::<ReliableChannel, _>(victim_client_id, &zone);
+        }
         info!(client = ?victim_client_id, new_ship_id, "dev respawn (PRD §39)");
     }
 
@@ -753,20 +875,31 @@ fn simulate_and_snapshot(
     counter.0 += 1;
 }
 
-/// Telemetria de mundo (PRD §72): posição/velocidade dos navios a cada 5s.
-fn world_status(time: Res<Time>, ships: Query<&ServerShip>, mut timer: Local<f32>) {
+/// Telemetria de mundo (PRD §72): posição/velocidade/zona dos navios a cada 5s.
+fn world_status(
+    time: Res<Time>,
+    map: Res<ServerWorldMap>,
+    ships: Query<&ServerShip>,
+    mut timer: Local<f32>,
+) {
     *timer += time.delta_secs();
     if *timer < 5.0 {
         return;
     }
     *timer = 0.0;
     for ship in &ships {
+        let zone = map
+            .0
+            .zone_at(ship.motion.x, ship.motion.y)
+            .map(|zone| zone.name)
+            .unwrap_or("fora do mar declarado");
         info!(
             ship_id = ship.ship_id,
             x = format!("{:.1}", ship.motion.x),
             y = format!("{:.1}", ship.motion.y),
             speed = format!("{:.2}", ship.motion.speed),
             throttle = format!("{:.2}", ship.input.throttle),
+            zone,
             "world status"
         );
     }
