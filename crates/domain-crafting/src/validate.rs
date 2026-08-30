@@ -24,6 +24,10 @@ pub enum CraftError {
     },
     #[error("cargo rejected the craft: {0}")]
     Cargo(#[from] mareforge_domain_items::CargoError),
+    /// MF-037: a oficina trabalha sobre o storage regional do porto — sem
+    /// gaveta de storage para o personagem naquela região, não há oficina.
+    #[error("o storage do porto está vazio: deposite materiais primeiro")]
+    EmptyStorage,
 }
 
 #[derive(Debug)]

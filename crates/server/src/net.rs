@@ -24,16 +24,17 @@ use mareforge_domain_items::{
     CargoHold, Custody, EquipmentStats, ItemCatalog, ItemDefinition, ItemInstance, ItemKind,
 };
 use mareforge_domain_ships::{
-    compute_ship_stats, step_motion, EquippedComponents, MotionInput, MotionTuning, ShipKind,
-    ShipMotion, ShipStats,
+    compute_ship_stats, dock as dock_vessel, step_motion, undock as undock_vessel, DockPolicy,
+    EquippedComponents, MotionInput, MotionTuning, ShipKind, ShipMotion, ShipStats, VesselPresence,
 };
 use mareforge_domain_world::{GatheringPolicy, RiskPolicy, WorldMap};
 use mareforge_protocol::{
     AssignShip, BuySellOrder, CancelSellOrder, CatalogSnapshot, ClientHello, CraftItem,
-    CraftResult, CreateSellOrder, FireBroadside, GatherNode, GatherResult, LootResult, LootWreck,
-    MarketResult, NodeUpdated, NodesSnapshot, OrdersSnapshot, ProjectileState, RecipesSnapshot,
-    ServerWelcome, ShipDestroyed, ShipInput, ShipState, StorageDepositAll, StorageWithdrawAll,
-    WalletUpdated, WorldSnapshot, WreckState, ZoneChanged, PROTOCOL_VERSION,
+    CraftResult, CreateSellOrder, Dock, DockResult, FireBroadside, GatherNode, GatherResult,
+    LootResult, LootWreck, MarketResult, NodeUpdated, NodesSnapshot, OrdersSnapshot,
+    ProjectileState, RecipesSnapshot, ServerWelcome, ShipDestroyed, ShipInput, ShipState,
+    StorageDepositAll, StorageWithdrawAll, Undock, WalletUpdated, WorldSnapshot, WreckState,
+    ZoneChanged, PROTOCOL_VERSION,
 };
 use mareforge_shared::ids::{
     CharacterId, DestructionEventId, ItemDefinitionId, ItemInstanceId, ShipInstanceId, WreckId,
@@ -232,6 +233,10 @@ pub struct ServerRiskPolicy(pub RiskPolicy);
 #[derive(Resource, Clone, Copy)]
 pub struct ServerGatherPolicy(pub GatheringPolicy);
 
+/// Política de atracação (MF-036): velocidade máxima para lançar amarras.
+#[derive(Resource, Clone, Copy, Default)]
+pub struct ServerDockPolicy(pub DockPolicy);
+
 /// Doca do Porto da Serra (mapa do triângulo, PRD §6): dentro das águas
 /// protegidas. Jogadores nascem em segurança e escolhem quando se arriscar
 /// (Pilar 3). O mapa fixa em teste que este ponto é Protected.
@@ -284,6 +289,7 @@ impl Plugin for ServerNetPlugin {
         app.insert_resource(ServerWorldMap(WorldMap::vertical_slice()));
         app.insert_resource(ServerRiskPolicy(RiskPolicy::default()));
         app.insert_resource(ServerGatherPolicy(GatheringPolicy::default()));
+        app.insert_resource(ServerDockPolicy::default());
         app.init_resource::<SnapshotClock>();
         app.init_resource::<Metrics>();
         app.init_resource::<crate::nodes::NodeIdCounter>();
@@ -306,6 +312,8 @@ impl Plugin for ServerNetPlugin {
         });
         app.register_message::<ClientHello>(ChannelDirection::ClientToServer);
         app.register_message::<ShipInput>(ChannelDirection::ClientToServer);
+        app.register_message::<Dock>(ChannelDirection::ClientToServer);
+        app.register_message::<Undock>(ChannelDirection::ClientToServer);
         app.register_message::<FireBroadside>(ChannelDirection::ClientToServer);
         app.register_message::<LootWreck>(ChannelDirection::ClientToServer);
         app.register_message::<GatherNode>(ChannelDirection::ClientToServer);
@@ -317,6 +325,7 @@ impl Plugin for ServerNetPlugin {
         app.register_message::<BuySellOrder>(ChannelDirection::ClientToServer);
         app.register_message::<ServerWelcome>(ChannelDirection::ServerToClient);
         app.register_message::<AssignShip>(ChannelDirection::ServerToClient);
+        app.register_message::<DockResult>(ChannelDirection::ServerToClient);
         app.register_message::<WorldSnapshot>(ChannelDirection::ServerToClient);
         app.register_message::<ShipDestroyed>(ChannelDirection::ServerToClient);
         app.register_message::<LootResult>(ChannelDirection::ServerToClient);
@@ -342,6 +351,8 @@ impl Plugin for ServerNetPlugin {
                 handle_connections,
                 handle_hello,
                 handle_input,
+                handle_dock,
+                handle_undock,
                 handle_fire,
                 handle_loot,
                 crate::nodes::handle_gather,
@@ -376,6 +387,9 @@ pub struct ServerShip {
     pub ship_instance: ShipInstanceId,
     /// Tipo do casco (persistência e reconstrução de stats, MF-034/035).
     pub kind: ShipKind,
+    /// Presença (MF-036): AtSea ou Docked(região). Serviços e ações olham
+    /// para cá — não para a posição dentro da baía.
+    pub presence: VesselPresence,
     pub input: ShipInput,
     pub hp: u32,
     pub hold: CargoHold,
@@ -486,6 +500,7 @@ pub(crate) fn spawn_ship_for(
         character,
         ship_instance,
         kind,
+        presence: VesselPresence::AtSea,
         input: ShipInput {
             throttle: 0.0,
             turn: 0.0,
@@ -539,6 +554,7 @@ pub(crate) fn restore_ship_from_record(
         character: record.character,
         ship_instance: record.ship_instance,
         kind: record.kind,
+        presence: VesselPresence::AtSea,
         input: ShipInput {
             throttle: 0.0,
             turn: 0.0,
@@ -858,6 +874,13 @@ fn handle_fire(
         else {
             continue;
         };
+        if matches!(ship.presence, VesselPresence::Docked(_)) {
+            info!(
+                ship_id = ship.ship_id,
+                "disparo recusado: canhões presos enquanto atracado (MF-036)"
+            );
+            continue;
+        }
         match map.0.zone_at(ship.motion.x, ship.motion.y) {
             Ok(zone) if risk.0.pvp_allowed(zone.tier) => {}
             Ok(zone) => {
@@ -1068,6 +1091,7 @@ fn simulate_world(
         let ServerShip {
             ship_id,
             client_id,
+            presence,
             input,
             stats,
             motion,
@@ -1076,6 +1100,13 @@ fn simulate_world(
             zone,
             ..
         } = ship.as_mut();
+        if matches!(presence, VesselPresence::Docked(_)) {
+            // MF-036: atracado = casco imóvel. O input é ignorado (o dono
+            // precisa desatracar para navegar); recarga de canhão corre.
+            motion.speed = 0.0;
+            battery.advance(dt);
+            continue;
+        }
         step_motion(
             motion,
             stats,
@@ -1495,6 +1526,102 @@ fn expire_wrecks(
                 "wreck expirou e afundou de vez"
             );
             commands.entity(entity).despawn();
+        }
+    }
+}
+
+/// Atracar (MF-036): validação pura via `domain-ships::dock` — dentro da
+/// área do porto, devagar o bastante e não estava atracado. Atracado, o
+/// casco congela e os serviços de porto ligam.
+fn handle_dock(
+    mut dock_events: EventReader<ServerReceiveMessage<Dock>>,
+    mut connection_manager: ResMut<ConnectionManager>,
+    map: Res<ServerWorldMap>,
+    policy: Res<ServerDockPolicy>,
+    mut ships: Query<&mut ServerShip>,
+) {
+    for event in dock_events.read() {
+        let client_id = event.from();
+        let Some(mut ship) = ships
+            .iter_mut()
+            .find(|ship| ship.client_id == Some(client_id))
+        else {
+            continue;
+        };
+        let at_port = crate::market::port_region(&map.0, ship.motion.x, ship.motion.y);
+        match dock_vessel(
+            &ship.presence,
+            ship.motion.speed,
+            at_port.map(|(region, _)| region),
+            &policy.0,
+        ) {
+            Ok(presence) => {
+                let (_, name) = at_port.expect("dock validou que há porto aqui");
+                ship.presence = presence;
+                info!(ship_id = ship.ship_id, region = name, "navio atracado");
+                let _ = connection_manager.send_message::<ReliableChannel, _>(
+                    client_id,
+                    &DockResult {
+                        success: true,
+                        docked: true,
+                        reason: format!("atracado em {name}"),
+                    },
+                );
+            }
+            Err(error) => {
+                info!(ship_id = ship.ship_id, error = %error, "atracagem recusada");
+                let _ = connection_manager.send_message::<ReliableChannel, _>(
+                    client_id,
+                    &DockResult {
+                        success: false,
+                        docked: false,
+                        reason: error.to_string(),
+                    },
+                );
+            }
+        }
+    }
+}
+
+/// Desatracar (MF-036): de volta ao ponto de atracação (que é onde o casco
+/// parou — a doca é onde você deixou o navio), mesmo HP, mesma carga.
+fn handle_undock(
+    mut undock_events: EventReader<ServerReceiveMessage<Undock>>,
+    mut connection_manager: ResMut<ConnectionManager>,
+    mut ships: Query<&mut ServerShip>,
+) {
+    for event in undock_events.read() {
+        let client_id = event.from();
+        let Some(mut ship) = ships
+            .iter_mut()
+            .find(|ship| ship.client_id == Some(client_id))
+        else {
+            continue;
+        };
+        match undock_vessel(&ship.presence) {
+            Ok(presence) => {
+                ship.presence = presence;
+                info!(ship_id = ship.ship_id, "navio desatracou");
+                let _ = connection_manager.send_message::<ReliableChannel, _>(
+                    client_id,
+                    &DockResult {
+                        success: true,
+                        docked: false,
+                        reason: String::from("desatracou — amarras soltas"),
+                    },
+                );
+            }
+            Err(error) => {
+                info!(ship_id = ship.ship_id, error = %error, "desatracagem recusada");
+                let _ = connection_manager.send_message::<ReliableChannel, _>(
+                    client_id,
+                    &DockResult {
+                        success: false,
+                        docked: true,
+                        reason: error.to_string(),
+                    },
+                );
+            }
         }
     }
 }

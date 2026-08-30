@@ -31,7 +31,11 @@ use serde::{Deserialize, Serialize};
 ///     inclui wrecks visíveis (`WreckState`) — WreckSpawned/WreckRemoved
 ///     saem do protocolo (visibilidade de wreck vem do snapshot, com TTL no
 ///     client).
-pub const PROTOCOL_VERSION: u16 = 8;
+/// v9: A1-P1 — dock/undock (MF-036): intents `Dock`/`Undock` e veredito
+///     `DockResult` (com estado resultante `docked`). Atracar é um ESTADO
+///     explícito: serviços de porto (storage, craft, mercado, construção)
+///     exigem `Docked`; movimento/tiro/coleta/saque exigem `AtSea`.
+pub const PROTOCOL_VERSION: u16 = 9;
 
 /// Primeira mensagem do client após conectar (ADR-0011). `identity` é o
 /// token persistente do jogador (MF-035): o servidor resolve token →
@@ -289,6 +293,25 @@ pub struct OrdersSnapshot {
     pub orders: Vec<OrderLine>,
 }
 
+/// Atracar no porto onde está (MF-036). O servidor valida: dentro da área
+/// do porto, devagar o bastante. Confiável: é uma decisão do jogador.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Dock;
+
+/// Desatracar (MF-036): volta ao ponto de atracação, mesmo HP, mesma carga.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Undock;
+
+/// Veredito de dock/undock (MF-036). `docked` é o ESTADO resultante — o
+/// client não infere presença por texto.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DockResult {
+    pub success: bool,
+    pub docked: bool,
+    /// Texto de display (nome do porto ou motivo da recusa).
+    pub reason: String,
+}
+
 /// Guarda TUDO do porão no storage regional do porto onde está (MF-023).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StorageDepositAll;
@@ -333,12 +356,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn current_protocol_version_is_eight() {
-        assert_eq!(PROTOCOL_VERSION, 8);
+    fn current_protocol_version_is_nine() {
+        assert_eq!(PROTOCOL_VERSION, 9);
         assert_eq!(
             ClientHello::current("token").protocol_version,
             PROTOCOL_VERSION
         );
+    }
+
+    #[test]
+    fn dock_messages_roundtrip() {
+        let dock = Dock;
+        let bytes = bincode::serialize(&dock).unwrap();
+        assert_eq!(bincode::deserialize::<Dock>(&bytes).unwrap(), dock);
+
+        let undock = Undock;
+        let bytes = bincode::serialize(&undock).unwrap();
+        assert_eq!(bincode::deserialize::<Undock>(&bytes).unwrap(), undock);
+
+        let refused = DockResult {
+            success: false,
+            docked: false,
+            reason: String::from("veloz demais para atracar"),
+        };
+        let bytes = bincode::serialize(&refused).unwrap();
+        let decoded: DockResult = bincode::deserialize(&bytes).unwrap();
+        assert!(!decoded.success);
+        assert!(!decoded.docked);
     }
 
     #[test]

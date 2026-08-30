@@ -1,12 +1,15 @@
-//! Aplicação de receitas (PRD §37, MF-021). `can_craft` julga; `craft`
-//! executa: consome ingredientes do porão e produz o output — tudo-ou-nada.
-//! A checagem de peso do output acontece ANTES de consumir nada: porão que
-//! não comporta o resultado não perde os ingredientes.
+//! Aplicação de receitas (PRD §37, MF-021/037). `can_craft` julga; `craft`
+//! e `craft_in_storage` executam: consomem ingredientes e produzem o output
+//! — tudo-ou-nada. No porão, a checagem de peso do output acontece ANTES de
+//! consumir nada. No storage (MF-037: a oficina do porto), não há peso — a
+//! atomicidade é garantida pela retirada exata e fail-closed.
 
 use std::collections::HashMap;
 
-use mareforge_domain_items::{CargoHold, ItemCatalog, ItemInstance};
-use mareforge_shared::ids::ItemInstanceId;
+use mareforge_domain_items::{
+    put_stack, take_stacks, CargoHold, Custody, ItemCatalog, ItemInstance, ItemLocation,
+};
+use mareforge_shared::ids::{ItemDefinitionId, ItemInstanceId, RegionId};
 
 use crate::recipe::{Recipe, StationKind};
 use crate::validate::{can_craft, CraftError, InventoryView};
@@ -76,6 +79,85 @@ pub fn craft(
     }
     hold.insert(catalog, output.clone())
         .expect("can_accept conferiu o peso acima");
+    Ok(output)
+}
+
+/// Executa a receita sobre o STORAGE regional do porto (MF-037): insumos
+/// saem do `PortStorage(region)`, output volta para o mesmo storage. Craft
+/// é atividade portuária — o porão carrega o que está viajando, o storage
+/// guarda a riqueza da região, e o jogador decide o que embarca.
+///
+/// Puro no sentido de regra: qualquer invalidade (estação, insumo) é erro
+/// ANTES de qualquer mutação (fail-closed, §37/§69).
+pub fn craft_in_storage(
+    recipe: &Recipe,
+    storage: &mut Vec<Custody>,
+    catalog: &ItemCatalog,
+    station: StationKind,
+    region: RegionId,
+) -> Result<ItemInstance, CraftError> {
+    let mut quantities: HashMap<ItemDefinitionId, u32> = HashMap::new();
+    for custody in storage.iter() {
+        *quantities.entry(custody.instance.definition).or_insert(0) += custody.instance.quantity;
+    }
+    let mut definitions = HashMap::new();
+    let mut reference = |id: ItemDefinitionId| {
+        if let Some(definition) = catalog.get(id) {
+            definitions.insert(id, definition);
+        }
+    };
+    reference(recipe.output_item);
+    for ingredient in &recipe.ingredients {
+        reference(ingredient.item);
+    }
+
+    // Storage não tem limite de slots nem de peso: a validação que importa
+    // é estação + insumos + output conhecido.
+    let inventory = InventoryView {
+        quantities,
+        free_slots: u32::MAX,
+        definitions,
+        station,
+    };
+    can_craft(recipe, &inventory)?;
+
+    // Consome do storage (retirada exata e atômica — `can_craft` validou as
+    // quantidades agregadas; o destino é descartado: o item foi CONSUMIDO).
+    for ingredient in &recipe.ingredients {
+        take_stacks(
+            storage,
+            ingredient.item,
+            ingredient.quantity,
+            ItemLocation::PortStorage(region),
+        )
+        .expect("can_craft validou os ingredientes");
+    }
+
+    let output_definition = catalog
+        .get(recipe.output_item)
+        .expect("can_craft garante output conhecido");
+    let output = if output_definition.is_equipment() {
+        ItemInstance::new_equipment(
+            ItemInstanceId::new(),
+            recipe.output_item,
+            DEV_EQUIPMENT_DURABILITY,
+        )
+    } else {
+        ItemInstance::new_resource(
+            ItemInstanceId::new(),
+            recipe.output_item,
+            recipe.output_quantity,
+        )
+    };
+    let location = ItemLocation::PortStorage(region);
+    put_stack(
+        storage,
+        Custody {
+            instance: output.clone(),
+            location,
+        },
+        output_definition.max_stack,
+    );
     Ok(output)
 }
 
@@ -235,5 +317,169 @@ mod tests {
         // Nada foi consumido: o porão segue com as 20 madeiras inteiras.
         assert_eq!(hold.used_weight(&catalog).unwrap(), 40);
         assert_eq!(hold.items().len(), 1);
+    }
+}
+
+/// Testes do fluxo de oficina (MF-037): insumos e output vivem no storage.
+#[cfg(test)]
+mod storage_tests {
+    use smallvec::SmallVec;
+
+    use mareforge_domain_items::{
+        quantity_of, Custody, ItemCatalog, ItemDefinition, ItemInstance, ItemKind, ItemLocation,
+    };
+    use mareforge_shared::ids::{ItemDefinitionId, ItemInstanceId, RecipeId, RegionId};
+
+    use super::craft_in_storage;
+    use crate::recipe::{Ingredient, Recipe, StationKind};
+
+    fn resource(id: ItemDefinitionId, name: &str, weight: u32) -> ItemDefinition {
+        ItemDefinition {
+            id,
+            kind: ItemKind::Resource,
+            equipment: None,
+            max_stack: 100,
+            base_weight: weight,
+            tags: SmallVec::new(),
+            display_name: String::from(name),
+        }
+    }
+
+    fn equipment(id: ItemDefinitionId, name: &str, weight: u32) -> ItemDefinition {
+        ItemDefinition {
+            id,
+            kind: ItemKind::Equipment,
+            equipment: Some(mareforge_domain_items::EquipmentStats::default()),
+            max_stack: 1,
+            base_weight: weight,
+            tags: SmallVec::new(),
+            display_name: String::from(name),
+        }
+    }
+
+    fn catalog_with(definitions: &[ItemDefinition]) -> ItemCatalog {
+        let mut catalog = ItemCatalog::default();
+        for definition in definitions {
+            catalog.register(definition.clone()).unwrap();
+        }
+        catalog
+    }
+
+    fn recipe(output: ItemDefinitionId, ingredients: Vec<Ingredient>) -> Recipe {
+        Recipe {
+            id: RecipeId::new(),
+            display_name: String::from("receita de oficina"),
+            output_item: output,
+            output_quantity: 1,
+            ingredients,
+            required_station: StationKind::Workbench,
+            craft_time_secs: 0,
+        }
+    }
+
+    fn stored(item: ItemDefinitionId, quantity: u32, region: RegionId) -> Custody {
+        Custody {
+            instance: ItemInstance::new_resource(ItemInstanceId::new(), item, quantity),
+            location: ItemLocation::PortStorage(region),
+        }
+    }
+
+    #[test]
+    fn storage_craft_consumes_from_and_returns_to_storage() {
+        let wood = ItemDefinitionId::new();
+        let hull = ItemDefinitionId::new();
+        let catalog = catalog_with(&[resource(wood, "Madeira", 2), equipment(hull, "Casco", 8)]);
+        let region = RegionId::new();
+        let mut storage = vec![stored(wood, 20, region)];
+
+        let output = craft_in_storage(
+            &recipe(
+                hull,
+                vec![Ingredient {
+                    item: wood,
+                    quantity: 15,
+                }],
+            ),
+            &mut storage,
+            &catalog,
+            StationKind::Workbench,
+            region,
+        )
+        .unwrap();
+
+        assert_eq!(output.definition, hull);
+        // 20 madeira - 15 consumidas = 5, e o casco entrou no storage.
+        assert_eq!(quantity_of(&storage, wood), 5);
+        assert_eq!(quantity_of(&storage, hull), 1);
+        assert!(storage
+            .iter()
+            .all(|custody| custody.location == ItemLocation::PortStorage(region)));
+    }
+
+    #[test]
+    fn storage_craft_refuses_ingredients_that_are_only_in_the_hold() {
+        // MF-037: o porão NÃO é insumo automático. Sem madeira no storage,
+        // o craft falha mesmo que o porão estivesse cheio — quem embarca
+        // decide o que embarca.
+        let wood = ItemDefinitionId::new();
+        let hull = ItemDefinitionId::new();
+        let catalog = catalog_with(&[resource(wood, "Madeira", 2), equipment(hull, "Casco", 8)]);
+        let region = RegionId::new();
+        let mut storage: Vec<Custody> = Vec::new();
+
+        let error = craft_in_storage(
+            &recipe(
+                hull,
+                vec![Ingredient {
+                    item: wood,
+                    quantity: 15,
+                }],
+            ),
+            &mut storage,
+            &catalog,
+            StationKind::Workbench,
+            region,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            crate::validate::CraftError::MissingIngredient {
+                needed: 15,
+                available: 0,
+                ..
+            }
+        ));
+        assert!(storage.is_empty());
+    }
+
+    #[test]
+    fn storage_craft_is_atomic_when_station_is_wrong() {
+        let wood = ItemDefinitionId::new();
+        let hull = ItemDefinitionId::new();
+        let catalog = catalog_with(&[resource(wood, "Madeira", 2), equipment(hull, "Casco", 8)]);
+        let region = RegionId::new();
+        let mut storage = vec![stored(wood, 20, region)];
+
+        let error = craft_in_storage(
+            &recipe(
+                hull,
+                vec![Ingredient {
+                    item: wood,
+                    quantity: 15,
+                }],
+            ),
+            &mut storage,
+            &catalog,
+            StationKind::Dock,
+            region,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            crate::validate::CraftError::WrongStation { .. }
+        ));
+        assert_eq!(quantity_of(&storage, wood), 20, "storage intacto");
     }
 }

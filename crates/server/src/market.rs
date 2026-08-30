@@ -17,10 +17,12 @@ use bevy::time::Time;
 use chrono::Utc;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
+use mareforge_domain_crafting::{craft_in_storage, CraftError, Recipe, StationKind};
 use mareforge_domain_economy::{
     validate_new_order, FeePolicy, Ledger, LedgerKind, MarketError, MarketOrder, Money, OrderStatus,
 };
-use mareforge_domain_items::{CargoHold, Custody, ItemCatalog, ItemLocation};
+use mareforge_domain_items::{CargoHold, Custody, ItemCatalog, ItemInstance, ItemLocation};
+use mareforge_domain_ships::VesselPresence;
 use mareforge_domain_world::WorldMap;
 use mareforge_protocol::{
     BuySellOrder, CancelSellOrder, CatalogSnapshot, CreateSellOrder, ItemLine, MarketResult,
@@ -356,6 +358,61 @@ impl ServerMarket {
         Ok((order_num, fee))
     }
 
+    /// Quantidade de `item` no storage (personagem, região) — para validar
+    /// receitas de oficina contra a riqueza guardada (MF-037).
+    pub fn storage_quantity(
+        &self,
+        character: CharacterId,
+        region: RegionId,
+        item: ItemDefinitionId,
+    ) -> u32 {
+        self.storage
+            .get(&(character, region))
+            .map(|storage| storage_quantity(storage, item))
+            .unwrap_or(0)
+    }
+
+    /// Consome `quantity` de `item` do storage (insumos de oficina, MF-037).
+    /// Fail-closed: sem estoque suficiente é erro e nada se move.
+    pub fn consume_from_storage(
+        &mut self,
+        character: CharacterId,
+        region: RegionId,
+        item: ItemDefinitionId,
+        quantity: u32,
+    ) -> Result<(), MarketError> {
+        let Some(storage) = self.storage.get_mut(&(character, region)) else {
+            return Err(MarketError::NotInStorage);
+        };
+        if storage_quantity(storage, item) < quantity {
+            return Err(MarketError::NotInStorage);
+        }
+        // Consumido: regrava a localização e descarta as pilhas retiradas.
+        let _consumed =
+            take_from_storage(storage, item, quantity, ItemLocation::PortStorage(region));
+        self.persist();
+        Ok(())
+    }
+
+    /// Oficina do porto (MF-037): executa a receita sobre o storage regional
+    /// — insumos saem do storage, output volta para o storage. O porão não
+    /// é insumo automático: quem embarca decide o que embarca (Pilar 2).
+    pub fn craft_at_storage(
+        &mut self,
+        character: CharacterId,
+        region: RegionId,
+        recipe: &Recipe,
+        catalog: &ItemCatalog,
+        station: StationKind,
+    ) -> Result<ItemInstance, CraftError> {
+        let Some(storage) = self.storage.get_mut(&(character, region)) else {
+            return Err(CraftError::EmptyStorage);
+        };
+        let output = craft_in_storage(recipe, storage, catalog, station, region)?;
+        self.persist();
+        Ok(output)
+    }
+
     /// Cancela SUA order: item volta do escrow pro storage; fee não volta.
     pub fn cancel_order(
         &mut self,
@@ -578,19 +635,21 @@ pub fn handle_storage(
         else {
             continue;
         };
-        let Some((region_id, name)) = port_region(&map.0, ship.motion.x, ship.motion.y) else {
+        // MF-036: serviço de porto exige ATRACADO — água protegida não basta.
+        let VesselPresence::Docked(region_id) = ship.presence else {
             info!(
                 ship_id = ship.ship_id,
-                "depósito recusado: fora de qualquer porto"
+                "depósito recusado: atraca primeiro (E)"
             );
             market_result(
                 &mut connection_manager,
                 client_id,
                 false,
-                "fora de qualquer porto",
+                "atraca primeiro (E)",
             );
             continue;
         };
+        let name = region_name(&map.0, region_id);
         let character = ship.character;
         match market.deposit_all(character, region_id, &mut ship.hold, &dev.catalog) {
             Ok((stacks, weight)) => {
@@ -622,15 +681,16 @@ pub fn handle_storage(
         else {
             continue;
         };
-        let Some((region_id, name)) = port_region(&map.0, ship.motion.x, ship.motion.y) else {
+        let VesselPresence::Docked(region_id) = ship.presence else {
             market_result(
                 &mut connection_manager,
                 client_id,
                 false,
-                "fora de qualquer porto",
+                "atraca primeiro (E)",
             );
             continue;
         };
+        let name = region_name(&map.0, region_id);
         let character = ship.character;
         match market.withdraw_all(character, region_id, &mut ship.hold, &dev.catalog) {
             Ok(0) => {
@@ -763,17 +823,20 @@ pub fn handle_buy(
         let Some(ship) = ships.iter().find(|ship| ship.client_id == Some(client_id)) else {
             continue;
         };
-        let Some((buyer_region_id, buyer_region_name)) =
-            port_region(&map.0, ship.motion.x, ship.motion.y)
-        else {
+        let VesselPresence::Docked(buyer_region_id) = ship.presence else {
+            info!(
+                ship_id = ship.ship_id,
+                "compra recusada: atraca primeiro (E) — mercado é serviço de porto"
+            );
             market_result(
                 &mut connection_manager,
                 client_id,
                 false,
-                "fora de qualquer porto",
+                "atraca primeiro (E)",
             );
             continue;
         };
+        let buyer_region_name = region_name(&map.0, buyer_region_id);
         let buyer = ship.character;
         match market.buy(buyer, buyer_region_id, message.order_num, message.quantity) {
             Ok(receipt) => {

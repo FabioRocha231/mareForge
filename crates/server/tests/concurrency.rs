@@ -5,11 +5,13 @@
 
 use chrono::Utc;
 use mareforge_domain_combat::{resolve_ship_destruction, LootPolicy, SurvivorItem, WreckChest};
-use mareforge_domain_crafting::{craft, Ingredient, Recipe, StationKind};
+use mareforge_domain_crafting::{craft_in_storage, Ingredient, Recipe, StationKind};
 use mareforge_domain_economy::{LedgerKind, MarketError, Money};
 
 // Money não implementa Add/Sub: comparação via tuple interno.
-use mareforge_domain_items::{CargoHold, ItemCatalog, ItemDefinition, ItemInstance, ItemKind};
+use mareforge_domain_items::{
+    CargoHold, Custody, ItemCatalog, ItemDefinition, ItemInstance, ItemKind, ItemLocation,
+};
 use mareforge_server::market::ServerMarket;
 use mareforge_shared::ids::{
     CharacterId, DestructionEventId, ItemDefinitionId, ItemInstanceId, RecipeId, RegionId,
@@ -138,8 +140,9 @@ fn double_loot_transfers_cargo_once() {
     assert_eq!(hold.items().len(), 1);
 }
 
-/// §70 double craft: dois cliques consumindo os MESMOS ingredientes. O
-/// primeiro vence; o segundo falha sem produzir item duplicado.
+/// §70 double craft no fluxo de oficina (MF-037): dois cliques consumindo
+/// os MESMOS insumos do storage. O primeiro vence; o segundo falha sem
+/// produzir item duplicado.
 #[test]
 fn double_craft_consumes_ingredients_once() {
     let (catalog, wood) = wood_definition();
@@ -156,18 +159,30 @@ fn double_craft_consumes_ingredients_once() {
         craft_time_secs: 0,
     };
 
-    let mut hold = CargoHold::new(ShipInstanceId::new(), 100);
-    hold.insert(
-        &catalog,
-        ItemInstance::new_resource(ItemInstanceId::new(), wood, 15),
-    )
-    .unwrap();
+    let region = RegionId::new();
+    let mut storage = vec![Custody {
+        instance: ItemInstance::new_resource(ItemInstanceId::new(), wood, 15),
+        location: ItemLocation::PortStorage(region),
+    }];
 
-    assert!(craft(&recipe, &mut hold, &catalog, StationKind::Workbench).is_ok());
-    assert!(craft(&recipe, &mut hold, &catalog, StationKind::Workbench).is_err());
+    assert!(craft_in_storage(
+        &recipe,
+        &mut storage,
+        &catalog,
+        StationKind::Workbench,
+        region
+    )
+    .is_ok());
+    assert!(craft_in_storage(
+        &recipe,
+        &mut storage,
+        &catalog,
+        StationKind::Workbench,
+        region
+    )
+    .is_err());
     // Exatamente 1 unidade produzida (15 consumidas, 1 gerada).
-    let total: u32 = hold
-        .items()
+    let total: u32 = storage
         .iter()
         .map(|custody| custody.instance.quantity)
         .sum();

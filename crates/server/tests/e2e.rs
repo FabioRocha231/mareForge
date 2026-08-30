@@ -12,7 +12,7 @@
 use mareforge_domain_combat::{
     apply_damage, resolve_ship_destruction, DamageOutcome, LootPolicy, WreckChest,
 };
-use mareforge_domain_crafting::{craft, Ingredient, Recipe, StationKind};
+use mareforge_domain_crafting::{Ingredient, Recipe, StationKind};
 use mareforge_domain_economy::{LedgerKind, Money};
 use mareforge_domain_items::{
     CargoHold, Custody, ItemCatalog, ItemDefinition, ItemInstance, ItemKind,
@@ -123,13 +123,42 @@ fn vertical_slice_loop_gather_craft_transport_fight_loot_sell() {
     assert_eq!(node.stock, 60 - 30);
     assert_eq!(a.hold.used_weight(&catalog).unwrap(), 60); // 30 × peso 2
 
-    // ===== 2. A fabrica (Workbench: 15 madeira → Casco Reforçado) =====
+    // ===== 2. A fabrica na OFICINA do porto (MF-036/037) =====
+    // atracar → depositar o dia de coleta → craftar NO STORAGE → embarcar
+    // só o que quer transportar. O porão não é matéria-prima automática.
+    market
+        .deposit_all(a.character, region_serra, &mut a.hold, &catalog)
+        .expect("doca da Serra recebe o porão do dia");
+    assert_eq!(
+        a.hold.used_weight(&catalog).unwrap(),
+        0,
+        "porão vazio na doca"
+    );
     let recipe = craft_hull_recipe(wood, hull);
-    let crafted = craft(&recipe, &mut a.hold, &catalog, StationKind::Workbench)
-        .expect("A está na baía com insumo de sobra");
+    let crafted = market
+        .craft_at_storage(
+            a.character,
+            region_serra,
+            &recipe,
+            &catalog,
+            StationKind::Workbench,
+        )
+        .expect("oficina da Serra com madeira guardada de sobra");
     assert_eq!(crafted.definition, hull);
     assert!(crafted.durability.is_some());
-    assert_eq!(a.hold.used_weight(&catalog).unwrap(), 38); // 60 − 30 (madeira consumida) + 8 (casco)
+    assert_eq!(
+        market.storage_quantity(a.character, region_serra, hull),
+        1,
+        "casco nasce no storage, não no porão"
+    );
+    market
+        .withdraw_all(a.character, region_serra, &mut a.hold, &catalog)
+        .expect("embarca o casco (e o resto da madeira)");
+    assert_eq!(
+        a.hold.used_weight(&catalog).unwrap(),
+        38, // 15 madeira (30) + casco (8)
+        "carga embarcada: decisão explícita do jogador"
+    );
 
     // ===== 3. A transporta (modelo puro de movimento, rota leste) =====
     let definition = mareforge_domain_ships::ShipDefinition::small_merchant();

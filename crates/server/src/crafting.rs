@@ -7,13 +7,13 @@ use bevy::ecs::prelude::*;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 use mareforge_domain_crafting::{
-    can_construct, craft, Ingredient, Recipe, ShipConstructionJob, StationKind,
+    can_construct, Ingredient, Recipe, ShipConstructionJob, StationKind,
 };
 use mareforge_domain_items::ItemCatalog;
-use mareforge_domain_ships::{ShipDefinition, ShipKind};
+use mareforge_domain_ships::{ShipDefinition, ShipKind, VesselPresence};
 use mareforge_domain_world::WorldMap;
 use mareforge_protocol::{AssignShip, CraftItem, CraftResult, RecipeEntry, RecipesSnapshot};
-use mareforge_shared::ids::{ItemDefinitionId, RecipeId};
+use mareforge_shared::ids::{ItemDefinitionId, RecipeId, RegionId};
 use tracing::{info, warn};
 
 use crate::net::{
@@ -170,24 +170,25 @@ impl DevRecipes {
     }
 }
 
-/// Disponibilidade de estação na posição (PRD §5/§7): porto é ÁREA de
-/// serviço — aqui, as águas protegidas inteiras de cada baía. O Porto da
-/// Serra tem Workbench + Dock; o Porto da Mina, Dock. Anvil não existe no
-/// slice; mar sem lei e rota não têm estação alguma.
-pub fn station_available(map: &WorldMap, x: f32, y: f32, required: StationKind) -> bool {
+/// Disponibilidade de estação no porto da região (PRD §5/§7, MF-036/037):
+/// a oficina é do porto ONDE ESTÁ ATRACADO — água protegida não é doca. O
+/// Porto da Serra tem Workbench + Dock; o Porto da Mina, Dock. Anvil não
+/// existe no slice; região sem porto não tem estação alguma.
+pub fn station_available(map: &WorldMap, region: RegionId, required: StationKind) -> bool {
     match required {
         StationKind::None => true,
         StationKind::Anvil => false,
         StationKind::Workbench | StationKind::Dock => {
-            let Ok(zone) = map.zone_at(x, y) else {
+            let Some(known) = map
+                .regions()
+                .iter()
+                .find(|candidate| candidate.id == region)
+            else {
                 return false;
             };
-            if zone.tier != mareforge_domain_world::RiskTier::Protected {
-                return false;
-            }
             match required {
-                StationKind::Workbench => zone.name == "Águas do Porto da Serra",
-                _ => true, // Dock: as duas baías protegidas
+                StationKind::Workbench => known.name == "Porto da Serra",
+                _ => known.port.is_some(), // Dock: toda região com porto
             }
         }
     }
@@ -195,15 +196,17 @@ pub fn station_available(map: &WorldMap, x: f32, y: f32, required: StationKind) 
 
 /// Estação "efetiva" para a regra pura: a exigida quando disponível, `None`
 /// quando não — `can_craft` responde `WrongStation` (fail-closed).
-fn effective_station(map: &WorldMap, x: f32, y: f32, required: StationKind) -> StationKind {
-    if station_available(map, x, y, required) {
+fn effective_station(map: &WorldMap, region: RegionId, required: StationKind) -> StationKind {
+    if station_available(map, region, required) {
         required
     } else {
         StationKind::None
     }
 }
 
-/// Intent de fabricação/construção (PRD §63: CraftItem).
+/// Intent de fabricação/construção (PRD §63, MF-036/037). A oficina é
+/// serviço de porto: só com o navio ATRACADO, e os insumos vêm do STORAGE
+/// regional — o porão não é matéria-prima automática (Pilar 2).
 #[allow(clippy::too_many_arguments)]
 pub fn handle_craft(
     mut commands: Commands,
@@ -214,6 +217,7 @@ pub fn handle_craft(
     dev_recipes: Res<DevRecipes>,
     mut metrics: ResMut<crate::net::Metrics>,
     map: Res<ServerWorldMap>,
+    mut market: ResMut<crate::market::ServerMarket>,
     mut ship_ids: ResMut<crate::net::ShipIdCounter>,
     mut ships: Query<(Entity, &mut ServerShip)>,
 ) {
@@ -227,15 +231,21 @@ pub fn handle_craft(
             continue;
         };
 
-        // 1. Equipamento (MF-021): recursos → item de equipment no porão.
-        if let Some(recipe) = dev_recipes.equipment_for(recipe_num) {
-            let station = effective_station(
-                &map.0,
-                ship.motion.x,
-                ship.motion.y,
-                recipe.required_station,
+        // MF-036: sem doca, sem oficina.
+        let VesselPresence::Docked(region) = ship.presence else {
+            info!(
+                ship_id = ship.ship_id,
+                "craft recusado: atraca primeiro (E) — oficina é serviço de porto"
             );
-            match craft(recipe, &mut ship.hold, &dev.catalog, station) {
+            send_craft_result(&mut connection_manager, client_id, recipe_num, false);
+            continue;
+        };
+        let character = ship.character;
+
+        // 1. Equipamento (MF-021/037): insumos do storage → item no storage.
+        if let Some(recipe) = dev_recipes.equipment_for(recipe_num) {
+            let station = effective_station(&map.0, region, recipe.required_station);
+            match market.craft_at_storage(character, region, recipe, &dev.catalog, station) {
                 Ok(output) => {
                     metrics.items_crafted += u64::from(output.quantity.max(1));
                     let name = dev
@@ -247,7 +257,7 @@ pub fn handle_craft(
                         ship_id = ship.ship_id,
                         recipe = %recipe.display_name,
                         output = %name,
-                        "equipamento fabricado"
+                        "equipamento fabricado no storage do porto"
                     );
                     send_craft_result(&mut connection_manager, client_id, recipe_num, true);
                 }
@@ -256,7 +266,7 @@ pub fn handle_craft(
                         ship_id = ship.ship_id,
                         recipe = %recipe.display_name,
                         error = %error,
-                        "craft recusado"
+                        "craft recusado (insumo no storage? deposite com Z)"
                     );
                     send_craft_result(&mut connection_manager, client_id, recipe_num, false);
                 }
@@ -264,7 +274,7 @@ pub fn handle_craft(
             continue;
         }
 
-        // 2. Navio (MF-022): Dock + recursos → ShipInstance nova.
+        // 2. Navio (MF-022/037): Dock + insumos do storage → ShipInstance nova.
         if let Some(job) = dev_recipes.ship_for(recipe_num) {
             let built = build_ship_for_job(
                 &mut commands,
@@ -273,10 +283,12 @@ pub fn handle_craft(
                 &dev,
                 &dev_ships,
                 &map.0,
+                &mut market,
                 &mut ship_ids,
                 job,
                 ship_entity,
                 &mut ship,
+                region,
             );
             send_craft_result(&mut connection_manager, client_id, recipe_num, built);
             continue;
@@ -287,8 +299,10 @@ pub fn handle_craft(
     }
 }
 
-/// Valida e executa a construção: consome recursos do porão antigo, spawna o
-/// navio novo na doca com a carga transferida, e aposenta o casco velho.
+/// Valida e executa a construção (MF-022/037): insumos vêm do STORAGE da
+/// região, a carga embarcada do casco antigo migra para o novo (§38: ShipInstance
+/// é entidade própria — a carga acompanha o dono, não some), e o casco velho
+/// é aposentado. Fail-closed: validação antes de consumo, consumo antes de spawn.
 #[allow(clippy::too_many_arguments)]
 fn build_ship_for_job(
     commands: &mut Commands,
@@ -297,32 +311,31 @@ fn build_ship_for_job(
     dev: &DevItems,
     dev_ships: &DevShips,
     map: &WorldMap,
+    market: &mut crate::market::ServerMarket,
     ship_ids: &mut crate::net::ShipIdCounter,
     job: &ShipConstructionJob,
     old_entity: Entity,
     old_ship: &mut ServerShip,
+    region: RegionId,
 ) -> bool {
-    let station = effective_station(
-        map,
-        old_ship.motion.x,
-        old_ship.motion.y,
-        job.required_station,
-    );
+    let character = old_ship.character;
+    let station = effective_station(map, region, job.required_station);
+    // Insumos contam contra o STORAGE (MF-037) — não contra o porão.
     let mut quantities = std::collections::HashMap::new();
-    for custody in old_ship.hold.items() {
-        *quantities.entry(custody.instance.definition).or_insert(0) += custody.instance.quantity;
+    for ingredient in &job.ingredients {
+        let have = market.storage_quantity(character, region, ingredient.item);
+        quantities.insert(ingredient.item, have);
     }
     if let Err(error) = can_construct(job, &quantities, station) {
         warn!(
             ship_id = old_ship.ship_id,
             job = %job.display_name,
             error = %error,
-            "construção recusada"
+            "construção recusada (insumos no storage? deposite com Z)"
         );
         return false;
     }
-    // A carga atual precisa caber no casco novo (§38: ShipInstance é
-    // entidade própria — a carga migra, não some).
+    // A carga atual precisa caber no casco novo (§38) — ela migra inteira.
     let used = old_ship
         .hold
         .used_weight(&dev.catalog)
@@ -340,12 +353,14 @@ fn build_ship_for_job(
     }
 
     let cargo: Vec<_> = old_ship.hold.items().to_vec();
-    // Consome os ingredientes do porão antigo (validado acima).
+    // Consome os insumos do storage (validado acima).
     for ingredient in &job.ingredients {
-        old_ship
-            .hold
-            .remove(ingredient.item, ingredient.quantity)
-            .expect("can_construct validou os ingredientes");
+        if let Err(error) =
+            market.consume_from_storage(character, region, ingredient.item, ingredient.quantity)
+        {
+            warn!(error = %error, "consumo do storage falhou após validação; construção abortada");
+            return false;
+        }
     }
 
     let owner_client = old_ship.client_id;
@@ -381,7 +396,7 @@ fn build_ship_for_job(
         new_ship_id,
         job = %job.display_name,
         ?station,
-        "navio construído no Dock"
+        "navio construído no Dock com insumos do storage"
     );
     true
 }
@@ -403,28 +418,22 @@ mod tests {
     /// §7: Serra tem Workbench + Dock; Mina, só Dock; mar aberto, nada;
     /// Anvil não existe no slice.
     #[test]
-    fn stations_follow_port_specialization() {
+    fn stations_follow_port_specialization_by_region() {
         let map = WorldMap::vertical_slice();
-        let (serra_x, serra_y) = crate::net::DEV_SPAWN; // doca da Serra
-        let (mina_x, mina_y) = (600.0, 0.0);
-        let (sea_x, sea_y) = (2000.0, 900.0); // mar sem lei
+        let serra = map.region_by_name("Porto da Serra").unwrap().id;
+        let mina = map.region_by_name("Porto da Mina").unwrap().id;
+        let ilha = map.region_by_name("Ilha do Coral Negro").unwrap().id;
 
-        assert!(station_available(
-            &map,
-            serra_x,
-            serra_y,
-            StationKind::Workbench
-        ));
-        assert!(station_available(&map, serra_x, serra_y, StationKind::Dock));
-        assert!(!station_available(
-            &map,
-            mina_x,
-            mina_y,
-            StationKind::Workbench
-        ));
-        assert!(station_available(&map, mina_x, mina_y, StationKind::Dock));
-        assert!(!station_available(&map, sea_x, sea_y, StationKind::Dock));
-        assert!(!station_available(&map, sea_x, sea_y, StationKind::Anvil));
-        assert!(station_available(&map, sea_x, sea_y, StationKind::None));
+        // Serra: Workbench + Dock (especialização de porto, §7).
+        assert!(station_available(&map, serra, StationKind::Workbench));
+        assert!(station_available(&map, serra, StationKind::Dock));
+        // Mina: só Dock.
+        assert!(!station_available(&map, mina, StationKind::Workbench));
+        assert!(station_available(&map, mina, StationKind::Dock));
+        // Ilha sem porto: nada (e Anvil não existe no slice).
+        assert!(!station_available(&map, ilha, StationKind::Dock));
+        assert!(!station_available(&map, ilha, StationKind::Workbench));
+        assert!(!station_available(&map, serra, StationKind::Anvil));
+        assert!(station_available(&map, serra, StationKind::None));
     }
 }

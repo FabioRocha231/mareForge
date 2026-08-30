@@ -18,10 +18,10 @@ use lightyear::prelude::*;
 use mareforge_domain_combat::BroadsideSide;
 use mareforge_protocol::{
     AssignShip, BuySellOrder, CancelSellOrder, CatalogSnapshot, ClientHello, CraftItem,
-    CraftResult, CreateSellOrder, FireBroadside, GatherNode, GatherResult, LootResult, LootWreck,
-    MarketResult, NodeUpdated, NodesSnapshot, OrdersSnapshot, RecipesSnapshot, ServerWelcome,
-    ShipDestroyed, ShipInput, StorageDepositAll, StorageWithdrawAll, WalletUpdated, WorldSnapshot,
-    ZoneChanged, PROTOCOL_VERSION,
+    CraftResult, CreateSellOrder, Dock, DockResult, FireBroadside, GatherNode, GatherResult,
+    LootResult, LootWreck, MarketResult, NodeUpdated, NodesSnapshot, OrdersSnapshot,
+    RecipesSnapshot, ServerWelcome, ShipDestroyed, ShipInput, StorageDepositAll,
+    StorageWithdrawAll, Undock, WalletUpdated, WorldSnapshot, ZoneChanged, PROTOCOL_VERSION,
 };
 
 pub const SERVER_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 5000);
@@ -88,6 +88,8 @@ impl Plugin for ClientNetPlugin {
         });
         app.register_message::<ClientHello>(ChannelDirection::ClientToServer);
         app.register_message::<ShipInput>(ChannelDirection::ClientToServer);
+        app.register_message::<Dock>(ChannelDirection::ClientToServer);
+        app.register_message::<Undock>(ChannelDirection::ClientToServer);
         app.register_message::<FireBroadside>(ChannelDirection::ClientToServer);
         app.register_message::<LootWreck>(ChannelDirection::ClientToServer);
         app.register_message::<GatherNode>(ChannelDirection::ClientToServer);
@@ -99,6 +101,7 @@ impl Plugin for ClientNetPlugin {
         app.register_message::<BuySellOrder>(ChannelDirection::ClientToServer);
         app.register_message::<ServerWelcome>(ChannelDirection::ServerToClient);
         app.register_message::<AssignShip>(ChannelDirection::ServerToClient);
+        app.register_message::<DockResult>(ChannelDirection::ServerToClient);
         app.register_message::<WorldSnapshot>(ChannelDirection::ServerToClient);
         app.register_message::<ShipDestroyed>(ChannelDirection::ServerToClient);
         app.register_message::<LootResult>(ChannelDirection::ServerToClient);
@@ -114,12 +117,14 @@ impl Plugin for ClientNetPlugin {
         app.register_message::<MarketResult>(ChannelDirection::ServerToClient);
         app.init_resource::<crate::ship::DestroyedShips>();
         app.init_resource::<KnownWrecks>();
+        app.init_resource::<MyDocked>();
         app.add_systems(Startup, (connect, log_connecting));
         app.add_systems(
             FixedUpdate,
             (
                 send_hello_on_connect,
                 send_ship_input,
+                send_dock_input,
                 send_fire_input,
                 send_loot_input,
                 send_gather_input,
@@ -129,6 +134,7 @@ impl Plugin for ClientNetPlugin {
             Update,
             (
                 handle_handshake,
+                handle_dock_result,
                 handle_ship_destroyed,
                 reset_on_disconnect,
                 handle_loot_result,
@@ -141,6 +147,56 @@ impl Plugin for ClientNetPlugin {
 /// agora é o snapshot AOI (MF-031) — `ship.rs` reconstrói a cada quadro.
 #[derive(Resource, Debug, Default)]
 pub struct KnownWrecks(pub HashMap<u32, Vec2>);
+
+/// Presença do PRÓPRIO navio conforme o servidor (MF-036): o veredito
+/// `DockResult.docked` é a verdade; o client não infere por posição.
+#[derive(Resource, Debug, Default)]
+pub struct MyDocked(pub bool);
+
+/// E alterna atracar/desatracar (MF-036). Dev tooling (§39):
+/// MAREFORGE_AUTODOCK=1 tenta atracar sozinho até conseguir — smoke da
+/// rotina de porto sem digitar.
+fn send_dock_input(
+    keys: Res<ButtonInput<KeyCode>>,
+    my_docked: Res<MyDocked>,
+    time: Res<Time>,
+    mut autodock_timer: Local<f32>,
+    mut connection_manager: ResMut<ConnectionManager>,
+) {
+    if keys.just_pressed(KeyCode::KeyE) {
+        if my_docked.0 {
+            info!("desatracando");
+            let _ = connection_manager.send_message::<ReliableChannel, _>(&Undock);
+        } else {
+            info!("atracando");
+            let _ = connection_manager.send_message::<ReliableChannel, _>(&Dock);
+        }
+        return;
+    }
+    if std::env::var_os("MAREFORGE_AUTODOCK").is_some() && !my_docked.0 {
+        *autodock_timer += time.delta_secs();
+        if *autodock_timer >= 1.5 {
+            *autodock_timer = 0.0;
+            let _ = connection_manager.send_message::<ReliableChannel, _>(&Dock);
+        }
+    }
+}
+
+/// O servidor decide a presença; o client espelha o estado e mostra o motivo.
+fn handle_dock_result(
+    mut events: EventReader<ClientReceiveMessage<DockResult>>,
+    mut my_docked: ResMut<MyDocked>,
+) {
+    for event in events.read() {
+        let result = event.message();
+        if result.success {
+            info!(docked = result.docked, reason = %result.reason, "doca: {}", result.reason);
+        } else {
+            warn!(reason = %result.reason, "doca recusou: {}", result.reason);
+        }
+        my_docked.0 = result.docked;
+    }
+}
 
 /// Token de identidade persistente do jogador (MF-035): a MESMA identidade
 /// sobrevive a restart de client — a conexão é descartável, o personagem
@@ -232,9 +288,10 @@ fn send_fire_input(
     mut autofire_side: Local<u8>,
     mut connection_manager: ResMut<ConnectionManager>,
 ) {
+    // Q = bordo esquerdo, R = bordo direito (E virou ATRACAR, MF-036).
     let side = if keys.just_pressed(KeyCode::KeyQ) {
         Some(BroadsideSide::Port)
-    } else if keys.just_pressed(KeyCode::KeyE) {
+    } else if keys.just_pressed(KeyCode::KeyR) {
         Some(BroadsideSide::Starboard)
     } else if autofire_enabled() {
         // Dev tooling (PRD §39): MAREFORGE_AUTOFIRE=1 dispara bordos

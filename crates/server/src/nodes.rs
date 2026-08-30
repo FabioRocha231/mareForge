@@ -144,6 +144,15 @@ pub fn handle_gather(
         else {
             continue;
         };
+        // MF-036: coleta é ação de mar — atracado, o casco não pega machado.
+        if matches!(
+            ship.presence,
+            mareforge_domain_ships::VesselPresence::Docked(_)
+        ) {
+            info!(node_num, "coleta recusada: atracado (MF-036)");
+            send_failure(&mut connection_manager, client_id, node_num);
+            continue;
+        };
         let Some(mut server_node) = nodes
             .iter_mut()
             .find(|server_node| server_node.node_num == node_num)
