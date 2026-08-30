@@ -16,12 +16,14 @@ use bevy::prelude::*;
 use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 use mareforge_domain_combat::BroadsideSide;
+use mareforge_domain_items::EquipmentSlot;
 use mareforge_protocol::{
     AssignShip, BuySellOrder, CancelSellOrder, CatalogSnapshot, ClientHello, CraftItem,
-    CraftResult, CreateSellOrder, Dock, DockResult, FireBroadside, GatherNode, GatherResult,
-    LootResult, LootWreck, MarketResult, NodeUpdated, NodesSnapshot, OrdersSnapshot,
-    RecipesSnapshot, ServerWelcome, ShipDestroyed, ShipInput, StorageDepositAll,
-    StorageWithdrawAll, Undock, WalletUpdated, WorldSnapshot, ZoneChanged, PROTOCOL_VERSION,
+    CraftResult, CreateSellOrder, Dock, DockResult, EquipItem, FireBroadside, GatherNode,
+    GatherResult, LoadoutResult, LoadoutSnapshot, LootResult, LootWreck, MarketResult, NodeUpdated,
+    NodesSnapshot, OrdersSnapshot, RecipesSnapshot, ServerWelcome, ShipDestroyed, ShipInput,
+    StorageDepositAll, StorageWithdrawAll, Undock, UnequipItem, WalletUpdated, WorldSnapshot,
+    ZoneChanged, PROTOCOL_VERSION,
 };
 
 pub const SERVER_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 5000);
@@ -90,6 +92,8 @@ impl Plugin for ClientNetPlugin {
         app.register_message::<ShipInput>(ChannelDirection::ClientToServer);
         app.register_message::<Dock>(ChannelDirection::ClientToServer);
         app.register_message::<Undock>(ChannelDirection::ClientToServer);
+        app.register_message::<EquipItem>(ChannelDirection::ClientToServer);
+        app.register_message::<UnequipItem>(ChannelDirection::ClientToServer);
         app.register_message::<FireBroadside>(ChannelDirection::ClientToServer);
         app.register_message::<LootWreck>(ChannelDirection::ClientToServer);
         app.register_message::<GatherNode>(ChannelDirection::ClientToServer);
@@ -102,6 +106,8 @@ impl Plugin for ClientNetPlugin {
         app.register_message::<ServerWelcome>(ChannelDirection::ServerToClient);
         app.register_message::<AssignShip>(ChannelDirection::ServerToClient);
         app.register_message::<DockResult>(ChannelDirection::ServerToClient);
+        app.register_message::<LoadoutSnapshot>(ChannelDirection::ServerToClient);
+        app.register_message::<LoadoutResult>(ChannelDirection::ServerToClient);
         app.register_message::<WorldSnapshot>(ChannelDirection::ServerToClient);
         app.register_message::<ShipDestroyed>(ChannelDirection::ServerToClient);
         app.register_message::<LootResult>(ChannelDirection::ServerToClient);
@@ -125,6 +131,7 @@ impl Plugin for ClientNetPlugin {
                 send_hello_on_connect,
                 send_ship_input,
                 send_dock_input,
+                send_loadout_input,
                 send_fire_input,
                 send_loot_input,
                 send_gather_input,
@@ -135,6 +142,7 @@ impl Plugin for ClientNetPlugin {
             (
                 handle_handshake,
                 handle_dock_result,
+                handle_loadout_result,
                 handle_ship_destroyed,
                 reset_on_disconnect,
                 handle_loot_result,
@@ -178,6 +186,60 @@ fn send_dock_input(
         if *autodock_timer >= 1.5 {
             *autodock_timer = 0.0;
             let _ = connection_manager.send_message::<ReliableChannel, _>(&Dock);
+        }
+    }
+}
+
+/// T/Y/U equipam Casco/Velas/Canhão do storage; Shift+T/Y/U desequipam os
+/// slots Hull/Sail/Weapon (MF-039, dev keys — a tela de porto do P3 substitui
+/// isto). MAREFORGE_AUTOEQUIP=1 instala os três em sequência para o smoke.
+fn send_loadout_input(
+    keys: Res<ButtonInput<KeyCode>>,
+    known_catalog: Res<crate::market::KnownCatalog>,
+    time: Res<Time>,
+    mut auto_timer: Local<f32>,
+    mut auto_step: Local<usize>,
+    mut connection_manager: ResMut<ConnectionManager>,
+) {
+    const DEV_EQUIPMENT: [(&str, EquipmentSlot); 3] = [
+        ("Casco Reforçado", EquipmentSlot::Hull),
+        ("Velas de Corrida", EquipmentSlot::Sail),
+        ("Canhão de Bronze", EquipmentSlot::Weapon),
+    ];
+
+    let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+    for (index, key) in [KeyCode::KeyT, KeyCode::KeyY, KeyCode::KeyU]
+        .into_iter()
+        .enumerate()
+    {
+        if !keys.just_pressed(key) {
+            continue;
+        }
+        let (name, slot) = DEV_EQUIPMENT[index];
+        if shift {
+            info!(?slot, "desequipando slot");
+            let _ = connection_manager.send_message::<ReliableChannel, _>(&UnequipItem { slot });
+        } else if let Some(line) = known_catalog.0.get(name) {
+            info!(item = name, "equipando do storage");
+            let _ =
+                connection_manager.send_message::<ReliableChannel, _>(&EquipItem { item: line.id });
+        } else {
+            warn!(item = name, "item fora do catálogo conhecido");
+        }
+    }
+
+    if std::env::var_os("MAREFORGE_AUTOEQUIP").is_some() {
+        *auto_timer += time.delta_secs();
+        if *auto_timer >= 1.0 {
+            *auto_timer = 0.0;
+            if *auto_step < DEV_EQUIPMENT.len() {
+                let (name, _) = DEV_EQUIPMENT[*auto_step];
+                if let Some(line) = known_catalog.0.get(name) {
+                    let _ = connection_manager
+                        .send_message::<ReliableChannel, _>(&EquipItem { item: line.id });
+                }
+            }
+            *auto_step = (*auto_step + 1) % (DEV_EQUIPMENT.len() + 1);
         }
     }
 }
@@ -230,6 +292,18 @@ fn identity_token() -> String {
         info!(token = %token, "nova identidade de jogador criada");
     }
     token
+}
+
+/// Vereditos de loadout: só log (a verdade dos stats vem no ShipState).
+fn handle_loadout_result(mut events: EventReader<ClientReceiveMessage<LoadoutResult>>) {
+    for event in events.read() {
+        let result = event.message();
+        if result.success {
+            info!(reason = %result.reason, "loadout: {}", result.reason);
+        } else {
+            warn!(reason = %result.reason, "loadout recusado: {}", result.reason);
+        }
+    }
 }
 
 /// Sessão caiu: o client não tem mais navio atribuído (o servidor mantém o

@@ -44,12 +44,15 @@ fn catalog_with_goods() -> (ItemCatalog, ItemDefinitionId, ItemDefinitionId) {
     register(ItemDefinition {
         id: hull,
         kind: ItemKind::Equipment,
-        equipment: Some(mareforge_domain_items::EquipmentStats {
-            damage: 0,
-            speed: 0,
-            cargo: 0,
-            hp: 40,
-            range: 0,
+        equipment: Some(mareforge_domain_items::EquipmentDefinition {
+            slot: mareforge_domain_items::EquipmentSlot::Hull,
+            stats: mareforge_domain_items::EquipmentStats {
+                damage: 0,
+                speed: 0,
+                cargo: 0,
+                hp: 40,
+                range: 0,
+            },
         }),
         max_stack: 1,
         base_weight: 8,
@@ -151,13 +154,52 @@ fn vertical_slice_loop_gather_craft_transport_fight_loot_sell() {
         1,
         "casco nasce no storage, não no porão"
     );
+    // ===== 2.5 A EQUIPA o casco no slot Hull (MF-039) =====
+    // PortStorage → Equipped(ship, slot), com stats recalculados na hora —
+    // e ANTES de embarcar: o porão só leva madeira, o casco vai instalado.
+    let definition_small_merchant = mareforge_domain_ships::ShipDefinition::small_merchant();
+    let mut a_loadout = mareforge_domain_ships::ShipLoadout::new();
+    let ship_instance = ShipInstanceId::new();
+    let installed = market
+        .take_one_from_storage(a.character, region_serra, hull)
+        .expect("casco está no storage da Serra");
+    let slot =
+        mareforge_domain_ships::can_equip(&definition_small_merchant, catalog.get(hull).unwrap())
+            .expect("merchant tem slot Hull");
+    a_loadout.equip(ship_instance, installed, slot);
+    let equipped_stats = mareforge_domain_ships::compute_ship_stats(
+        &definition_small_merchant,
+        &a_loadout.components(),
+        &catalog,
+    )
+    .expect("loadout com definições do catálogo");
+    assert_eq!(
+        equipped_stats.max_hp, 140,
+        "casco reforçado (+40 hp) é observável nos stats"
+    );
+    assert!(
+        market
+            .take_one_from_storage(a.character, region_serra, hull)
+            .is_err(),
+        "o casco saiu do storage: equipar move a instância, não copia"
+    );
+    // Swap NUNCA destrói: desequipar devolve a MESMA instância ao storage.
+    let devolvido = a_loadout.unequip(slot).expect("casco sai do slot");
+    market.return_to_storage(a.character, region_serra, devolvido, &catalog);
+    a_loadout.equip(
+        ship_instance,
+        market
+            .take_one_from_storage(a.character, region_serra, hull)
+            .expect("re-equipa o casco"),
+        slot,
+    );
     market
         .withdraw_all(a.character, region_serra, &mut a.hold, &catalog)
-        .expect("embarca o casco (e o resto da madeira)");
+        .expect("embarca só o que decidiu carregar");
     assert_eq!(
         a.hold.used_weight(&catalog).unwrap(),
-        38, // 15 madeira (30) + casco (8)
-        "carga embarcada: decisão explícita do jogador"
+        30, // 15 madeira (peso 2) — o casco vai INSTALADO, não no porão
+        "carga embarcada e loadout são decisões separadas"
     );
 
     // ===== 3. A transporta (modelo puro de movimento, rota leste) =====
@@ -203,10 +245,15 @@ fn vertical_slice_loop_gather_craft_transport_fight_loot_sell() {
     assert_eq!(port_region_id, region_serra);
     market
         .deposit_all(a.character, port_region_id, &mut a.hold, &catalog)
-        .expect("deposita tudo: madeira restante + casco");
-    let (_order_num, listing_fee) = market
+        .expect("deposita a madeira restante; o casco segue INSTALADO");
+    // MF-039: o casco equipado não está no storage — não pode ser listado
+    // (equipar moveu a instância; é isso que impede vender o que está em uso).
+    assert!(market
         .create_order(a.character, port_region_id, hull, 1, Money(60))
-        .expect("o casco está no storage local");
+        .is_err());
+    let (_order_num, listing_fee) = market
+        .create_order(a.character, port_region_id, wood, 15, Money(4))
+        .expect("a madeira restante está no storage local");
     assert!(listing_fee.0 > 0, "listing fee queimou ouro (§46)");
 
     // ===== 5. B ataca: projéteis até afundar (PvP em fronteira) =====
@@ -232,20 +279,19 @@ fn vertical_slice_loop_gather_craft_transport_fight_loot_sell() {
             ItemInstance::new_resource(ItemInstanceId::new(), wood, 5),
         )
         .unwrap();
-    hold_afundado
-        .insert(
-            &catalog,
-            ItemInstance::new_equipment(ItemInstanceId::new(), hull, 100),
-        )
-        .unwrap();
+    // O casco NÃO está no porão: está INSTALADO no slot Hull (MF-039) e
+    // entra na resolução pela lista de equipamento, abaixo.
     let cargo: Vec<ItemInstance> = hold_afundado
         .items()
         .iter()
         .map(|custody| custody.instance.clone())
         .collect();
+    // MF-039: o equipamento INSTALADO (um casco no slot Hull) participa do
+    // full loot — 50% de chance de sobreviver por peça (§24).
+    let equipment = [hull];
     let outcome = resolve_ship_destruction(
         DestructionEventId::new(),
-        &[],
+        &equipment,
         &cargo,
         &LootPolicy::default(),
     );
@@ -254,8 +300,16 @@ fn vertical_slice_loop_gather_craft_transport_fight_loot_sell() {
     // 80% da carga sobrevive por unidade, §25).
     let survived: u32 = outcome.wreck_items.iter().map(|s| s.quantity).sum();
     let destroyed: u32 = outcome.destroyed_items.iter().map(|s| s.quantity).sum();
-    let shipped: u32 = cargo.iter().map(|item| item.quantity).sum();
+    let shipped: u32 = cargo.iter().map(|item| item.quantity).sum::<u32>() + equipment.len() as u32;
     assert_eq!(survived + destroyed, shipped);
+    // Conservação inclui o equipamento: o casco instalado está em algum
+    // dos dois lados (sobreviveu 50% ou afundou 50%).
+    let casco_em_algum_lado = outcome
+        .wreck_items
+        .iter()
+        .chain(outcome.destroyed_items.iter())
+        .any(|item| item.definition == hull && item.quantity == 1);
+    assert!(casco_em_algum_lado, "equipamento instalado entra no loot");
 
     let mut chest = WreckChest::new(WreckId::new());
     for survivor in &outcome.wreck_items {

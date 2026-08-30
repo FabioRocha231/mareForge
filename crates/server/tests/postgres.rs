@@ -220,6 +220,7 @@ fn ship_record_roundtrips_through_postgres() {
 
     let ship_instance = ShipInstanceId::new();
     let item = ItemDefinitionId::new();
+    let sail_item = ItemDefinitionId::new();
     let record = ShipRecord {
         ship_instance,
         character,
@@ -231,6 +232,13 @@ fn ship_record_roundtrips_through_postgres() {
         cargo: vec![Custody {
             instance: ItemInstance::new_resource(ItemInstanceId::new(), item, 12),
             location: ItemLocation::ShipCargo(ship_instance),
+        }],
+        equipped: vec![Custody {
+            instance: ItemInstance::new_equipment(ItemInstanceId::new(), sail_item, 100),
+            location: ItemLocation::Equipped {
+                ship: ship_instance,
+                slot: mareforge_domain_items::EquipmentSlot::Sail,
+            },
         }],
     };
 
@@ -246,6 +254,14 @@ fn ship_record_roundtrips_through_postgres() {
     assert_eq!(restored.hp, 55);
     assert_eq!(restored.cargo.len(), 1);
     assert_eq!(restored.cargo[0].instance.quantity, 12);
+    assert_eq!(restored.equipped.len(), 1, "loadout persistiu");
+    assert_eq!(
+        restored.equipped[0].location,
+        ItemLocation::Equipped {
+            ship: ship_instance,
+            slot: mareforge_domain_items::EquipmentSlot::Sail,
+        }
+    );
     assert_eq!(
         restored.cargo[0].location,
         ItemLocation::ShipCargo(ship_instance)

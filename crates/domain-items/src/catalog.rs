@@ -53,10 +53,11 @@ impl ItemCatalog {
         self.definitions.get(&id)
     }
 
-    pub fn equipment_stats(
+    /// A definição de equipamento completa (slot + stats) do item (MF-038).
+    pub fn equipment_definition(
         &self,
         id: ItemDefinitionId,
-    ) -> Result<&crate::definition::EquipmentStats, CatalogError> {
+    ) -> Result<&crate::definition::EquipmentDefinition, CatalogError> {
         let definition = self
             .definitions
             .get(&id)
@@ -66,6 +67,15 @@ impl ItemCatalog {
             .as_ref()
             .ok_or(CatalogError::NotEquipment(id))
     }
+
+    /// Só os modificadores de stats (consumo histórico de compute_ship_stats).
+    pub fn equipment_stats(
+        &self,
+        id: ItemDefinitionId,
+    ) -> Result<&crate::definition::EquipmentStats, CatalogError> {
+        self.equipment_definition(id)
+            .map(|equipment| &equipment.stats)
+    }
 }
 
 #[cfg(test)]
@@ -73,7 +83,7 @@ mod tests {
     use smallvec::SmallVec;
 
     use super::*;
-    use crate::definition::EquipmentStats;
+    use crate::definition::{EquipmentDefinition, EquipmentSlot, EquipmentStats};
 
     fn resource(id: ItemDefinitionId) -> ItemDefinition {
         ItemDefinition {
@@ -92,6 +102,7 @@ mod tests {
             id,
             String::from("iron cannon"),
             250,
+            EquipmentSlot::Weapon,
             EquipmentStats {
                 damage: 15,
                 ..EquipmentStats::default()
@@ -146,7 +157,10 @@ mod tests {
         let id = ItemDefinitionId::new();
         let mut catalog = ItemCatalog::default();
         let mut def = resource(id);
-        def.equipment = Some(EquipmentStats::default());
+        def.equipment = Some(EquipmentDefinition {
+            slot: EquipmentSlot::Hull,
+            stats: EquipmentStats::default(),
+        });
 
         assert_eq!(
             catalog.register(def),

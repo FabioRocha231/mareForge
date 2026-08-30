@@ -64,7 +64,8 @@ mod tests {
 
     use super::*;
     use crate::components::EquippedComponent;
-    use crate::definition::{ShipKind, SlotKind};
+    use crate::definition::ShipKind;
+    use mareforge_domain_items::EquipmentSlot;
 
     fn def() -> ShipDefinition {
         ShipDefinition {
@@ -86,6 +87,7 @@ mod tests {
             ItemDefinitionId::new(),
             String::from("test equipment"),
             10,
+            EquipmentSlot::Weapon,
             stats,
         );
         let id = definition.id;
@@ -94,9 +96,9 @@ mod tests {
         (catalog, id)
     }
 
-    fn component(slot_kind: SlotKind, item_definition: ItemDefinitionId) -> EquippedComponent {
+    fn component(slot: EquipmentSlot, item_definition: ItemDefinitionId) -> EquippedComponent {
         EquippedComponent {
-            slot_kind,
+            slot,
             item_definition,
         }
     }
@@ -120,7 +122,7 @@ mod tests {
             ..EquipmentStats::default()
         });
         let equipped = EquippedComponents {
-            weapon: vec![component(SlotKind::Weapon, id)],
+            weapon: vec![component(EquipmentSlot::Weapon, id)],
             ..EquippedComponents::default()
         };
         let stats = compute_ship_stats(&def(), &equipped, &catalog).unwrap();
@@ -134,7 +136,7 @@ mod tests {
             ..EquipmentStats::default()
         });
         let equipped = EquippedComponents {
-            weapon: vec![component(SlotKind::Weapon, id)],
+            weapon: vec![component(EquipmentSlot::Weapon, id)],
             ..EquippedComponents::default()
         };
         let stats = compute_ship_stats(&def(), &equipped, &catalog).unwrap();
@@ -149,7 +151,7 @@ mod tests {
             ..EquipmentStats::default()
         });
         let equipped = EquippedComponents {
-            sail: vec![component(SlotKind::Sail, id)],
+            sail: vec![component(EquipmentSlot::Sail, id)],
             ..EquippedComponents::default()
         };
         let stats = compute_ship_stats(&def(), &equipped, &catalog).unwrap();
@@ -165,7 +167,7 @@ mod tests {
             ..EquipmentStats::default()
         });
         let equipped = EquippedComponents {
-            hull: vec![component(SlotKind::Hull, id)],
+            hull: vec![component(EquipmentSlot::Hull, id)],
             ..EquippedComponents::default()
         };
         let stats = compute_ship_stats(&def(), &equipped, &catalog).unwrap();
@@ -177,7 +179,7 @@ mod tests {
     fn unknown_equipped_item_fails_closed() {
         let catalog = ItemCatalog::default();
         let equipped = EquippedComponents {
-            weapon: vec![component(SlotKind::Weapon, ItemDefinitionId::new())],
+            weapon: vec![component(EquipmentSlot::Weapon, ItemDefinitionId::new())],
             ..EquippedComponents::default()
         };
 
@@ -205,7 +207,7 @@ mod tests {
             })
             .unwrap();
         let equipped = EquippedComponents {
-            weapon: vec![component(SlotKind::Weapon, id)],
+            weapon: vec![component(EquipmentSlot::Weapon, id)],
             ..EquippedComponents::default()
         };
 

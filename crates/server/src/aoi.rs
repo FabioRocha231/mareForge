@@ -80,6 +80,11 @@ mod tests {
             heading: 0.0,
             speed: 0.0,
             cargo_weight: 0,
+            hp: 100,
+            max_hp: 100,
+            max_speed: 30.0,
+            weapon_damage: 20,
+            weapon_range: 50.0,
         }
     }
 

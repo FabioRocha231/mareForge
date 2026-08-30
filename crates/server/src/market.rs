@@ -21,7 +21,9 @@ use mareforge_domain_crafting::{craft_in_storage, CraftError, Recipe, StationKin
 use mareforge_domain_economy::{
     validate_new_order, FeePolicy, Ledger, LedgerKind, MarketError, MarketOrder, Money, OrderStatus,
 };
-use mareforge_domain_items::{CargoHold, Custody, ItemCatalog, ItemInstance, ItemLocation};
+use mareforge_domain_items::{
+    put_stack, CargoHold, Custody, ItemCatalog, ItemInstance, ItemLocation,
+};
 use mareforge_domain_ships::VesselPresence;
 use mareforge_domain_world::WorldMap;
 use mareforge_protocol::{
@@ -411,6 +413,49 @@ impl ServerMarket {
         let output = craft_in_storage(recipe, storage, catalog, station, region)?;
         self.persist();
         Ok(output)
+    }
+
+    /// Retira UMA unidade do item do storage (equipar, MF-039). Fail-closed.
+    pub fn take_one_from_storage(
+        &mut self,
+        character: CharacterId,
+        region: RegionId,
+        item: ItemDefinitionId,
+    ) -> Result<Custody, MarketError> {
+        let storage = self
+            .storage
+            .get_mut(&(character, region))
+            .ok_or(MarketError::NotInStorage)?;
+        let mut taken = take_from_storage(storage, item, 1, ItemLocation::PortStorage(region));
+        match taken.pop() {
+            Some(custody) => {
+                self.persist();
+                Ok(custody)
+            }
+            None => Err(MarketError::NotInStorage),
+        }
+    }
+
+    /// Devolve uma custódia ao storage (swap de loadout, MF-039). Storage
+    /// não tem limite: nunca falha, nunca destrói.
+    pub fn return_to_storage(
+        &mut self,
+        character: CharacterId,
+        region: RegionId,
+        custody: Custody,
+        catalog: &ItemCatalog,
+    ) {
+        let max_stack = catalog
+            .get(custody.instance.definition)
+            .map(|definition| definition.max_stack)
+            .unwrap_or(1);
+        let storage = self.storage.entry((character, region)).or_default();
+        put_stack(
+            storage,
+            custody.with_location(ItemLocation::PortStorage(region)),
+            max_stack,
+        );
+        self.persist();
     }
 
     /// Cancela SUA order: item volta do escrow pro storage; fee não volta.

@@ -1,3 +1,4 @@
+use mareforge_domain_items::EquipmentSlot;
 use mareforge_shared::ids::ShipDefinitionId;
 use serde::{Deserialize, Serialize};
 
@@ -8,17 +9,9 @@ pub enum ShipKind {
     Corsair,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum SlotKind {
-    Hull,
-    Sail,
-    Weapon,
-    Aux,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SlotSpec {
-    pub kind: SlotKind,
+    pub kind: EquipmentSlot,
     pub accepts_tag: Option<String>, // tag opcional de ItemDefinition; None = aceita qualquer
 }
 
@@ -37,11 +30,11 @@ pub struct ShipDefinition {
 }
 
 impl ShipDefinition {
-    pub fn slot_count(&self, kind: SlotKind) -> usize {
+    pub fn slot_count(&self, kind: EquipmentSlot) -> usize {
         self.slots.iter().filter(|s| s.kind == kind).count()
     }
 
-    fn slots_of(kind: SlotKind) -> Vec<SlotSpec> {
+    fn slots_of(kind: EquipmentSlot) -> Vec<SlotSpec> {
         vec![SlotSpec {
             kind,
             accepts_tag: None,
@@ -56,10 +49,10 @@ impl ShipDefinition {
             id: ShipDefinitionId::new(),
             kind: ShipKind::SmallMerchant,
             display_name: String::from("Small Merchant"),
-            slots: Self::slots_of(SlotKind::Hull)
+            slots: Self::slots_of(EquipmentSlot::Hull)
                 .into_iter()
-                .chain(Self::slots_of(SlotKind::Sail))
-                .chain(Self::slots_of(SlotKind::Weapon))
+                .chain(Self::slots_of(EquipmentSlot::Sail))
+                .chain(Self::slots_of(EquipmentSlot::Weapon))
                 .collect(),
             cargo_capacity: 100,
             base_speed: 30.0,
@@ -82,10 +75,10 @@ impl ShipDefinition {
             id: ShipDefinitionId::new(),
             kind: ShipKind::Patrol,
             display_name: String::from("Patrol"),
-            slots: Self::slots_of(SlotKind::Hull)
+            slots: Self::slots_of(EquipmentSlot::Hull)
                 .into_iter()
-                .chain(Self::slots_of(SlotKind::Sail))
-                .chain(Self::slots_of(SlotKind::Weapon))
+                .chain(Self::slots_of(EquipmentSlot::Sail))
+                .chain(Self::slots_of(EquipmentSlot::Weapon))
                 .collect(),
             cargo_capacity: 70,
             base_speed: 27.0,
@@ -102,10 +95,10 @@ impl ShipDefinition {
             id: ShipDefinitionId::new(),
             kind: ShipKind::Corsair,
             display_name: String::from("Corsair"),
-            slots: Self::slots_of(SlotKind::Hull)
+            slots: Self::slots_of(EquipmentSlot::Hull)
                 .into_iter()
-                .chain(Self::slots_of(SlotKind::Sail))
-                .chain(Self::slots_of(SlotKind::Weapon))
+                .chain(Self::slots_of(EquipmentSlot::Sail))
+                .chain(Self::slots_of(EquipmentSlot::Weapon))
                 .collect(),
             cargo_capacity: 40,
             base_speed: 40.0,
@@ -128,19 +121,19 @@ mod tests {
             display_name: String::new(),
             slots: vec![
                 SlotSpec {
-                    kind: SlotKind::Hull,
+                    kind: EquipmentSlot::Hull,
                     accepts_tag: Some("hull".to_owned()),
                 },
                 SlotSpec {
-                    kind: SlotKind::Hull,
+                    kind: EquipmentSlot::Hull,
                     accepts_tag: None,
                 },
                 SlotSpec {
-                    kind: SlotKind::Sail,
+                    kind: EquipmentSlot::Sail,
                     accepts_tag: None,
                 },
                 SlotSpec {
-                    kind: SlotKind::Weapon,
+                    kind: EquipmentSlot::Weapon,
                     accepts_tag: None,
                 },
             ],
@@ -156,9 +149,9 @@ mod tests {
     #[test]
     fn slot_count_counts_each_kind() {
         let def = def();
-        assert_eq!(def.slot_count(SlotKind::Hull), 2);
-        assert_eq!(def.slot_count(SlotKind::Sail), 1);
-        assert_eq!(def.slot_count(SlotKind::Weapon), 1);
-        assert_eq!(def.slot_count(SlotKind::Aux), 0);
+        assert_eq!(def.slot_count(EquipmentSlot::Hull), 2);
+        assert_eq!(def.slot_count(EquipmentSlot::Sail), 1);
+        assert_eq!(def.slot_count(EquipmentSlot::Weapon), 1);
+        assert_eq!(def.slot_count(EquipmentSlot::Aux), 0);
     }
 }

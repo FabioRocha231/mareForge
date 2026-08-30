@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 mareforge-domain-combat = { path = "../domain-combat" }
 mareforge-domain-crafting = { path = "../domain-crafting" }
+mareforge-domain-items = { path = "../domain-items" }
 mareforge-domain-world = { path = "../domain-world" }
 mareforge-shared = { path = "../shared" }
 serde = { version = "1", features = ["derive"] }

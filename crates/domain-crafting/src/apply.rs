@@ -187,7 +187,10 @@ mod tests {
         ItemDefinition {
             id,
             kind: ItemKind::Equipment,
-            equipment: Some(mareforge_domain_items::EquipmentStats::default()),
+            equipment: Some(mareforge_domain_items::EquipmentDefinition {
+                slot: mareforge_domain_items::EquipmentSlot::Hull,
+                stats: mareforge_domain_items::EquipmentStats::default(),
+            }),
             max_stack: 1,
             base_weight: weight,
             tags: SmallVec::new(),
@@ -349,7 +352,10 @@ mod storage_tests {
         ItemDefinition {
             id,
             kind: ItemKind::Equipment,
-            equipment: Some(mareforge_domain_items::EquipmentStats::default()),
+            equipment: Some(mareforge_domain_items::EquipmentDefinition {
+                slot: mareforge_domain_items::EquipmentSlot::Hull,
+                stats: mareforge_domain_items::EquipmentStats::default(),
+            }),
             max_stack: 1,
             base_weight: weight,
             tags: SmallVec::new(),

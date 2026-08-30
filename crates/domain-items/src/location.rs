@@ -8,13 +8,20 @@ use crate::instance::ItemInstance;
 use mareforge_shared::ids::{ItemInstanceId, MarketOrderId, RegionId, ShipInstanceId, WreckId};
 
 /// Onde um item está fisicamente (PRD §29). Novas variantes entram quando o
-/// jogo pedir (ex.: equipamento equipado).
+/// jogo pedir.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ItemLocation {
     PortStorage(RegionId),
     ShipCargo(ShipInstanceId),
     MarketEscrow(MarketOrderId),
     Wreck(WreckId),
+    /// Equipamento INSTALADO num slot do casco (MF-039). A instância segue
+    /// viva e rastreável: swap devolve-a ao storage, naufrágio a leva ao
+    /// wreck via full loot.
+    Equipped {
+        ship: ShipInstanceId,
+        slot: crate::definition::EquipmentSlot,
+    },
 }
 
 /// Um item instanciado junto da sua localização física.

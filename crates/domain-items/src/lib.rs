@@ -10,7 +10,9 @@ pub mod storage;
 
 pub use cargo::{CargoError, CargoHold};
 pub use catalog::{CatalogError, ItemCatalog};
-pub use definition::{EquipmentStats, ItemDefinition, ItemKind, Tag};
+pub use definition::{
+    EquipmentDefinition, EquipmentSlot, EquipmentStats, ItemDefinition, ItemKind, Tag,
+};
 pub use instance::ItemInstance;
 pub use location::{Custody, ItemLocation};
 pub use stack::{remaining_capacity, split, try_merge, SplitError};

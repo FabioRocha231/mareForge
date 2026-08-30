@@ -1,13 +1,13 @@
 use mareforge_shared::ids::ItemDefinitionId;
 use serde::{Deserialize, Serialize};
 
-use crate::definition::SlotKind;
+use mareforge_domain_items::EquipmentSlot;
 
 /// Componente equipado em um slot. Aponta para a definição rica no catálogo
 /// de itens (`domain-items`), fonte única dos modificadores de stats.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EquippedComponent {
-    pub slot_kind: SlotKind,
+    pub slot: EquipmentSlot,
     pub item_definition: ItemDefinitionId,
 }
 

@@ -40,6 +40,13 @@ impl CargoHold {
         self.capacity
     }
 
+    /// Redefine a capacidade (recálculo de stats com loadout novo, MF-039:
+    /// casco diferente = porão diferente). Usado weight nunca é clampado —
+    /// inserções seguem fail-closed contra a capacidade vigente.
+    pub fn set_capacity(&mut self, capacity: u32) {
+        self.capacity = capacity;
+    }
+
     pub fn items(&self) -> &[Custody] {
         &self.slots
     }

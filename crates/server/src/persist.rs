@@ -31,7 +31,8 @@ use uuid::Uuid;
 use crate::market::MarketSnapshot;
 
 /// Registro persistido de um navio (MF-035: o navio sobrevive à sessão).
-/// `cargo` são as custódias com localização `ShipCargo(ship_instance)`.
+/// `cargo` são as custódias `ShipCargo`; `equipped` as `Equipped` nos slots
+/// (MF-039 — o loadout volta como estava, stats são recalculados no restore).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ShipRecord {
     pub ship_instance: ShipInstanceId,
@@ -42,6 +43,7 @@ pub struct ShipRecord {
     pub y: f32,
     pub heading: f32,
     pub cargo: Vec<Custody>,
+    pub equipped: Vec<Custody>,
 }
 
 /// O contrato de persistência do servidor (MF-033). Síncrono de propósito:
@@ -501,7 +503,8 @@ impl StateStore for PostgresStateStore {
 
             let rows = sqlx::query_as::<_, (Uuid, Uuid, i32, Option<i16>, serde_json::Value)>(
                 "SELECT id, definition_id, quantity, durability, location FROM item_instances \
-                 WHERE location ->> 'ShipCargo' = $2",
+                 WHERE location ->> 'ShipCargo' = $2 \
+                 OR location -> 'Equipped' ->> 'ship' = $2",
             )
             .bind(character.0)
             .bind(id.to_string())
@@ -510,11 +513,12 @@ impl StateStore for PostgresStateStore {
             .map_err(|error| error.to_string())?;
 
             let mut cargo = Vec::new();
+            let mut equipped = Vec::new();
             for (item_id, definition, quantity, durability, location) in rows {
                 let Ok(location) = serde_json::from_value(location) else {
                     return Err(format!("item {item_id} com location ilegível"));
                 };
-                cargo.push(Custody {
+                let custody = Custody {
                     instance: ItemInstance {
                         id: mareforge_shared::ids::ItemInstanceId(item_id),
                         definition: mareforge_shared::ids::ItemDefinitionId(definition),
@@ -522,7 +526,15 @@ impl StateStore for PostgresStateStore {
                         durability: durability.map(|d| d.max(0) as u16),
                     },
                     location,
-                });
+                };
+                if matches!(
+                    custody.location,
+                    mareforge_domain_items::ItemLocation::Equipped { .. }
+                ) {
+                    equipped.push(custody);
+                } else {
+                    cargo.push(custody);
+                }
             }
 
             Ok(Some(ShipRecord {
@@ -534,6 +546,7 @@ impl StateStore for PostgresStateStore {
                 y: y as f32,
                 heading: heading as f32,
                 cargo,
+                equipped,
             }))
         })
     }

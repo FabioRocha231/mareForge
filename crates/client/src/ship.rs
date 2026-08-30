@@ -299,6 +299,21 @@ pub fn update_cargo_readout(
     else {
         return;
     };
+    let Some(visual) = visuals.iter().find(|visual| visual.target.ship_id == my_id) else {
+        return;
+    };
+    let state = &visual.target;
     let mut text = readout.single_mut();
-    text.0 = format!("Carga: {weight}");
+    // Stats AUTORITATIVOS do snapshot (MF-039): equipar vela/casco/canhão
+    // muda esta linha no próximo quadro — a troca é observável.
+    text.0 = format!(
+        "Carga: {} · HP {}/{} · vel {:.0} (máx {:.0}) · dano {} · alc {:.0}",
+        weight,
+        state.hp,
+        state.max_hp,
+        state.speed,
+        state.max_speed,
+        state.weapon_damage,
+        state.weapon_range
+    );
 }

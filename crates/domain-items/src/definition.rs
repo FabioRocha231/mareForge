@@ -24,6 +24,19 @@ pub enum Tag {
     // Adicione outros conforme necessidade da vertical slice; mantenha esta lista pequena.
 }
 
+/// O slot físico que um equipamento ocupa no navio (MF-038). Tipo NEUTRO
+/// morando em domain-items para não duplicar enums equivalentes: domain-ships
+/// usa ESTE tipo para descrever os slots que cada casco aceita.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum EquipmentSlot {
+    #[default]
+    Hull,
+    Sail,
+    Weapon,
+    Aux,
+}
+
+/// Modificadores aditivos que um equipamento aplica aos stats do navio.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EquipmentStats {
     /// Pontos aditivos de dano de arma.
@@ -38,13 +51,23 @@ pub struct EquipmentStats {
     pub range: i32,
 }
 
+/// A parte "equipamento" de uma definição de item (MF-038): QUAL slot ocupa
+/// e QUE stats aplica. Item `Equipment` sem isto é inválido (catálogo
+/// barra); item `Resource` nunca tem.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EquipmentDefinition {
+    pub slot: EquipmentSlot,
+    pub stats: EquipmentStats,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ItemDefinition {
     pub id: ItemDefinitionId,
     pub kind: ItemKind,
-    /// Modificadores de stats — presente somente quando `kind` é `Equipment`.
-    /// Fonte de verdade dos modificadores; não se duplica em instâncias.
-    pub equipment: Option<EquipmentStats>,
+    /// Definição de equipamento — presente somente quando `kind` é
+    /// `Equipment`. Fonte de verdade do slot e dos modificadores; não se
+    /// duplica em instâncias.
+    pub equipment: Option<EquipmentDefinition>,
     pub max_stack: u32,
     pub base_weight: u32,
     pub tags: SmallVec<[Tag; 4]>,
@@ -56,12 +79,13 @@ impl ItemDefinition {
         id: ItemDefinitionId,
         display_name: String,
         base_weight: u32,
+        slot: EquipmentSlot,
         stats: EquipmentStats,
     ) -> Self {
         Self {
             id,
             kind: ItemKind::Equipment,
-            equipment: Some(stats),
+            equipment: Some(EquipmentDefinition { slot, stats }),
             max_stack: 1,
             base_weight,
             tags: SmallVec::new(),

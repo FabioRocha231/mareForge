@@ -76,7 +76,7 @@ fn setup_hud(mut commands: Commands, camera: Query<Entity, With<Camera2d>>) {
     };
     hud(
         &mut commands,
-        "W/S velas · A/D leme · Q/R bordos · E atracar/desatracar · F saquear · G coletar · 1-9 oficina (atracado) · Z/X storage (atracado) · V/N/B mercado (atracado) · ESC sair",
+        "W/S velas · A/D leme · Q/R bordos · E atracar · T/Y/U equipar · Shift+T/Y/U desequipar (atracado) · F saquear · G coletar · 1-9 oficina · Z/X storage · V/N/B mercado · ESC sair",
         11.0,
         Color::srgb(0.85, 0.85, 0.85),
         -170.0,

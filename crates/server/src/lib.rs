@@ -1,5 +1,6 @@
 pub mod aoi;
 pub mod crafting;
+pub mod loadout;
 pub mod market;
 pub mod net;
 pub mod nodes;

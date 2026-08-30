@@ -6,6 +6,7 @@
 
 use mareforge_domain_combat::weapon::BroadsideSide;
 use mareforge_domain_crafting::recipe::StationKind;
+use mareforge_domain_items::EquipmentSlot;
 use mareforge_domain_world::RiskTier;
 use mareforge_shared::ids::ItemDefinitionId;
 use serde::{Deserialize, Serialize};
@@ -35,7 +36,11 @@ use serde::{Deserialize, Serialize};
 ///     `DockResult` (com estado resultante `docked`). Atracar é um ESTADO
 ///     explícito: serviços de porto (storage, craft, mercado, construção)
 ///     exigem `Docked`; movimento/tiro/coleta/saque exigem `AtSea`.
-pub const PROTOCOL_VERSION: u16 = 9;
+/// v10: A1-P2 — loadout (MF-039): intents `EquipItem`/`UnequipItem`,
+///     veredito `LoadoutResult` e `LoadoutSnapshot` no handshake. E o
+///     `ShipState` passa a carregar os stats AUTORITATIVOS (hp, max_hp,
+///     velocidade máxima, dano e alcance) — o client nunca deriva stats.
+pub const PROTOCOL_VERSION: u16 = 10;
 
 /// Primeira mensagem do client após conectar (ADR-0011). `identity` é o
 /// token persistente do jogador (MF-035): o servidor resolve token →
@@ -82,6 +87,8 @@ pub struct ShipInput {
 }
 
 /// Estado autoritativo de um navio no tick do snapshot (PRD §64: ShipState).
+/// Desde o v10 carrega os STATS do servidor (MF-039): o client exibe, nunca
+/// calcula — equipar vela/casco/canhão aparece aqui no próximo snapshot.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct ShipState {
     pub ship_id: u32,
@@ -89,10 +96,51 @@ pub struct ShipState {
     pub y: f32,
     /// Radianos, 0 = +X, anti-horário (convenção de `domain-ships`).
     pub heading: f32,
-    /// m/s.
+    /// m/s (atual).
     pub speed: f32,
     /// Peso atual da carga (unidades de peso; o limite é do navio).
     pub cargo_weight: u32,
+    pub hp: u32,
+    pub max_hp: u32,
+    /// m/s (máximo com o loadout atual).
+    pub max_speed: f32,
+    pub weapon_damage: u32,
+    pub weapon_range: f32,
+}
+
+/// Instala um item do storage regional no slot dele (MF-039). Só atracado;
+/// slot ocupado é swap — o antigo volta ao storage, nada é destruído.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EquipItem {
+    pub item: ItemDefinitionId,
+}
+
+/// Desinstala o slot; o item volta ao storage da região onde está atracado.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnequipItem {
+    pub slot: EquipmentSlot,
+}
+
+/// Uma linha do loadout do PRÓPRIO navio: o slot existe no casco? há item?
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LoadoutLine {
+    pub slot: EquipmentSlot,
+    /// Display name do item equipado (vazio quando o slot está livre).
+    pub item_name: String,
+    pub equipped: bool,
+}
+
+/// Loadout completo do navio do observador, no hello e a cada troca.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LoadoutSnapshot {
+    pub slots: Vec<LoadoutLine>,
+}
+
+/// Veredito de equipar/desequipar.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LoadoutResult {
+    pub success: bool,
+    pub reason: String,
 }
 
 /// Comando de disparo de bordo do jogador (PRD §19). Confiável: é um clique,
@@ -356,11 +404,68 @@ mod tests {
     use super::*;
 
     #[test]
-    fn current_protocol_version_is_nine() {
-        assert_eq!(PROTOCOL_VERSION, 9);
+    fn current_protocol_version_is_ten() {
+        assert_eq!(PROTOCOL_VERSION, 10);
         assert_eq!(
             ClientHello::current("token").protocol_version,
             PROTOCOL_VERSION
+        );
+    }
+
+    #[test]
+    fn ship_state_carries_authoritative_stats() {
+        let state = ShipState {
+            ship_id: 1,
+            x: 0.0,
+            y: 0.0,
+            heading: 0.0,
+            speed: 30.0,
+            cargo_weight: 38,
+            hp: 140,
+            max_hp: 140,
+            max_speed: 36.0,
+            weapon_damage: 30,
+            weapon_range: 55.0,
+        };
+        let bytes = bincode::serialize(&state).unwrap();
+        assert_eq!(bincode::deserialize::<ShipState>(&bytes).unwrap(), state);
+    }
+
+    #[test]
+    fn loadout_messages_roundtrip() {
+        let equip = EquipItem {
+            item: ItemDefinitionId::new(),
+        };
+        let bytes = bincode::serialize(&equip).unwrap();
+        assert_eq!(bincode::deserialize::<EquipItem>(&bytes).unwrap(), equip);
+
+        let unequip = UnequipItem {
+            slot: EquipmentSlot::Sail,
+        };
+        let bytes = bincode::serialize(&unequip).unwrap();
+        assert_eq!(
+            bincode::deserialize::<UnequipItem>(&bytes).unwrap(),
+            unequip
+        );
+
+        let snapshot = LoadoutSnapshot {
+            slots: vec![
+                LoadoutLine {
+                    slot: EquipmentSlot::Hull,
+                    item_name: String::from("Casco Reforçado"),
+                    equipped: true,
+                },
+                LoadoutLine {
+                    slot: EquipmentSlot::Sail,
+                    item_name: String::new(),
+                    equipped: false,
+                },
+            ],
+        };
+        let bytes = bincode::serialize(&snapshot).unwrap();
+        assert_eq!(
+            bincode::deserialize::<LoadoutSnapshot>(&bytes).unwrap(),
+            snapshot
         );
     }
 
@@ -429,6 +534,11 @@ mod tests {
                     heading: 0.1,
                     speed: 4.0,
                     cargo_weight: 36,
+                    hp: 100,
+                    max_hp: 100,
+                    max_speed: 30.0,
+                    weapon_damage: 20,
+                    weapon_range: 50.0,
                 },
                 ShipState {
                     ship_id: 2,
@@ -437,6 +547,11 @@ mod tests {
                     heading: 3.0,
                     speed: 0.0,
                     cargo_weight: 0,
+                    hp: 70,
+                    max_hp: 70,
+                    max_speed: 40.0,
+                    weapon_damage: 25,
+                    weapon_range: 55.0,
                 },
             ],
             projectiles: vec![ProjectileState {

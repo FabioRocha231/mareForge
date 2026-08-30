@@ -21,20 +21,22 @@ use mareforge_domain_combat::{
     LootPolicy, Projectile, WeaponParams, WreckChest, WreckPolicy,
 };
 use mareforge_domain_items::{
-    CargoHold, Custody, EquipmentStats, ItemCatalog, ItemDefinition, ItemInstance, ItemKind,
+    CargoHold, Custody, EquipmentDefinition, EquipmentSlot, EquipmentStats, ItemCatalog,
+    ItemDefinition, ItemInstance, ItemKind,
 };
 use mareforge_domain_ships::{
     compute_ship_stats, dock as dock_vessel, step_motion, undock as undock_vessel, DockPolicy,
-    EquippedComponents, MotionInput, MotionTuning, ShipKind, ShipMotion, ShipStats, VesselPresence,
+    EquippedComponents, MotionInput, MotionTuning, ShipKind, ShipLoadout, ShipMotion, ShipStats,
+    VesselPresence,
 };
 use mareforge_domain_world::{GatheringPolicy, RiskPolicy, WorldMap};
 use mareforge_protocol::{
     AssignShip, BuySellOrder, CancelSellOrder, CatalogSnapshot, ClientHello, CraftItem,
-    CraftResult, CreateSellOrder, Dock, DockResult, FireBroadside, GatherNode, GatherResult,
-    LootResult, LootWreck, MarketResult, NodeUpdated, NodesSnapshot, OrdersSnapshot,
-    ProjectileState, RecipesSnapshot, ServerWelcome, ShipDestroyed, ShipInput, ShipState,
-    StorageDepositAll, StorageWithdrawAll, Undock, WalletUpdated, WorldSnapshot, WreckState,
-    ZoneChanged, PROTOCOL_VERSION,
+    CraftResult, CreateSellOrder, Dock, DockResult, EquipItem, FireBroadside, GatherNode,
+    GatherResult, LoadoutResult, LoadoutSnapshot, LootResult, LootWreck, MarketResult, NodeUpdated,
+    NodesSnapshot, OrdersSnapshot, ProjectileState, RecipesSnapshot, ServerWelcome, ShipDestroyed,
+    ShipInput, ShipState, StorageDepositAll, StorageWithdrawAll, Undock, UnequipItem,
+    WalletUpdated, WorldSnapshot, WreckState, ZoneChanged, PROTOCOL_VERSION,
 };
 use mareforge_shared::ids::{
     CharacterId, DestructionEventId, ItemDefinitionId, ItemInstanceId, ShipInstanceId, WreckId,
@@ -152,17 +154,21 @@ impl DevItems {
             tags: SmallVec::new(),
             display_name: String::from("Coral Negro"),
         });
-        // Equipamento dev (MF-021): o que o Workbench produz. Stats de
-        // velocidade/alcance usam offsets de 0,01 unidade (§32).
+        // Equipamento dev (MF-021/038): o que o Workbench produz, agora com
+        // o SLOT que ocupa. Stats de velocidade/alcance usam offsets de
+        // 0,01 unidade (§32).
         register(ItemDefinition {
             id: hull_plate,
             kind: ItemKind::Equipment,
-            equipment: Some(EquipmentStats {
-                damage: 0,
-                speed: 0,
-                cargo: 0,
-                hp: 40,
-                range: 0,
+            equipment: Some(EquipmentDefinition {
+                slot: EquipmentSlot::Hull,
+                stats: EquipmentStats {
+                    damage: 0,
+                    speed: 0,
+                    cargo: 0,
+                    hp: 40,
+                    range: 0,
+                },
             }),
             max_stack: 1,
             base_weight: 8,
@@ -172,12 +178,15 @@ impl DevItems {
         register(ItemDefinition {
             id: racing_sails,
             kind: ItemKind::Equipment,
-            equipment: Some(EquipmentStats {
-                damage: 0,
-                speed: 600,
-                cargo: 0,
-                hp: 0,
-                range: 0,
+            equipment: Some(EquipmentDefinition {
+                slot: EquipmentSlot::Sail,
+                stats: EquipmentStats {
+                    damage: 0,
+                    speed: 600,
+                    cargo: 0,
+                    hp: 0,
+                    range: 0,
+                },
             }),
             max_stack: 1,
             base_weight: 5,
@@ -187,12 +196,15 @@ impl DevItems {
         register(ItemDefinition {
             id: bronze_cannon,
             kind: ItemKind::Equipment,
-            equipment: Some(EquipmentStats {
-                damage: 10,
-                speed: 0,
-                cargo: 0,
-                hp: 0,
-                range: 500,
+            equipment: Some(EquipmentDefinition {
+                slot: EquipmentSlot::Weapon,
+                stats: EquipmentStats {
+                    damage: 10,
+                    speed: 0,
+                    cargo: 0,
+                    hp: 0,
+                    range: 500,
+                },
             }),
             max_stack: 1,
             base_weight: 10,
@@ -302,6 +314,7 @@ impl Plugin for ServerNetPlugin {
         app.insert_resource(crate::crafting::DevShips::new());
         app.insert_resource(crate::crafting::DevRecipes::new(&dev_items));
         app.insert_resource(dev_items);
+        app.add_plugins(crate::loadout::LoadoutPlugin);
         app.add_channel::<ReliableChannel>(ChannelSettings {
             mode: ChannelMode::OrderedReliable(ReliableSettings::default()),
             ..default()
@@ -314,6 +327,8 @@ impl Plugin for ServerNetPlugin {
         app.register_message::<ShipInput>(ChannelDirection::ClientToServer);
         app.register_message::<Dock>(ChannelDirection::ClientToServer);
         app.register_message::<Undock>(ChannelDirection::ClientToServer);
+        app.register_message::<EquipItem>(ChannelDirection::ClientToServer);
+        app.register_message::<UnequipItem>(ChannelDirection::ClientToServer);
         app.register_message::<FireBroadside>(ChannelDirection::ClientToServer);
         app.register_message::<LootWreck>(ChannelDirection::ClientToServer);
         app.register_message::<GatherNode>(ChannelDirection::ClientToServer);
@@ -326,6 +341,8 @@ impl Plugin for ServerNetPlugin {
         app.register_message::<ServerWelcome>(ChannelDirection::ServerToClient);
         app.register_message::<AssignShip>(ChannelDirection::ServerToClient);
         app.register_message::<DockResult>(ChannelDirection::ServerToClient);
+        app.register_message::<LoadoutSnapshot>(ChannelDirection::ServerToClient);
+        app.register_message::<LoadoutResult>(ChannelDirection::ServerToClient);
         app.register_message::<WorldSnapshot>(ChannelDirection::ServerToClient);
         app.register_message::<ShipDestroyed>(ChannelDirection::ServerToClient);
         app.register_message::<LootResult>(ChannelDirection::ServerToClient);
@@ -390,6 +407,9 @@ pub struct ServerShip {
     /// Presença (MF-036): AtSea ou Docked(região). Serviços e ações olham
     /// para cá — não para a posição dentro da baía.
     pub presence: VesselPresence,
+    /// Equipamento instalado nos slots (MF-039). Custódias vivas: swap
+    /// devolve o antigo ao storage, naufrágio o leva ao full loot.
+    pub loadout: ShipLoadout,
     pub input: ShipInput,
     pub hp: u32,
     pub hold: CargoHold,
@@ -501,6 +521,7 @@ pub(crate) fn spawn_ship_for(
         ship_instance,
         kind,
         presence: VesselPresence::AtSea,
+        loadout: ShipLoadout::new(),
         input: ShipInput {
             throttle: 0.0,
             turn: 0.0,
@@ -547,6 +568,23 @@ pub(crate) fn restore_ship_from_record(
         hold.take_all(&dev.catalog, record.cargo)
             .expect("carga restaurada cabe: era do mesmo casco");
     }
+    // Loadout restaurado: slots voltam a ocupados, stats RECALCULADOS com
+    // o equipamento instalado (fail-closed pelo catálogo).
+    let mut loadout = ShipLoadout::new();
+    for custody in record.equipped {
+        let slot = match custody.location {
+            mareforge_domain_items::ItemLocation::Equipped { slot, .. } => slot,
+            _ => continue,
+        };
+        loadout.equip(record.ship_instance, custody, slot);
+    }
+    let equipped_stats = compute_ship_stats(
+        dev_ships.definition(record.kind),
+        &loadout.components(),
+        &dev.catalog,
+    )
+    .expect("loadout restaurado contém definições do catálogo");
+    hold.set_capacity(equipped_stats.cargo_capacity);
     let zone = map.zone_at(record.x, record.y).ok().map(|z| z.id);
     commands.spawn((ServerShip {
         ship_id,
@@ -555,14 +593,15 @@ pub(crate) fn restore_ship_from_record(
         ship_instance: record.ship_instance,
         kind: record.kind,
         presence: VesselPresence::AtSea,
+        loadout,
         input: ShipInput {
             throttle: 0.0,
             turn: 0.0,
         },
-        hp: record.hp.min(stats.max_hp),
+        hp: record.hp.min(equipped_stats.max_hp),
         hold,
         battery: BroadsideBattery::default(),
-        stats,
+        stats: equipped_stats,
         motion: ShipMotion {
             x: record.x,
             y: record.y,
@@ -705,6 +744,9 @@ fn handle_hello(
             if let Some(zone) = zone_changed_for(&map.0, ship_id, position.0, position.1) {
                 let _ = connection_manager.send_message::<ReliableChannel, _>(client_id, &zone);
             }
+            // Captura ANTES de reemprestar `ships` para o broadcast.
+            let equipped: Vec<_> = ship.loadout.items().cloned().collect();
+            let reclaimed_kind = ship.kind;
             send_initial_world(
                 &mut connection_manager,
                 &dev,
@@ -715,6 +757,13 @@ fn handle_hello(
                 &ships,
                 client_id,
                 character,
+            );
+            crate::loadout::send_loadout_snapshot(
+                &mut connection_manager,
+                client_id,
+                dev_ships.definition(reclaimed_kind),
+                &dev.catalog,
+                &equipped,
             );
             info!(ship_id, "sessão reassumida dentro da janela de graça");
             continue;
@@ -731,9 +780,10 @@ fn handle_hello(
             .0
             .as_ref()
             .and_then(|store| store.load_ship(character).ok().flatten());
-        let (ship_id, position) = match restored {
+        let (ship_id, position, restored_equipped) = match restored {
             Some(record) => {
                 let position = (record.x, record.y);
+                let equipped = record.equipped.clone();
                 let ship_id = restore_ship_from_record(
                     &mut commands,
                     &mut ship_ids,
@@ -746,7 +796,7 @@ fn handle_hello(
                     ship_id,
                     "navio restaurado do store (personagem volta ao mar)"
                 );
-                (ship_id, position)
+                (ship_id, position, equipped)
             }
             None => {
                 let ship_id = spawn_ship_for(
@@ -760,7 +810,7 @@ fn handle_hello(
                     character,
                     Vec::new(),
                 );
-                (ship_id, DEV_SPAWN)
+                (ship_id, DEV_SPAWN, Vec::new())
             }
         };
         let _ = connection_manager.send_message::<ReliableChannel, _>(
@@ -785,6 +835,13 @@ fn handle_hello(
             &ships,
             client_id,
             character,
+        );
+        crate::loadout::send_loadout_snapshot(
+            &mut connection_manager,
+            client_id,
+            dev_ships.definition(ShipKind::SmallMerchant),
+            &dev.catalog,
+            &restored_equipped,
         );
         info!(client = ?client_id, ship_id, "navio autoritativo criado");
     }
@@ -1227,12 +1284,17 @@ fn simulate_world(
                     metrics.ships_destroyed += 1;
                     info!(ship_id = target_ship_id, damage, "SHIP DESTROYED");
                     // Full loot (§22-§25): casco é perda total; parte da carga
-                    // sobrevive e vira wreck. Equipamento entra quando existir
-                    // (MF-021) — hoje a lista vem vazia.
+                    // e do EQUIPAMENTO INSTALADO (MF-039) sobrevive e vira
+                    // wreck. Equipar nunca criou proteção.
                     let victim_client_id = ship.client_id;
                     let victim_character = ship.character;
                     let victim_x = ship.motion.x;
                     let victim_y = ship.motion.y;
+                    let equipment: Vec<ItemDefinitionId> = ship
+                        .loadout
+                        .items()
+                        .map(|custody| custody.instance.definition)
+                        .collect();
                     let cargo: Vec<ItemInstance> = ship
                         .hold
                         .items()
@@ -1245,13 +1307,22 @@ fn simulate_world(
                         victim_character,
                         victim_x,
                         victim_y,
+                        equipment,
                         cargo,
                     ))
                 }
             }
         };
 
-        let Some((entity, victim_client_id, victim_character, victim_x, victim_y, cargo)) = sinking
+        let Some((
+            entity,
+            victim_client_id,
+            victim_character,
+            victim_x,
+            victim_y,
+            victim_equipment,
+            cargo,
+        )) = sinking
         else {
             continue;
         };
@@ -1273,13 +1344,15 @@ fn simulate_world(
         );
 
         let destruction = DestructionEventId::new();
-        let outcome = resolve_ship_destruction(destruction, &[], &cargo, &loot_policy.0);
+        let outcome =
+            resolve_ship_destruction(destruction, &victim_equipment, &cargo, &loot_policy.0);
         metrics.items_destroyed += outcome.destroyed_items.len() as u64;
         info!(
             ship_id = target_ship_id,
             event = ?destruction,
             afundados = outcome.destroyed_items.len(),
             sobreviventes = outcome.wreck_items.len(),
+            equipamento = victim_equipment.len(),
             "resolução de loot determinística"
         );
 
@@ -1391,6 +1464,11 @@ fn send_snapshots(
                 .hold
                 .used_weight(&dev.catalog)
                 .expect("porão só contém definições do catálogo"),
+            hp: ship.hp,
+            max_hp: ship.stats.max_hp,
+            max_speed: ship.stats.speed,
+            weapon_damage: ship.stats.weapon_damage,
+            weapon_range: ship.stats.weapon_range,
         })
         .collect();
     let projectile_states: Vec<ProjectileState> = projectiles
@@ -1489,6 +1567,7 @@ fn expire_ship_grace(
                 y: ship.motion.y,
                 heading: ship.motion.heading,
                 cargo: ship.hold.items().to_vec(),
+                equipped: ship.loadout.items().cloned().collect(),
             };
             match store.save_ship(&record) {
                 Ok(()) => info!(
