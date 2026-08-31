@@ -89,6 +89,7 @@ mod tests {
             port_cooldown_secs: 0.0,
             starboard_cooldown_secs: 0.0,
             is_npc: false,
+            cargo_capacity: 100,
         }
     }
 

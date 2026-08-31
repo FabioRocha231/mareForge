@@ -149,11 +149,12 @@ fn sea_hud_text(state: &ShipState, wallet: u64, zone: &CurrentZone) -> String {
         .map(|zone| format!("{} — {}", zone.name, risk_tag(zone.tier)))
         .unwrap_or_else(|| String::from("Zona: fora do mar"));
     format!(
-        "HP: {}/{}\nNavio: {}\nCarga: {}\n{}\nOuro: {}g\nBombordo: {}\nEstibordo: {}",
+        "HP: {}/{}\nNavio: {}\nCarga: {}/{}\n{}\nOuro: {}g\nBombordo: {}\nEstibordo: {}",
         state.hp,
         state.max_hp,
         ship_kind_label(state.kind),
         state.cargo_weight,
+        state.cargo_capacity,
         zone_line,
         wallet,
         cooldown_label(state.port_cooldown_secs),
@@ -307,6 +308,7 @@ mod tests {
             port_cooldown_secs: port_cooldown,
             starboard_cooldown_secs: starboard_cooldown,
             is_npc: false,
+            cargo_capacity: 100,
         }
     }
 
@@ -321,7 +323,7 @@ mod tests {
         let text = sea_hud_text(&state, 500, &zone);
         assert!(text.contains("HP: 120/150"), "{text}");
         assert!(text.contains("Navio: Mercante"), "{text}");
-        assert!(text.contains("Carga: 8"), "{text}");
+        assert!(text.contains("Carga: 8/100"), "{text}");
         assert!(text.contains("Rota da Costa"), "{text}");
         assert!(text.contains("PvP ATIVO"), "{text}");
         assert!(text.contains("Ouro: 500g"), "{text}");
@@ -374,7 +376,7 @@ mod tests {
             .join("\n");
         assert!(text.contains("HP: 120/150"), "{text}");
         assert!(text.contains("Águas do Porto da Serra"), "{text}");
-        assert!(text.contains("Carga: 8"), "{text}");
+        assert!(text.contains("Carga: 8/100"), "{text}");
         assert!(text.contains("Ouro: 500g"), "{text}");
         assert!(text.contains("E — Atracar"), "{text}");
     }

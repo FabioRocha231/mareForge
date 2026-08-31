@@ -1920,6 +1920,7 @@ fn to_ship_state(ship: &ServerShip, catalog: &ItemCatalog) -> ShipState {
         port_cooldown_secs: ship.battery.port_cooldown,
         starboard_cooldown_secs: ship.battery.starboard_cooldown,
         is_npc: false,
+        cargo_capacity: ship.stats.cargo_capacity,
     }
 }
 
@@ -2496,6 +2497,7 @@ mod tests {
             &ItemCatalog::default(),
         )
         .expect("stats base do merchant não falham");
+        let expected_cargo_capacity = stats.cargo_capacity;
         let ship = ServerShip {
             ship_id: 7,
             client_id: None,
@@ -2535,6 +2537,7 @@ mod tests {
         assert_eq!(state.port_cooldown_secs, 2.5);
         assert_eq!(state.starboard_cooldown_secs, 0.75);
         assert!(!state.is_npc);
+        assert_eq!(state.cargo_capacity, expected_cargo_capacity);
     }
 
     /// Simulação e snapshot não são a mesma cadência: há ticks de 30 Hz em

@@ -548,14 +548,16 @@ fn feedback_line(success: bool, reason: &str) -> String {
 
 fn storage_lines(
     cargo_weight: Option<u32>,
+    cargo_capacity: Option<u32>,
     feedback: Option<&MarketResult>,
     state: &PortScreenState,
     recipes: &[RecipeEntry],
 ) -> Vec<String> {
     let mut lines = vec![
         format!(
-            "Porão: {}",
-            cargo_weight.map_or_else(|| String::from("—"), |weight| weight.to_string())
+            "Porão: {} / {}",
+            cargo_weight.map_or_else(|| String::from("—"), |weight| weight.to_string()),
+            cargo_capacity.map_or_else(|| String::from("—"), |capacity| capacity.to_string()),
         ),
         String::from("Storage: conteúdo oculto — use Depositar/Retirar tudo"),
     ];
@@ -674,6 +676,7 @@ fn recipe_lines(
 fn content_lines(
     state: &PortScreenState,
     cargo_weight: Option<u32>,
+    cargo_capacity: Option<u32>,
     loadout: &[LoadoutLine],
     storage: &[StorageLine],
     catalog: &KnownCatalog,
@@ -684,7 +687,13 @@ fn content_lines(
     market_feedback: Option<&MarketResult>,
 ) -> Vec<String> {
     match state.active_tab {
-        PortTab::Storage => storage_lines(cargo_weight, market_feedback, state, recipes),
+        PortTab::Storage => storage_lines(
+            cargo_weight,
+            cargo_capacity,
+            market_feedback,
+            state,
+            recipes,
+        ),
         PortTab::Loadout => loadout_lines(
             loadout,
             storage,
@@ -705,6 +714,7 @@ fn port_screen_text(
     port_name: &str,
     state: &PortScreenState,
     cargo_weight: Option<u32>,
+    cargo_capacity: Option<u32>,
     loadout: &[LoadoutLine],
     storage: &[StorageLine],
     catalog: &KnownCatalog,
@@ -723,6 +733,7 @@ fn port_screen_text(
     lines.extend(content_lines(
         state,
         cargo_weight,
+        cargo_capacity,
         loadout,
         storage,
         catalog,
@@ -751,16 +762,19 @@ fn update_port_screen(
     market_feedback: Res<MarketFeedback>,
     mut screens: Query<&mut Text2d, With<PortScreen>>,
 ) {
-    let cargo_weight = my_ship.0.and_then(|ship_id| {
+    let cargo = my_ship.0.and_then(|ship_id| {
         visuals
             .iter()
             .find(|visual| visual.target.ship_id == ship_id)
-            .map(|visual| visual.target.cargo_weight)
+            .map(|visual| (visual.target.cargo_weight, visual.target.cargo_capacity))
     });
+    let cargo_weight = cargo.map(|(weight, _)| weight);
+    let cargo_capacity = cargo.map(|(_, capacity)| capacity);
     let text = port_screen_text(
         &port_name.0,
         &state,
         cargo_weight,
+        cargo_capacity,
         &loadout.0,
         &storage.0,
         &catalog,
@@ -902,6 +916,29 @@ mod tests {
     }
 
     #[test]
+    fn storage_tab_shows_cargo_weight_and_capacity() {
+        let text = port_screen_text(
+            "Porto da Serra",
+            &PortScreenState {
+                active_tab: PortTab::Storage,
+                selected_action: 0,
+            },
+            Some(8),
+            Some(100),
+            &[],
+            &[],
+            &KnownCatalog::default(),
+            None,
+            &[],
+            None,
+            None,
+            None,
+        );
+
+        assert!(text.contains("Porão: 8 / 100"), "{text}");
+    }
+
+    #[test]
     fn loadout_lists_slots_and_only_unequips_equipped_slots() {
         let loadout = loadout();
         let text = port_screen_text(
@@ -911,6 +948,7 @@ mod tests {
                 selected_action: 0,
             },
             Some(8),
+            Some(100),
             &loadout.0,
             &[],
             &KnownCatalog::default(),
@@ -961,6 +999,7 @@ mod tests {
                 selected_action: 0,
             },
             None,
+            None,
             &[],
             &[],
             &KnownCatalog::default(),
@@ -1001,6 +1040,7 @@ mod tests {
                 active_tab: PortTab::Shipyard,
                 selected_action: 0,
             },
+            None,
             None,
             &[],
             &[],
@@ -1099,6 +1139,7 @@ mod tests {
                 selected_action: 0,
             },
             Some(8),
+            Some(100),
             &loadout().0,
             &storage,
             &catalog,

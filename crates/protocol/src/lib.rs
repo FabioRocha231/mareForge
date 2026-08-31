@@ -43,7 +43,9 @@ use serde::{Deserialize, Serialize};
 ///     velocidade máxima, dano e alcance) — o client nunca deriva stats.
 /// v11: MF-056B — `ShipState.kind` é a identidade visual autoritativa do
 ///     casco; o client escolhe sprite, nunca stats ou regras.
-pub const PROTOCOL_VERSION: u16 = 11;
+/// v12: MF-056H — `ShipState.cargo_capacity` expõe o limite autoritativo do
+///     porão para a UI.
+pub const PROTOCOL_VERSION: u16 = 12;
 
 /// Primeira mensagem do client após conectar (ADR-0011). `identity` é o
 /// token persistente do jogador (MF-035): o servidor resolve token →
@@ -122,6 +124,10 @@ pub struct ShipState {
     /// MF-044: NPC é não-player. Aditivo, default false.
     #[serde(default)]
     pub is_npc: bool,
+    /// MF-056H: limite de peso do porão com o loadout atual. Aditivo,
+    /// default 0 (cliente antigo não quebra).
+    #[serde(default)]
+    pub cargo_capacity: u32,
 }
 
 /// Instala um item do storage regional no slot dele (MF-039). Só atracado;
@@ -442,8 +448,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn current_protocol_version_is_eleven() {
-        assert_eq!(PROTOCOL_VERSION, 11);
+    fn current_protocol_version_is_twelve() {
+        assert_eq!(PROTOCOL_VERSION, 12);
         assert_eq!(
             ClientHello::current("token").protocol_version,
             PROTOCOL_VERSION
@@ -468,12 +474,14 @@ mod tests {
             port_cooldown_secs: 3.5,
             starboard_cooldown_secs: 1.25,
             is_npc: false,
+            cargo_capacity: 100,
         };
         let bytes = bincode::serialize(&state).unwrap();
         let decoded = bincode::deserialize::<ShipState>(&bytes).unwrap();
         assert_eq!(decoded, state);
         assert_eq!(decoded.port_cooldown_secs, 3.5);
         assert_eq!(decoded.starboard_cooldown_secs, 1.25);
+        assert_eq!(decoded.cargo_capacity, 100);
     }
 
     #[test]
@@ -495,11 +503,13 @@ mod tests {
                 port_cooldown_secs: 0.0,
                 starboard_cooldown_secs: 0.0,
                 is_npc,
+                cargo_capacity: 70,
             };
             let bytes = bincode::serialize(&state).unwrap();
             let decoded = bincode::deserialize::<ShipState>(&bytes).unwrap();
             assert_eq!(decoded, state);
             assert_eq!(decoded.is_npc, is_npc);
+            assert_eq!(decoded.cargo_capacity, 70);
         }
     }
 
@@ -610,6 +620,7 @@ mod tests {
             port_cooldown_secs: 2.5,
             starboard_cooldown_secs: 1.5,
             is_npc: false,
+            cargo_capacity: 100,
         };
         let bytes = bincode::serialize(&full).expect("encode");
         // Trunca 8 bytes (dois f32): simula cliente novo lendo servidor antigo.
@@ -674,6 +685,7 @@ mod tests {
                     port_cooldown_secs: 0.0,
                     starboard_cooldown_secs: 2.0,
                     is_npc: false,
+                    cargo_capacity: 100,
                 },
                 ShipState {
                     ship_id: 2,
@@ -691,6 +703,7 @@ mod tests {
                     port_cooldown_secs: 0.0,
                     starboard_cooldown_secs: 0.0,
                     is_npc: false,
+                    cargo_capacity: 40,
                 },
             ],
             projectiles: vec![ProjectileState {

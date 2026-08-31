@@ -542,6 +542,7 @@ pub(crate) fn to_npc_ship_state(npc: &NpcShip, catalog: &ItemCatalog) -> ShipSta
         port_cooldown_secs: npc.battery.port_cooldown,
         starboard_cooldown_secs: npc.battery.starboard_cooldown,
         is_npc: true,
+        cargo_capacity: npc.stats.cargo_capacity,
     }
 }
 
