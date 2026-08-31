@@ -393,6 +393,19 @@ pub fn upsert_wreck_visuals(
                 },
             ));
         }
+        // MF-057I: label discreto abaixo do destroco, indicando que pode
+        // ser saqueado. Texto curto, alta legibilidade.
+        entity.with_children(|parent| {
+            parent.spawn((
+                Text2d::new("destroço"),
+                TextFont {
+                    font_size: 9.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(0.95, 0.85, 0.7)),
+                Transform::from_xyz(0.0, -14.0, layers::LABELS - layers::WRECKS + 0.1),
+            ));
+        });
         info!(wreck_id = wreck.wreck_id, "destroço visível no mar");
     }
 }

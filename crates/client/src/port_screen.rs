@@ -266,6 +266,7 @@ fn handle_dock_result(
     mut port_name: ResMut<DockedPortName>,
     mut commands: Commands,
     camera: Query<Entity, With<Camera2d>>,
+    assets: Res<crate::assets::GameAssets>,
     screens: Query<Entity, With<PortScreen>>,
 ) {
     for event in events.read() {
@@ -275,7 +276,7 @@ fn handle_dock_result(
         }
         if result.docked {
             if screens.iter().next().is_none() {
-                spawn_port_screen(&mut commands, &camera);
+                spawn_port_screen(&mut commands, &camera, Some(assets.as_ref()));
             }
         } else {
             for entity in &screens {
@@ -285,21 +286,40 @@ fn handle_dock_result(
     }
 }
 
-fn spawn_port_screen(commands: &mut Commands, camera: &Query<Entity, With<Camera2d>>) {
+fn spawn_port_screen(
+    commands: &mut Commands,
+    camera: &Query<Entity, With<Camera2d>>,
+    assets: Option<&crate::assets::GameAssets>,
+) {
     let Ok(camera) = camera.get_single() else {
         return;
     };
+    // MF-057L: painel de fundo atras do texto, dando peso visual sem mudar
+    // comportamento. Se a sheet ainda nao carregou, segue sem painel.
+    if let Some(assets) = assets {
+        commands
+            .spawn((
+                Sprite {
+                    image: assets.panel_port.clone(),
+                    color: Color::WHITE,
+                    ..default()
+                },
+                Transform::from_xyz(0.0, 0.0, layers::OVERLAY - 0.5),
+                PortScreen,
+            ))
+            .set_parent(camera);
+    }
     commands
         .spawn((
             PortScreen,
             Text2d::new(String::new()),
             TextFont {
-                font_size: 12.0,
+                font_size: 13.0,
                 ..default()
             },
-            TextColor(Color::srgb(0.9, 0.9, 0.85)),
+            TextColor(Color::srgb(0.92, 0.92, 0.88)),
             Anchor::TopLeft,
-            Transform::from_xyz(-560.0, 320.0, layers::OVERLAY),
+            Transform::from_xyz(-540.0, 280.0, layers::OVERLAY),
             Visibility::Visible,
         ))
         .set_parent(camera);
@@ -513,13 +533,15 @@ fn station_label(station: StationKind) -> &'static str {
 }
 
 fn tab_bar(active: PortTab) -> String {
+    // MF-057L: aba ativa com marcadores visuais mais fortes (>> ... <<) para
+    // destacar em meio a uma linha cheia de texto.
     let tabs: Vec<String> = PortTab::ALL
         .iter()
         .map(|tab| {
             if *tab == active {
-                format!("[{}]", tab.label())
+                format!(">> {} <<", tab.label())
             } else {
-                tab.label().to_owned()
+                format!("  {}  ", tab.label())
             }
         })
         .collect();

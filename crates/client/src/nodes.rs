@@ -120,17 +120,19 @@ fn spawn_node_visual(
         });
     }
     entity.with_children(|parent| {
+        // MF-057H: label com fundo semi-transparente para legibilidade sobre
+        // qualquer agua. Fonte maior e cor mais contrastante.
         parent.spawn((
             NodeLabel {
                 node_id: state.node_id,
             },
             Text2d::new(label),
             TextFont {
-                font_size: 9.0,
+                font_size: 11.0,
                 ..default()
             },
-            TextColor(Color::srgb(0.9, 0.88, 0.8)),
-            Transform::from_xyz(0.0, -16.0, layers::LABELS - layers::RESOURCES),
+            TextColor(Color::srgb(1.0, 0.98, 0.85)),
+            Transform::from_xyz(0.0, -18.0, layers::LABELS - layers::RESOURCES + 0.1),
         ));
     });
 }

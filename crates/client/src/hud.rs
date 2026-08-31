@@ -63,6 +63,7 @@ impl Plugin for HudPlugin {
                 update_prompt_panel,
                 tick_zone_banner,
                 tick_pvp_warning,
+                tick_context_toasts,
             ),
         );
     }
@@ -665,6 +666,74 @@ pub fn tick_pvp_warning(
             }
         }
         if fade.elapsed >= 5.0 {
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
+/// Componente de toast: notificação curta que aparece no rodape e some.
+/// Usada para feedback de acoes de contexto (atracar, coletar, lootear).
+#[derive(Component)]
+pub struct ContextToast {
+    pub elapsed: f32,
+}
+
+pub fn spawn_context_toast(
+    commands: &mut Commands,
+    camera: Entity,
+    assets: &GameAssets,
+    message: &str,
+) {
+    commands
+        .spawn((
+            Sprite {
+                image: assets.panel_prompt.clone(),
+                color: Color::srgba(1.0, 1.0, 1.0, 0.0),
+                ..default()
+            },
+            Transform::from_translation(Vec3::new(0.0, -200.0, layers::OVERLAY - 1.0)),
+            ContextToast { elapsed: 0.0 },
+        ))
+        .with_children(|parent| {
+            parent.spawn((
+                Text2d::new(message.to_owned()),
+                TextFont {
+                    font_size: 14.0,
+                    ..default()
+                },
+                TextColor(Color::srgba(0.95, 0.95, 0.85, 0.0)),
+                Transform::from_translation(Vec3::new(0.0, 0.0, layers::OVERLAY - 0.9)),
+            ));
+        })
+        .set_parent(camera);
+}
+
+pub fn tick_context_toasts(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut toasts: Query<(Entity, &mut ContextToast, &mut Sprite, &Children)>,
+    mut texts: Query<&mut TextColor>,
+) {
+    for (entity, mut toast, mut sprite, children) in &mut toasts {
+        toast.elapsed += time.delta_secs();
+        let alpha = if toast.elapsed < 0.3 {
+            toast.elapsed / 0.3
+        } else if toast.elapsed < 2.0 {
+            1.0
+        } else if toast.elapsed < 2.5 {
+            1.0 - (toast.elapsed - 2.0) / 0.5
+        } else {
+            0.0
+        };
+        let srgba = sprite.color.to_srgba();
+        sprite.color = Color::srgba(srgba.red, srgba.green, srgba.blue, alpha);
+        for child in children.iter() {
+            if let Ok(mut tc) = texts.get_mut(*child) {
+                let c = tc.0.to_srgba();
+                tc.0 = Color::srgba(c.red, c.green, c.blue, alpha);
+            }
+        }
+        if toast.elapsed >= 2.5 {
             commands.entity(entity).despawn();
         }
     }
