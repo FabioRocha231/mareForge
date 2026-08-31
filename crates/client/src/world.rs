@@ -144,52 +144,38 @@ fn spawn_port_landmark(
         };
         Sprite::from_color(color, Vec2::splat(48.0))
     } else {
-        let frame = if serra {
-            frames::SERRA_CART
-        } else {
-            frames::MINA_CART
-        };
-        atlas_sprite(assets.fort.clone(), assets.fort_layout.clone(), frame)
+        atlas_sprite(
+            assets.fort.clone(),
+            assets.fort_layout.clone(),
+            frames::PORT_CRATE,
+        )
     };
     spawn_landmark(commands, primary, name, position, Vec3::splat(3.0));
 
     if fort_failed {
         return;
     }
-    if serra {
+    spawn_visual(
+        commands,
+        atlas_sprite(
+            assets.fort.clone(),
+            assets.fort_layout.clone(),
+            frames::PORT_BARREL,
+        ),
+        position + Vec2::new(26.0, -4.0),
+        Vec3::splat(2.2),
+    );
+    if !water_failed {
         spawn_visual(
             commands,
             atlas_sprite(
-                assets.fort.clone(),
-                assets.fort_layout.clone(),
-                frames::SERRA_CRATE,
+                assets.water_and_islands.clone(),
+                assets.water_and_islands_layout.clone(),
+                frames::CORAL_NODE,
             ),
-            position + Vec2::new(30.0, 0.0),
-            Vec3::splat(2.0),
+            position + Vec2::new(-26.0, 2.0),
+            Vec3::splat(1.2),
         );
-    } else {
-        spawn_visual(
-            commands,
-            atlas_sprite(
-                assets.fort.clone(),
-                assets.fort_layout.clone(),
-                frames::MINA_ORE,
-            ),
-            position + Vec2::new(28.0, 0.0),
-            Vec3::splat(2.0),
-        );
-        if !water_failed {
-            spawn_visual(
-                commands,
-                atlas_sprite(
-                    assets.water_and_islands.clone(),
-                    assets.water_and_islands_layout.clone(),
-                    frames::ORE_NODE,
-                ),
-                position + Vec2::new(-30.0, 0.0),
-                Vec3::splat(0.8),
-            );
-        }
     }
 }
 
