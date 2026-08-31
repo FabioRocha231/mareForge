@@ -1903,6 +1903,7 @@ fn respawn_destroyed_ships(
 fn to_ship_state(ship: &ServerShip, catalog: &ItemCatalog) -> ShipState {
     ShipState {
         ship_id: ship.ship_id,
+        kind: ship.kind,
         x: ship.motion.x,
         y: ship.motion.y,
         heading: ship.motion.heading,
@@ -2527,6 +2528,7 @@ mod tests {
 
         let state = to_ship_state(&ship, &ItemCatalog::default());
         assert_eq!(state.ship_id, 7);
+        assert_eq!(state.kind, ShipKind::SmallMerchant);
         assert_eq!(state.x, 10.0);
         assert_eq!(state.y, 20.0);
         assert_eq!(state.cargo_weight, 0);

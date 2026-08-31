@@ -12,7 +12,10 @@ use std::time::Instant;
 use bevy::ecs::prelude::*;
 use bevy::prelude::*;
 use lightyear::prelude::ClientReceiveMessage;
+use mareforge_domain_ships::ShipKind;
 use mareforge_protocol::{ProjectileState, ShipState, WorldSnapshot};
+
+use crate::assets::{frames, image_failed, layers, GameAssets};
 
 /// Quanto tempo um visual sobrevive sem aparecer no snapshot (ADR-0009:
 /// last-known-state até expirar). Curto de propósito: é máscara de pop do
@@ -27,16 +30,44 @@ pub struct ShipVisual {
     pub last_seen: Instant,
 }
 
+const SHIP_HEADING_OFFSET: f32 = -std::f32::consts::FRAC_PI_2;
+
+fn ship_frame_and_scale(kind: ShipKind) -> (usize, Vec3) {
+    match kind {
+        ShipKind::SmallMerchant => (frames::SMALL_MERCHANT, Vec3::splat(1.15)),
+        ShipKind::Patrol => (frames::PATROL, Vec3::splat(1.05)),
+        ShipKind::Corsair => (frames::CORSAIR, Vec3::splat(0.92)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_ship_kind_has_a_distinct_visual_frame() {
+        let merchant = ship_frame_and_scale(ShipKind::SmallMerchant).0;
+        let patrol = ship_frame_and_scale(ShipKind::Patrol).0;
+        let corsair = ship_frame_and_scale(ShipKind::Corsair).0;
+        assert_ne!(merchant, patrol);
+        assert_ne!(merchant, corsair);
+        assert_ne!(patrol, corsair);
+    }
+}
+
 /// Navios que já afundaram: snapshots em voo não podem ressuscitá-los.
 #[derive(Resource, Debug, Default)]
 pub struct DestroyedShips(pub HashSet<u32>);
 
+#[allow(clippy::too_many_arguments)]
 pub fn upsert_ship_visuals(
     mut commands: Commands,
     my_ship: Res<crate::net::MyShip>,
     destroyed: Res<DestroyedShips>,
     mut snapshot_events: EventReader<ClientReceiveMessage<WorldSnapshot>>,
     mut existing: Query<(Entity, &mut ShipVisual)>,
+    assets: Res<GameAssets>,
+    asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
@@ -67,33 +98,44 @@ pub fn upsert_ship_visuals(
             continue;
         }
 
-        let is_mine = my_ship.0 == Some(state.ship_id);
-        let hull = meshes.add(Mesh::from(Triangle2d::new(
-            Vec2::new(16.0, 0.0),
-            Vec2::new(-10.0, 8.0),
-            Vec2::new(-10.0, -8.0),
-        )));
-        // Meu navio é madeira; NPCs são vermelhos; os demais, bruma cinza-azulada.
-        let color = if is_mine {
-            Color::srgb(0.85, 0.72, 0.45)
-        } else if state.is_npc {
-            Color::srgb(0.85, 0.2, 0.2)
-        } else {
-            Color::srgb(0.55, 0.62, 0.7)
-        };
-        let material = materials.add(color);
-        commands.spawn((
+        let (frame, scale) = ship_frame_and_scale(state.kind);
+        let mut entity = commands.spawn((
             ShipVisual {
                 target: *state,
                 last_seen: Instant::now(),
             },
-            Mesh2d(hull),
-            MeshMaterial2d(material),
-            Transform::from_xyz(state.x, state.y, 0.0),
+            Transform {
+                translation: Vec3::new(state.x, state.y, layers::SHIPS),
+                rotation: Quat::from_rotation_z(state.heading + SHIP_HEADING_OFFSET),
+                scale,
+            },
         ));
+        if image_failed(&asset_server, &assets.ships) {
+            let color = if state.is_npc {
+                Color::srgb(0.85, 0.2, 0.2)
+            } else {
+                Color::srgb(0.55, 0.62, 0.7)
+            };
+            entity.insert((
+                Mesh2d(meshes.add(Triangle2d::new(
+                    Vec2::new(16.0, 0.0),
+                    Vec2::new(-10.0, 8.0),
+                    Vec2::new(-10.0, -8.0),
+                ))),
+                MeshMaterial2d(materials.add(color)),
+            ));
+        } else {
+            entity.insert(Sprite::from_atlas_image(
+                assets.ships.clone(),
+                TextureAtlas {
+                    layout: assets.ships_layout.clone(),
+                    index: frame,
+                },
+            ));
+        }
         info!(
             ship_id = state.ship_id,
-            mine = is_mine,
+            kind = ?state.kind,
             "navio visível no horizonte"
         );
     }
@@ -129,6 +171,7 @@ pub fn lerp_ship_visuals(time: Res<Time>, mut ships: Query<(&mut Transform, &Shi
             &visual.target.y,
             &visual.target.heading,
             factor,
+            SHIP_HEADING_OFFSET,
         );
     }
 }
@@ -143,6 +186,8 @@ pub fn upsert_projectile_visuals(
     mut commands: Commands,
     mut snapshot_events: EventReader<ClientReceiveMessage<WorldSnapshot>>,
     mut existing: Query<(Entity, &mut ProjectileVisual)>,
+    assets: Res<GameAssets>,
+    asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
@@ -175,14 +220,28 @@ pub fn upsert_projectile_visuals(
         if updated {
             continue;
         }
-        let ball = meshes.add(Circle::new(2.5));
-        let smoke = materials.add(Color::srgb(0.15, 0.15, 0.18));
-        commands.spawn((
+        let mut entity = commands.spawn((
             ProjectileVisual { target: *state },
-            Mesh2d(ball),
-            MeshMaterial2d(smoke),
-            Transform::from_xyz(state.x, state.y, 1.0),
+            Transform {
+                translation: Vec3::new(state.x, state.y, layers::PROJECTILES),
+                rotation: Quat::from_rotation_z(state.heading),
+                scale: Vec3::splat(0.3),
+            },
         ));
+        if image_failed(&asset_server, &assets.ships) {
+            entity.insert((
+                Mesh2d(meshes.add(Circle::new(2.5))),
+                MeshMaterial2d(materials.add(Color::srgb(0.15, 0.15, 0.18))),
+            ));
+        } else {
+            entity.insert(Sprite::from_atlas_image(
+                assets.ships.clone(),
+                TextureAtlas {
+                    layout: assets.ships_detail_layout.clone(),
+                    index: frames::PROJECTILE,
+                },
+            ));
+        }
     }
 }
 
@@ -199,15 +258,23 @@ pub fn lerp_projectile_visuals(
             &projectile.target.y,
             &projectile.target.heading,
             factor,
+            0.0,
         );
     }
 }
 
-fn apply_lerp(transform: &mut Transform, x: &f32, y: &f32, heading: &f32, factor: f32) {
+fn apply_lerp(
+    transform: &mut Transform,
+    x: &f32,
+    y: &f32,
+    heading: &f32,
+    factor: f32,
+    heading_offset: f32,
+) {
     transform.translation = transform
         .translation
         .lerp(Vec3::new(*x, *y, transform.translation.z), factor);
-    let target_rotation = Quat::from_rotation_z(*heading);
+    let target_rotation = Quat::from_rotation_z(*heading + heading_offset);
     transform.rotation = transform.rotation.slerp(target_rotation, factor);
 }
 
@@ -221,11 +288,14 @@ pub struct WreckVisual {
 
 /// Wrecks vindos do snapshot do destinatário (MF-031): upsert de visuais e
 /// reconstrução do `KnownWrecks` (o saque do client usa as posições).
+#[allow(clippy::too_many_arguments)]
 pub fn upsert_wreck_visuals(
     mut commands: Commands,
     mut snapshot_events: EventReader<ClientReceiveMessage<WorldSnapshot>>,
     mut known: ResMut<crate::net::KnownWrecks>,
     mut existing: Query<(Entity, &mut WreckVisual)>,
+    assets: Res<GameAssets>,
+    asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
@@ -246,17 +316,27 @@ pub fn upsert_wreck_visuals(
         if updated {
             continue;
         }
-        let debris = meshes.add(Rectangle::new(14.0, 14.0));
-        let soaked_wood = materials.add(Color::srgb(0.38, 0.27, 0.16));
-        commands.spawn((
+        let mut entity = commands.spawn((
             WreckVisual {
                 wreck_num: wreck.wreck_id,
                 last_seen: Instant::now(),
             },
-            Mesh2d(debris),
-            MeshMaterial2d(soaked_wood),
-            Transform::from_xyz(wreck.x, wreck.y, -0.5),
+            Transform::from_xyz(wreck.x, wreck.y, layers::WRECKS),
         ));
+        if image_failed(&asset_server, &assets.water_and_islands) {
+            entity.insert((
+                Mesh2d(meshes.add(Rectangle::new(14.0, 14.0))),
+                MeshMaterial2d(materials.add(Color::srgb(0.38, 0.27, 0.16))),
+            ));
+        } else {
+            entity.insert(Sprite::from_atlas_image(
+                assets.water_and_islands.clone(),
+                TextureAtlas {
+                    layout: assets.water_and_islands_layout.clone(),
+                    index: frames::WRECK,
+                },
+            ));
+        }
         info!(wreck_id = wreck.wreck_id, "destroço visível no mar");
     }
 }

@@ -41,7 +41,9 @@ use serde::{Deserialize, Serialize};
 ///     veredito `LoadoutResult` e `LoadoutSnapshot` no handshake. E o
 ///     `ShipState` passa a carregar os stats AUTORITATIVOS (hp, max_hp,
 ///     velocidade máxima, dano e alcance) — o client nunca deriva stats.
-pub const PROTOCOL_VERSION: u16 = 10;
+/// v11: MF-056B — `ShipState.kind` é a identidade visual autoritativa do
+///     casco; o client escolhe sprite, nunca stats ou regras.
+pub const PROTOCOL_VERSION: u16 = 11;
 
 /// Primeira mensagem do client após conectar (ADR-0011). `identity` é o
 /// token persistente do jogador (MF-035): o servidor resolve token →
@@ -97,6 +99,8 @@ pub struct ShipInput {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct ShipState {
     pub ship_id: u32,
+    /// Tipo autoritativo para apresentação. Nunca participa de regras no client.
+    pub kind: mareforge_domain_ships::ShipKind,
     pub x: f32,
     pub y: f32,
     /// Radianos, 0 = +X, anti-horário (convenção de `domain-ships`).
@@ -438,8 +442,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn current_protocol_version_is_ten() {
-        assert_eq!(PROTOCOL_VERSION, 10);
+    fn current_protocol_version_is_eleven() {
+        assert_eq!(PROTOCOL_VERSION, 11);
         assert_eq!(
             ClientHello::current("token").protocol_version,
             PROTOCOL_VERSION
@@ -450,6 +454,7 @@ mod tests {
     fn ship_state_carries_authoritative_stats() {
         let state = ShipState {
             ship_id: 1,
+            kind: mareforge_domain_ships::ShipKind::SmallMerchant,
             x: 0.0,
             y: 0.0,
             heading: 0.0,
@@ -476,6 +481,7 @@ mod tests {
         for is_npc in [false, true] {
             let state = ShipState {
                 ship_id: 3,
+                kind: mareforge_domain_ships::ShipKind::Patrol,
                 x: 1.0,
                 y: 2.0,
                 heading: 0.5,
@@ -590,6 +596,7 @@ mod tests {
     fn ship_state_truncated_bytes_fail_cleanly_not_silently() {
         let full = ShipState {
             ship_id: 1,
+            kind: mareforge_domain_ships::ShipKind::SmallMerchant,
             x: 0.0,
             y: 0.0,
             heading: 0.0,
@@ -653,6 +660,7 @@ mod tests {
             ships: vec![
                 ShipState {
                     ship_id: 1,
+                    kind: mareforge_domain_ships::ShipKind::SmallMerchant,
                     x: 12.5,
                     y: -3.25,
                     heading: 0.1,
@@ -669,6 +677,7 @@ mod tests {
                 },
                 ShipState {
                     ship_id: 2,
+                    kind: mareforge_domain_ships::ShipKind::Corsair,
                     x: 0.0,
                     y: 0.0,
                     heading: 3.0,

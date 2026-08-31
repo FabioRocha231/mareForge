@@ -12,6 +12,7 @@ use crate::ship::{
     expire_stale_visuals, lerp_projectile_visuals, lerp_ship_visuals, update_cargo_readout,
     upsert_projectile_visuals, upsert_ship_visuals, upsert_wreck_visuals, CargoReadout,
 };
+use crate::world::WorldVisualPlugin;
 use crate::zone::{risk_tag, CurrentZone, ZonePlugin};
 use mareforge_protocol::ShipState;
 use mareforge_shared::ids::ItemDefinitionId;
@@ -26,6 +27,7 @@ impl Plugin for ClientPlugin {
             .add_plugins(AssetManifestPlugin)
             .add_plugins(ClientNetPlugin)
             .add_plugins(ZonePlugin)
+            .add_plugins(WorldVisualPlugin)
             .add_plugins(NodePlugin)
             .add_plugins(CraftPlugin)
             .add_plugins(MarketPlugin)
@@ -290,6 +292,7 @@ mod tests {
     fn ship_state(port_cooldown: f32, starboard_cooldown: f32) -> ShipState {
         ShipState {
             ship_id: 1,
+            kind: mareforge_domain_ships::ShipKind::SmallMerchant,
             x: 0.0,
             y: 0.0,
             heading: 0.0,

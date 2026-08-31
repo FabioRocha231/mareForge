@@ -9,6 +9,8 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 use mareforge_protocol::{GatherResult, NodeState, NodeUpdated, NodesSnapshot};
 
+use crate::assets::{frames, image_failed, layers, GameAssets};
+
 /// Nós conhecidos: posição e estoque para a coleta (alvo do G / autogather).
 #[derive(Resource, Debug, Default)]
 pub struct KnownNodes(pub HashMap<u32, NodeInfo>);
@@ -59,6 +61,15 @@ fn resource_color(name: &str) -> Color {
     }
 }
 
+fn resource_frame(name: &str) -> usize {
+    match name {
+        "Madeira" => frames::WOOD_NODE,
+        "Minério" => frames::ORE_NODE,
+        "Coral Negro" => frames::CORAL_NODE,
+        _ => frames::ORE_NODE,
+    }
+}
+
 fn dimmed(color: Color) -> Color {
     let srgba = color.to_srgba();
     Color::srgba(srgba.red * 0.35, srgba.green * 0.35, srgba.blue * 0.35, 1.0)
@@ -66,47 +77,64 @@ fn dimmed(color: Color) -> Color {
 
 fn spawn_node_visual(
     commands: &mut Commands,
+    assets: &GameAssets,
+    asset_server: &AssetServer,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<ColorMaterial>,
     state: &NodeState,
 ) {
     let color = resource_color(&state.resource_name);
-    let deposit = meshes.add(Circle::new(9.0));
     let label = format!(
         "{} {}/{}",
         state.resource_name, state.stock, state.max_stock
     );
-    commands
-        .spawn((
-            NodeVisual {
-                node_id: state.node_id,
-                resource_color: color,
-            },
-            Mesh2d(deposit),
+    let mut entity = commands.spawn((
+        NodeVisual {
+            node_id: state.node_id,
+            resource_color: color,
+        },
+        Transform::from_xyz(state.x, state.y, layers::RESOURCES),
+    ));
+    if image_failed(asset_server, &assets.water_and_islands) {
+        entity.insert((
+            Mesh2d(meshes.add(Circle::new(9.0))),
             MeshMaterial2d(materials.add(color)),
-            Transform::from_xyz(state.x, state.y, -0.6),
-        ))
-        .with_children(|parent| {
-            parent.spawn((
-                NodeLabel {
-                    node_id: state.node_id,
-                },
-                Text2d::new(label),
-                TextFont {
-                    font_size: 9.0,
-                    ..default()
-                },
-                TextColor(Color::srgb(0.9, 0.88, 0.8)),
-                Transform::from_xyz(0.0, -16.0, 0.0),
-            ));
+        ));
+    } else {
+        entity.insert(Sprite {
+            color,
+            image: assets.water_and_islands.clone(),
+            texture_atlas: Some(TextureAtlas {
+                layout: assets.water_and_islands_layout.clone(),
+                index: resource_frame(&state.resource_name),
+            }),
+            ..default()
         });
+    }
+    entity.with_children(|parent| {
+        parent.spawn((
+            NodeLabel {
+                node_id: state.node_id,
+            },
+            Text2d::new(label),
+            TextFont {
+                font_size: 9.0,
+                ..default()
+            },
+            TextColor(Color::srgb(0.9, 0.88, 0.8)),
+            Transform::from_xyz(0.0, -16.0, layers::LABELS - layers::RESOURCES),
+        ));
+    });
 }
 
 /// Estado completo no handshake (depois disso, só deltas).
+#[allow(clippy::too_many_arguments)]
 fn handle_nodes_snapshot(
     mut commands: Commands,
     mut snapshot_events: EventReader<ClientReceiveMessage<NodesSnapshot>>,
     mut known: ResMut<KnownNodes>,
+    assets: Res<GameAssets>,
+    asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     existing: Query<&NodeVisual>,
@@ -127,7 +155,14 @@ fn handle_nodes_snapshot(
             {
                 continue;
             }
-            spawn_node_visual(&mut commands, &mut meshes, &mut materials, state);
+            spawn_node_visual(
+                &mut commands,
+                &assets,
+                &asset_server,
+                &mut meshes,
+                &mut materials,
+                state,
+            );
         }
         info!(
             nodes = event.message().nodes.len(),
@@ -140,9 +175,8 @@ fn handle_nodes_snapshot(
 fn handle_node_updated(
     mut updated_events: EventReader<ClientReceiveMessage<NodeUpdated>>,
     mut known: ResMut<KnownNodes>,
-    mut nodes: Query<(&NodeVisual, &MeshMaterial2d<ColorMaterial>)>,
+    mut nodes: Query<(&NodeVisual, Option<&mut Sprite>)>,
     mut labels: Query<(&mut Text2d, &NodeLabel)>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     for event in updated_events.read() {
         let state = &event.message().node;
@@ -154,7 +188,7 @@ fn handle_node_updated(
                 resource_name: state.resource_name.clone(),
             },
         );
-        let Some((visual, material_handle)) = nodes
+        let Some((visual, sprite)) = nodes
             .iter_mut()
             .find(|(visual, _)| visual.node_id == state.node_id)
         else {
@@ -166,8 +200,8 @@ fn handle_node_updated(
         } else {
             visual.resource_color
         };
-        if let Some(material) = materials.get_mut(&material_handle.0) {
-            material.color = tint;
+        if let Some(mut sprite) = sprite {
+            sprite.color = tint;
         }
         let label_text = format!(
             "{} {}/{}",

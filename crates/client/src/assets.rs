@@ -10,10 +10,41 @@ const SHIP_SHEET: &str = "external/scallywag/ships/ships-tiles.png";
 const WATER_AND_ISLANDS_SHEET: &str = "external/scallywag/water-islands/water-island-tiles.png";
 const FORT_SHEET: &str = "external/scallywag/fort/fort-tiles.png";
 
+/// Ordem de desenho do mundo 2D. Sistemas visuais usam estes valores em vez
+/// de espalhar profundidades numéricas que podem inverter a cena por acaso.
+pub mod layers {
+    pub const OCEAN: f32 = -10.0;
+    pub const LAND: f32 = -9.0;
+    pub const PROPS: f32 = -8.0;
+    pub const RESOURCES: f32 = -7.0;
+    pub const WRECKS: f32 = -6.0;
+    pub const SHIPS: f32 = -5.0;
+    pub const PROJECTILES: f32 = -4.0;
+    pub const LABELS: f32 = 5.0;
+    pub const HUD: f32 = 10.0;
+}
+
+/// Frames dos sheets CC0. Os navios ocupam duas células verticais no pack.
+pub mod frames {
+    pub const SMALL_MERCHANT: usize = 0;
+    pub const PATROL: usize = 2;
+    pub const CORSAIR: usize = 4;
+    pub const OCEAN: usize = 3;
+    pub const ISLAND: usize = 0;
+    pub const WOOD_NODE: usize = 13;
+    pub const ORE_NODE: usize = 8;
+    pub const CORAL_NODE: usize = 17;
+    pub const WRECK: usize = 14;
+    pub const PROJECTILE: usize = 157;
+    pub const SERRA_PORT: usize = 4;
+    pub const MINA_PORT: usize = 0;
+}
+
 #[derive(Resource)]
 pub struct GameAssets {
     pub ships: Handle<Image>,
     pub ships_layout: Handle<TextureAtlasLayout>,
+    pub ships_detail_layout: Handle<TextureAtlasLayout>,
     pub water_and_islands: Handle<Image>,
     pub water_and_islands_layout: Handle<TextureAtlasLayout>,
     pub fort: Handle<Image>,
@@ -31,6 +62,13 @@ pub struct GameAssets {
 
 pub struct AssetManifestPlugin;
 
+pub fn image_failed(asset_server: &AssetServer, image: &Handle<Image>) -> bool {
+    matches!(
+        asset_server.get_load_state(image.id()),
+        Some(LoadState::Failed(_))
+    )
+}
+
 impl Plugin for AssetManifestPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, load_game_assets)
@@ -38,7 +76,7 @@ impl Plugin for AssetManifestPlugin {
     }
 }
 
-fn load_game_assets(
+pub(crate) fn load_game_assets(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut layouts: ResMut<Assets<TextureAtlasLayout>>,
@@ -47,6 +85,13 @@ fn load_game_assets(
     let water_and_islands = asset_server.load(WATER_AND_ISLANDS_SHEET);
     let fort = asset_server.load(FORT_SHEET);
     let ships_layout = layouts.add(TextureAtlasLayout::from_grid(
+        UVec2::new(48, 96),
+        15,
+        7,
+        None,
+        None,
+    ));
+    let ships_detail_layout = layouts.add(TextureAtlasLayout::from_grid(
         UVec2::new(48, 48),
         15,
         14,
@@ -70,6 +115,7 @@ fn load_game_assets(
     commands.insert_resource(GameAssets {
         ships: ships.clone(),
         ships_layout,
+        ships_detail_layout,
         water_and_islands: water_and_islands.clone(),
         water_and_islands_layout,
         fort: fort.clone(),
@@ -102,7 +148,7 @@ fn report_asset_load_result(
     ];
     for (pack, sheet) in sheets {
         if let Some(LoadState::Failed(error)) = asset_server.get_load_state(sheet.id()) {
-            warn!(pack, error = %error, "visual asset sheet failed to load; placeholder renderer remains active");
+            warn!(pack, error = %error, "visual asset sheet failed to load; affected entities use geometric fallback");
             *reported = true;
             return;
         }
@@ -114,9 +160,7 @@ fn report_asset_load_result(
             Some(LoadState::Loaded)
         )
     }) {
-        info!(
-            "CC0 Scallywag visual assets loaded; placeholder renderer remains active until MF-056B"
-        );
+        info!("CC0 Scallywag visual assets loaded");
         *reported = true;
     }
 }

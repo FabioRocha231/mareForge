@@ -525,6 +525,7 @@ pub(crate) fn award_npc_bounty(
 pub(crate) fn to_npc_ship_state(npc: &NpcShip, catalog: &ItemCatalog) -> ShipState {
     ShipState {
         ship_id: npc.ship_id,
+        kind: npc.kind,
         x: npc.motion.x,
         y: npc.motion.y,
         heading: npc.motion.heading,
@@ -782,6 +783,7 @@ mod tests {
 
         assert!(state.is_npc);
         assert_eq!(state.ship_id, npc.ship_id);
+        assert_eq!(state.kind, npc.kind);
         assert_eq!(state.hp, npc.hp);
     }
 }

@@ -75,6 +75,7 @@ mod tests {
     fn ship(id: u32, x: f32, y: f32) -> ShipState {
         ShipState {
             ship_id: id,
+            kind: mareforge_domain_ships::ShipKind::SmallMerchant,
             x,
             y,
             heading: 0.0,
