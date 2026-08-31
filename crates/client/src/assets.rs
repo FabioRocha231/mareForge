@@ -36,8 +36,8 @@ pub mod frames {
     pub const ORE_NODE: usize = 16;
     // `fort-tiles.png`: carro de madeira e caixotes/tábuas de carga.
     pub const WOOD_NODE: usize = 18;
-    // `water-island-tiles.png`: casco de madeira destruído, distinto dos nós.
-    pub const WRECK: usize = 21;
+    // `water-island-tiles.png`: casco/destroço marrom verificado visualmente.
+    pub const WRECK: usize = 17;
     // `water-island-tiles.png`: vegetação e madeira; recebe tinta coral.
     pub const CORAL_NODE: usize = 19;
     pub const PROJECTILE: usize = 157;
