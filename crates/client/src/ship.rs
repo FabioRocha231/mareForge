@@ -30,13 +30,31 @@ pub struct ShipVisual {
     pub last_seen: Instant,
 }
 
+/// Sombra procedural embaixo do casco (MF-057F).
+#[derive(Component)]
+pub struct ShipShadow;
+
+/// Esteira/rastro atras do navio. Visivel so quando em movimento.
+#[derive(Component)]
+pub struct ShipWake {
+    pub speed: f32,
+}
+
+/// Componente marcador mantido no navio para guardar estado local
+/// (atualmente nao usado, mas ja prepara para futuro HUD proximity).
+#[derive(Component, Default)]
+pub struct ShipKind3D;
+
 const SHIP_HEADING_OFFSET: f32 = -std::f32::consts::FRAC_PI_2;
 
 fn ship_frame_and_scale(kind: ShipKind) -> (usize, Vec3) {
+    use mareforge_domain_ships::ShipKind;
     match kind {
-        ShipKind::SmallMerchant => (frames::SMALL_MERCHANT, Vec3::splat(0.42)),
-        ShipKind::Patrol => (frames::PATROL, Vec3::splat(0.36)),
-        ShipKind::Corsair => (frames::CORSAIR, Vec3::splat(0.25)),
+        // MF-057G: SmallMerchant = cargueiro compacto; Patrol = escolta
+        // robusta maior; Corsair = clipper agil e esguio.
+        ShipKind::SmallMerchant => (frames::SMALL_MERCHANT, Vec3::splat(0.45)),
+        ShipKind::Patrol => (frames::PATROL, Vec3::splat(0.42)),
+        ShipKind::Corsair => (frames::CORSAIR, Vec3::splat(0.30)),
     }
 }
 
@@ -105,6 +123,7 @@ pub fn upsert_ship_visuals(
         }
 
         let (frame, scale) = ship_frame_and_scale(state.kind);
+        let ship_speed = state.speed;
         let mut entity = commands.spawn((
             ShipVisual {
                 target: *state,
@@ -115,6 +134,7 @@ pub fn upsert_ship_visuals(
                 rotation: Quat::from_rotation_z(state.heading + SHIP_HEADING_OFFSET),
                 scale,
             },
+            ShipKind3D,
         ));
         if image_failed(&asset_server, &assets.ships) {
             let color = if state.is_npc {
@@ -138,6 +158,36 @@ pub fn upsert_ship_visuals(
                     index: frame,
                 },
             ));
+        }
+
+        // MF-057F: sombra + esteira (wake) atras do casco. Sombra fica
+        // sempre visivel; wake so aparece quando o navio tem velocidade.
+        if !image_failed(&asset_server, &assets.ship_shadow) {
+            entity.with_children(|parent| {
+                parent.spawn((
+                    Sprite {
+                        image: assets.ship_shadow.clone(),
+                        color: Color::WHITE,
+                        ..default()
+                    },
+                    Transform::from_xyz(0.0, -2.0, layers::SHIPS - 0.5)
+                        .with_scale(Vec3::splat(0.7)),
+                    ShipShadow,
+                ));
+            });
+        }
+        if !image_failed(&asset_server, &assets.ship_wake) && ship_speed > 0.1 {
+            entity.with_children(|parent| {
+                parent.spawn((
+                    Sprite {
+                        image: assets.ship_wake.clone(),
+                        color: Color::srgba(1.0, 1.0, 1.0, 0.8),
+                        ..default()
+                    },
+                    Transform::from_xyz(0.0, -38.0, layers::VFX),
+                    ShipWake { speed: ship_speed },
+                ));
+            });
         }
         info!(
             ship_id = state.ship_id,

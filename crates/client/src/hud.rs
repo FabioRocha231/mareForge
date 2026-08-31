@@ -438,7 +438,7 @@ fn short_zone_name(full: &str) -> String {
     if let Some(rest) = full.strip_prefix("Aguas do Porto ") {
         return format!("P. {rest}");
     }
-    if let Some(rest) = full.strip_prefix("Aguas da Ilha do ") {
+    if let Some(rest) = full.strip_prefix("Águas da Ilha do ") {
         return rest.to_owned();
     }
     full.to_owned()
@@ -728,7 +728,7 @@ mod tests {
         assert_eq!(short_zone_name("Aguas do Porto da Serra"), "P. da Serra");
         assert_eq!(short_zone_name("Aguas do Porto da Mina"), "P. da Mina");
         assert_eq!(
-            short_zone_name("Aguas da Ilha do Coral Negro"),
+            short_zone_name("Águas da Ilha do Coral Negro"),
             "Coral Negro"
         );
         assert_eq!(short_zone_name("Rota da Costa"), "Rota da Costa");

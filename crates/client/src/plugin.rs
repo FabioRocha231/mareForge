@@ -11,6 +11,7 @@ use crate::ship::{
     expire_stale_visuals, lerp_projectile_visuals, lerp_ship_visuals, upsert_projectile_visuals,
     upsert_ship_visuals, upsert_wreck_visuals,
 };
+use crate::vfx::{expire_vfx, spawn_combat_vfx, VfxPlugin};
 use crate::world::WorldVisualPlugin;
 use crate::zone::ZonePlugin;
 
@@ -30,6 +31,7 @@ impl Plugin for ClientPlugin {
             .add_plugins(MarketPlugin)
             .add_plugins(PortPlugin)
             .add_plugins(HudPlugin)
+            .add_plugins(VfxPlugin)
             .add_systems(
                 Startup,
                 (setup_camera, setup_hud, spawn_market_panel).chain(),
@@ -43,6 +45,8 @@ impl Plugin for ClientPlugin {
                     lerp_projectile_visuals,
                     upsert_wreck_visuals,
                     expire_stale_visuals,
+                    spawn_combat_vfx,
+                    expire_vfx,
                     toggle_sea_hud,
                     crate::ship::follow_camera,
                     send_craft_input,

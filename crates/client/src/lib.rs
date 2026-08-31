@@ -8,6 +8,7 @@ pub mod playtest;
 pub mod plugin;
 pub mod port_screen;
 pub mod ship;
+pub mod vfx;
 pub mod world;
 pub mod zone;
 
