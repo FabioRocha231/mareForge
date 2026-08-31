@@ -639,11 +639,11 @@ pub fn tick_pvp_warning(
     time: Res<Time>,
     mut commands: Commands,
     mut plates: Query<(Entity, &mut PvpWarningFade, &mut Sprite, &Children)>,
-    mut titles: Query<&mut TextColor, With<PvpWarningText>>,
-    mut subs: Query<&mut TextColor, With<PvpWarningSubText>>,
+    mut text_colors: Query<&mut TextColor>,
 ) {
+    let dt = time.delta_secs();
     for (entity, mut fade, mut sprite, children) in &mut plates {
-        fade.elapsed += time.delta_secs();
+        fade.elapsed += dt;
         let alpha = if fade.elapsed < 0.5 {
             fade.elapsed / 0.5
         } else if fade.elapsed < 4.0 {
@@ -656,11 +656,7 @@ pub fn tick_pvp_warning(
         let srgba = sprite.color.to_srgba();
         sprite.color = Color::srgba(srgba.red, srgba.green, srgba.blue, alpha);
         for child in children.iter() {
-            if let Ok(mut tc) = titles.get_mut(*child) {
-                let c = tc.0.to_srgba();
-                tc.0 = Color::srgba(c.red, c.green, c.blue, alpha);
-            }
-            if let Ok(mut tc) = subs.get_mut(*child) {
+            if let Ok(mut tc) = text_colors.get_mut(*child) {
                 let c = tc.0.to_srgba();
                 tc.0 = Color::srgba(c.red, c.green, c.blue, alpha);
             }
@@ -744,12 +740,10 @@ mod tests {
     use std::collections::HashMap;
     use std::time::Instant;
 
-    use bevy::ecs::system::RunSystemOnce;
+    use bevy::ecs::schedule::Schedule;
     use mareforge_domain_world::RiskTier;
     use mareforge_protocol::ItemLine;
 
-    use crate::net::KnownWrecks;
-    use crate::nodes::NodeInfo;
     use crate::ship::ShipVisual;
     use crate::zone::ServerZone;
 
