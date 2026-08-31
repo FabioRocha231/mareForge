@@ -34,9 +34,9 @@ const SHIP_HEADING_OFFSET: f32 = -std::f32::consts::FRAC_PI_2;
 
 fn ship_frame_and_scale(kind: ShipKind) -> (usize, Vec3) {
     match kind {
-        ShipKind::SmallMerchant => (frames::SMALL_MERCHANT, Vec3::splat(0.75)),
-        ShipKind::Patrol => (frames::PATROL, Vec3::splat(0.65)),
-        ShipKind::Corsair => (frames::CORSAIR, Vec3::splat(0.45)),
+        ShipKind::SmallMerchant => (frames::SMALL_MERCHANT, Vec3::splat(0.42)),
+        ShipKind::Patrol => (frames::PATROL, Vec3::splat(0.36)),
+        ShipKind::Corsair => (frames::CORSAIR, Vec3::splat(0.25)),
     }
 }
 
@@ -81,7 +81,13 @@ pub fn upsert_ship_visuals(
     let Some(event) = snapshot_events.read().last() else {
         return;
     };
+    let mut seen_ship_ids = HashSet::new();
     for state in &event.message().ships {
+        // `Commands` aplica spawns depois do sistema: sem este filtro, uma
+        // repetição do mesmo estado no snapshot agenda vários visuais.
+        if !seen_ship_ids.insert(state.ship_id) {
+            continue;
+        }
         if destroyed.0.contains(&state.ship_id) {
             continue;
         }

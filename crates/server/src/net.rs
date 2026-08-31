@@ -8,7 +8,7 @@
 //! Nota: canais e registros de mensagens devem ser um espelho exato do
 //! `client/src/net.rs`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::{Duration, Instant};
 
@@ -983,8 +983,13 @@ fn handle_hello(
     mut ship_ids: ResMut<ShipIdCounter>,
     time: Res<Time>,
 ) {
+    let mut handled_clients = HashSet::new();
     for event in hello_events.read() {
         let client_id = event.from();
+        if !handled_clients.insert(client_id) {
+            info!(client = ?client_id, "hello repetido no mesmo batch ignorado");
+            continue;
+        }
         let hello = event.message();
 
         if hello.protocol_version != PROTOCOL_VERSION {
@@ -2429,6 +2434,16 @@ mod tests {
     use mareforge_shared::ids::RegionId;
 
     use super::*;
+
+    #[test]
+    fn repeated_hello_in_one_batch_is_handled_once() {
+        let client = ClientId::Local(7);
+        let mut handled_clients = HashSet::new();
+
+        assert!(handled_clients.insert(client));
+        assert!(!handled_clients.insert(client));
+        assert_eq!(handled_clients.len(), 1);
+    }
 
     /// MF-032 (ADR-0008): 3 segundos de simulação a 30 Hz = 90 ticks e
     /// ~60 snapshots a 20 Hz. O relógio é o acoplador entre os dois — e a
