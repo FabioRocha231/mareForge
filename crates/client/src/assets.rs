@@ -32,13 +32,17 @@ pub mod frames {
     pub const CORSAIR: usize = 4;
     pub const OCEAN: usize = 3;
     pub const ISLAND: usize = 0;
-    pub const WOOD_NODE: usize = 13;
-    pub const ORE_NODE: usize = 8;
-    pub const CORAL_NODE: usize = 17;
-    pub const WRECK: usize = 14;
+    // water-island-tiles.png, linha inferior: rochas, troncos/destroço e coral.
+    pub const ORE_NODE: usize = 16;
+    pub const WOOD_NODE: usize = 17;
+    pub const WRECK: usize = 17;
+    pub const CORAL_NODE: usize = 18;
     pub const PROJECTILE: usize = 157;
-    pub const SERRA_PORT: usize = 4;
-    pub const MINA_PORT: usize = 0;
+    pub const SERRA_CART: usize = 18;
+    pub const SERRA_CRATE: usize = 31;
+    pub const MINA_CART: usize = 19;
+    pub const MINA_ORE: usize = 104;
+    pub const DANGER_MARKER: usize = 101;
 }
 
 #[derive(Resource)]
