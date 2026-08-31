@@ -34,9 +34,9 @@ const SHIP_HEADING_OFFSET: f32 = -std::f32::consts::FRAC_PI_2;
 
 fn ship_frame_and_scale(kind: ShipKind) -> (usize, Vec3) {
     match kind {
-        ShipKind::SmallMerchant => (frames::SMALL_MERCHANT, Vec3::splat(1.15)),
-        ShipKind::Patrol => (frames::PATROL, Vec3::splat(1.05)),
-        ShipKind::Corsair => (frames::CORSAIR, Vec3::splat(0.92)),
+        ShipKind::SmallMerchant => (frames::SMALL_MERCHANT, Vec3::splat(0.75)),
+        ShipKind::Patrol => (frames::PATROL, Vec3::splat(0.65)),
+        ShipKind::Corsair => (frames::CORSAIR, Vec3::splat(0.45)),
     }
 }
 

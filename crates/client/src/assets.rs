@@ -25,11 +25,11 @@ pub mod layers {
     pub const OVERLAY: f32 = 20.0;
 }
 
-/// Frames dos sheets CC0. Os navios ocupam duas células verticais no pack.
+/// Frames dos sheets CC0. Os três navios usam recortes completos do atlas.
 pub mod frames {
     pub const SMALL_MERCHANT: usize = 0;
-    pub const PATROL: usize = 2;
-    pub const CORSAIR: usize = 4;
+    pub const PATROL: usize = 1;
+    pub const CORSAIR: usize = 2;
     pub const OCEAN: usize = 3;
     pub const ISLAND: usize = 0;
     // `water-island-tiles.png`: 16..18 são somente rochas.
@@ -92,13 +92,13 @@ pub(crate) fn load_game_assets(
     let ships = asset_server.load(SHIP_SHEET);
     let water_and_islands = asset_server.load(WATER_AND_ISLANDS_SHEET);
     let fort = asset_server.load(FORT_SHEET);
-    let ships_layout = layouts.add(TextureAtlasLayout::from_grid(
-        UVec2::new(48, 96),
-        15,
-        7,
-        None,
-        None,
-    ));
+    let mut ships_layout = TextureAtlasLayout::new_empty(UVec2::new(720, 672));
+    // Os cascos não ocupam uma grade regular. Estes retângulos seguem os
+    // limites reais de três embarcações completas no sheet.
+    ships_layout.add_texture(URect::new(33, 0, 63, 159));
+    ships_layout.add_texture(URect::new(306, 0, 350, 178));
+    ships_layout.add_texture(URect::new(497, 0, 543, 256));
+    let ships_layout = layouts.add(ships_layout);
     let ships_detail_layout = layouts.add(TextureAtlasLayout::from_grid(
         UVec2::new(48, 48),
         15,
