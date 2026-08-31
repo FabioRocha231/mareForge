@@ -91,11 +91,11 @@ pub(crate) fn load_game_assets(
     let water_and_islands = asset_server.load(WATER_AND_ISLANDS_SHEET);
     let fort = asset_server.load(FORT_SHEET);
     let mut ships_layout = TextureAtlasLayout::new_empty(UVec2::new(720, 672));
-    // Os cascos não ocupam uma grade regular. Estes retângulos seguem os
-    // limites reais de três embarcações completas no sheet.
-    ships_layout.add_texture(URect::new(33, 0, 63, 159));
-    ships_layout.add_texture(URect::new(306, 0, 350, 178));
-    ships_layout.add_texture(URect::new(497, 0, 543, 256));
+    // Os cascos não ocupam uma grade regular. Cada retângulo cobre somente
+    // um casco completo, sem incluir a linha de sprites seguinte no sheet.
+    ships_layout.add_texture(URect::new(1, 0, 30, 62));
+    ships_layout.add_texture(URect::new(306, 0, 349, 94));
+    ships_layout.add_texture(URect::new(497, 0, 542, 127));
     let ships_layout = layouts.add(ships_layout);
     let ships_detail_layout = layouts.add(TextureAtlasLayout::from_grid(
         UVec2::new(48, 48),
