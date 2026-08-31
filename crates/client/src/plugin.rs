@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+use crate::assets::AssetManifestPlugin;
 use crate::crafting::{send_craft_input, CraftPlugin};
 use crate::market::{send_market_input, spawn_market_panel, KnownCatalog, MarketPlugin, Wallet};
 use crate::net::{
@@ -22,6 +23,7 @@ impl Plugin for ClientPlugin {
         app.insert_resource(ClearColor(Color::srgb(0.04, 0.13, 0.22)))
             // ADR-0008: simulação a 30 Hz; render desacoplado.
             .insert_resource(Time::<Fixed>::from_hz(30.0))
+            .add_plugins(AssetManifestPlugin)
             .add_plugins(ClientNetPlugin)
             .add_plugins(ZonePlugin)
             .add_plugins(NodePlugin)

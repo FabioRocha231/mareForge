@@ -27,4 +27,8 @@ Toda asset externa usada no mareForge vive aqui. Nada entra em
 
 ## Registro
 
-*(vazio — primeira asset vai aqui)*
+| Pack | Autor | URL | Licença | Attribution required | Arquivos utilizados | Modificações | Data de inclusão |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Scallywag - Ships | Pixel Carvel (comissionado); distribuído por Foozle | https://foozlecc.itch.io/scallywag-ships | CC0 1.0 | false | `assets/external/scallywag/ships/ships-tiles.png` | Renomeado de `Ships tiles.png` ao extrair o tilesheet oficial; conteúdo inalterado. | 2026-08-30 |
+| Scallywag - Water and Islands | Pixel Carvel (comissionado); distribuído por Foozle | https://foozlecc.itch.io/scallywag-water-islands | CC0 1.0 | false | `assets/external/scallywag/water-islands/water-island-tiles.png` | Renomeado de `Water and Island tiles.png` ao extrair o tilesheet oficial; conteúdo inalterado. | 2026-08-30 |
+| Scallywag - Fort | Pixel Carvel (comissionado); distribuído por Foozle | https://foozlecc.itch.io/scallywag-fort | CC0 1.0 | false | `assets/external/scallywag/fort/fort-tiles.png` | Renomeado de `Fort Tiles.png` ao extrair o tilesheet oficial; conteúdo inalterado. | 2026-08-30 |

@@ -1,3 +1,4 @@
+pub mod assets;
 pub mod crafting;
 pub mod market;
 pub mod net;
