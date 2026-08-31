@@ -9,6 +9,8 @@ use lightyear::prelude::*;
 use mareforge_domain_world::RiskTier;
 use mareforge_protocol::ZoneChanged;
 
+use crate::assets::layers;
+
 /// Zona atual do navio do jogador, segundo o servidor.
 #[derive(Resource, Debug, Clone, Default)]
 pub struct CurrentZone(pub Option<ServerZone>);
@@ -67,11 +69,11 @@ fn handle_zone_changed(
                             "Você está entrando em águas de risco.\n\nSeu navio, equipamentos e carga poderão ser perdidos.",
                         ),
                         TextFont {
-                            font_size: 16.0,
+                            font_size: 14.0,
                             ..default()
                         },
                         TextColor(Color::srgb(1.0, 0.45, 0.35)),
-                        Transform::from_xyz(0.0, 30.0, 10.0),
+                        Transform::from_xyz(0.0, -70.0, layers::HUD),
                         PvpWarningText,
                     ))
                     .set_parent(camera);

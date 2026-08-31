@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::assets::AssetManifestPlugin;
+use crate::assets::{layers, AssetManifestPlugin};
 use crate::crafting::{send_craft_input, CraftPlugin};
 use crate::market::{send_market_input, spawn_market_panel, KnownCatalog, MarketPlugin, Wallet};
 use crate::net::{
@@ -9,11 +9,12 @@ use crate::net::{
 use crate::nodes::{KnownNodes, NodePlugin};
 use crate::port_screen::PortPlugin;
 use crate::ship::{
-    expire_stale_visuals, lerp_projectile_visuals, lerp_ship_visuals, update_cargo_readout,
-    upsert_projectile_visuals, upsert_ship_visuals, upsert_wreck_visuals, CargoReadout,
+    expire_stale_visuals, lerp_projectile_visuals, lerp_ship_visuals, upsert_projectile_visuals,
+    upsert_ship_visuals, upsert_wreck_visuals,
 };
 use crate::world::WorldVisualPlugin;
 use crate::zone::{risk_tag, CurrentZone, ZonePlugin};
+use mareforge_domain_ships::ShipKind;
 use mareforge_protocol::ShipState;
 use mareforge_shared::ids::ItemDefinitionId;
 
@@ -45,7 +46,6 @@ impl Plugin for ClientPlugin {
                     lerp_projectile_visuals,
                     upsert_wreck_visuals,
                     expire_stale_visuals,
-                    update_cargo_readout,
                     update_sea_hud,
                     toggle_sea_hud,
                     crate::ship::follow_camera,
@@ -73,7 +73,7 @@ fn setup_camera(mut commands: Commands) {
 #[derive(Component)]
 pub struct SeaHud;
 
-/// Linha principal do HUD do mar (HP, navio, zona, ouro, recarga).
+/// Linha principal do HUD do mar (HP, navio, carga, zona, ouro, recarga).
 #[derive(Component)]
 pub struct SeaReadout;
 
@@ -96,7 +96,7 @@ fn setup_hud(mut commands: Commands, camera: Query<Entity, With<Camera2d>>) {
                     ..default()
                 },
                 TextColor(color),
-                Transform::from_xyz(0.0, y, 10.0),
+                Transform::from_xyz(0.0, y, layers::HUD),
                 SeaHud,
             ))
             .set_parent(camera)
@@ -104,20 +104,12 @@ fn setup_hud(mut commands: Commands, camera: Query<Entity, With<Camera2d>>) {
     };
     let sea = hud(
         &mut commands,
-        "HP: —\nNavio: —\nZona: —\nOuro: —\nBombordo: —\nEstibordo: —",
+        "HP: —\nNavio: —\nCarga: —\nZona: —\nOuro: —\nBombordo: —\nEstibordo: —",
         13.0,
         Color::srgb(0.85, 0.85, 0.85),
         140.0,
     );
     commands.entity(sea).insert(SeaReadout);
-    let cargo = hud(
-        &mut commands,
-        "Carga: —",
-        13.0,
-        Color::srgb(0.95, 0.8, 0.5),
-        75.0,
-    );
-    commands.entity(cargo).insert(CargoReadout);
     let prompt = hud(&mut commands, "", 13.0, Color::srgb(0.75, 0.92, 0.72), 35.0);
     commands.entity(prompt).insert(PromptReadout);
 }
@@ -142,6 +134,14 @@ fn cooldown_label(secs: f32) -> String {
     }
 }
 
+fn ship_kind_label(kind: ShipKind) -> &'static str {
+    match kind {
+        ShipKind::SmallMerchant => "Mercante",
+        ShipKind::Patrol => "Patrulha",
+        ShipKind::Corsair => "Corsário",
+    }
+}
+
 fn sea_hud_text(state: &ShipState, wallet: u64, zone: &CurrentZone) -> String {
     let zone_line = zone
         .0
@@ -149,10 +149,11 @@ fn sea_hud_text(state: &ShipState, wallet: u64, zone: &CurrentZone) -> String {
         .map(|zone| format!("{} — {}", zone.name, risk_tag(zone.tier)))
         .unwrap_or_else(|| String::from("Zona: fora do mar"));
     format!(
-        "HP: {}/{}\nNavio: {}\n{}\nOuro: {}g\nBombordo: {}\nEstibordo: {}",
+        "HP: {}/{}\nNavio: {}\nCarga: {}\n{}\nOuro: {}g\nBombordo: {}\nEstibordo: {}",
         state.hp,
         state.max_hp,
-        state.ship_id,
+        ship_kind_label(state.kind),
+        state.cargo_weight,
         zone_line,
         wallet,
         cooldown_label(state.port_cooldown_secs),
@@ -319,7 +320,8 @@ mod tests {
 
         let text = sea_hud_text(&state, 500, &zone);
         assert!(text.contains("HP: 120/150"), "{text}");
-        assert!(text.contains("Navio: 1"), "{text}");
+        assert!(text.contains("Navio: Mercante"), "{text}");
+        assert!(text.contains("Carga: 8"), "{text}");
         assert!(text.contains("Rota da Costa"), "{text}");
         assert!(text.contains("PvP ATIVO"), "{text}");
         assert!(text.contains("Ouro: 500g"), "{text}");
@@ -357,14 +359,12 @@ mod tests {
         )])));
         world.spawn((SeaReadout, Text2d::new(String::new())));
         world.spawn((PromptReadout, Text2d::new(String::new())));
-        world.spawn((CargoReadout, Text2d::new(String::new())));
         world.spawn((ShipVisual {
             target: ship_state(0.0, 0.0),
             last_seen: Instant::now(),
         },));
 
         world.run_system_once(update_sea_hud).unwrap();
-        world.run_system_once(update_cargo_readout).unwrap();
 
         let mut texts = world.query::<&Text2d>();
         let text = texts

@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 
+use crate::assets::layers;
 use crate::net::ReliableChannel;
 use bevy::ecs::prelude::*;
 use bevy::input::keyboard::{Key, KeyboardInput};
@@ -171,7 +172,7 @@ pub fn spawn_market_panel(mut commands: Commands, camera: Query<Entity, With<Cam
             },
             TextColor(Color::srgb(0.9, 0.9, 0.8)),
             Anchor::CenterLeft,
-            Transform::from_xyz(-300.0, 100.0, 10.0),
+            Transform::from_xyz(-300.0, 100.0, layers::OVERLAY),
         ))
         .set_parent(camera);
     commands
@@ -184,7 +185,7 @@ pub fn spawn_market_panel(mut commands: Commands, camera: Query<Entity, With<Cam
             },
             TextColor(Color::srgb(0.95, 0.87, 0.55)),
             Anchor::CenterLeft,
-            Transform::from_xyz(80.0, 100.0, 10.0),
+            Transform::from_xyz(80.0, 100.0, layers::OVERLAY),
         ))
         .set_parent(camera);
 }

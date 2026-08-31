@@ -363,22 +363,3 @@ pub fn follow_camera(
         .translation
         .lerp(Vec3::new(visual.target.x, visual.target.y, 0.0), factor);
 }
-
-/// Leitor de peso de carga do próprio navio (feedback do loop econômico).
-#[derive(Component)]
-pub struct CargoReadout;
-
-pub fn update_cargo_readout(
-    my_ship: Res<crate::net::MyShip>,
-    visuals: Query<&ShipVisual>,
-    mut readout: Query<&mut Text2d, With<CargoReadout>>,
-) {
-    let Some(my_id) = my_ship.0 else { return };
-    let Some(visual) = visuals.iter().find(|visual| visual.target.ship_id == my_id) else {
-        return;
-    };
-    let mut text = readout.single_mut();
-    // ponytail: capacidade não está no ShipState ainda; mostrar só o peso.
-    // Adicionar cargo_capacity ao ShipState quando a UI precisar do limite.
-    text.0 = format!("Carga: {}", visual.target.cargo_weight);
-}

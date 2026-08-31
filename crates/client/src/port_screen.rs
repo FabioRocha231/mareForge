@@ -21,6 +21,7 @@ use mareforge_protocol::{
 };
 use mareforge_shared::ids::{ItemDefinitionId, ShipDefinitionId};
 
+use crate::assets::layers;
 use crate::crafting::KnownRecipes;
 use crate::market::{KnownCatalog, MarketFeedback, MarketFormReadout, MarketReadout};
 use crate::net::{KnownShipKind, MyDocked, MyShip, ReliableChannel};
@@ -86,11 +87,11 @@ impl PortTab {
 
     pub fn label(self) -> &'static str {
         match self {
-            PortTab::Storage => "Storage",
-            PortTab::Loadout => "Loadout",
-            PortTab::Crafting => "Crafting",
-            PortTab::Shipyard => "Shipyard",
-            PortTab::Market => "Market",
+            PortTab::Storage => "Porão",
+            PortTab::Loadout => "Equipamento",
+            PortTab::Crafting => "Fabricação",
+            PortTab::Shipyard => "Estaleiro",
+            PortTab::Market => "Mercado",
         }
     }
 }
@@ -298,7 +299,7 @@ fn spawn_port_screen(commands: &mut Commands, camera: &Query<Entity, With<Camera
             },
             TextColor(Color::srgb(0.9, 0.9, 0.85)),
             Anchor::TopLeft,
-            Transform::from_xyz(-560.0, 320.0, 20.0),
+            Transform::from_xyz(-560.0, 320.0, layers::OVERLAY),
             Visibility::Visible,
         ))
         .set_parent(camera);
@@ -718,7 +719,7 @@ fn port_screen_text(
     } else {
         format!("Porto: {port_name}")
     };
-    let mut lines = vec![header, tab_bar(state.active_tab)];
+    let mut lines = vec![header, tab_bar(state.active_tab), String::new()];
     lines.extend(content_lines(
         state,
         cargo_weight,

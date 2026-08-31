@@ -22,6 +22,7 @@ pub mod layers {
     pub const PROJECTILES: f32 = -4.0;
     pub const LABELS: f32 = 5.0;
     pub const HUD: f32 = 10.0;
+    pub const OVERLAY: f32 = 20.0;
 }
 
 /// Frames dos sheets CC0. Os navios ocupam duas células verticais no pack.
