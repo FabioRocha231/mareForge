@@ -50,7 +50,22 @@ use mareforge_shared::ids::{
 use smallvec::SmallVec;
 use tracing::{info, warn};
 
-pub const SERVER_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 5000);
+pub fn server_addr() -> SocketAddr {
+    let port = parse_port(std::env::var("MAREFORGE_PORT").ok().as_deref());
+    SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port)
+}
+
+fn parse_port(value: Option<&str>) -> u16 {
+    value
+        .map(|value| {
+            value
+                .parse::<u16>()
+                .ok()
+                .filter(|port| *port != 0)
+                .unwrap_or_else(|| panic!("MAREFORGE_PORT must be an integer from 1 to 65535"))
+        })
+        .unwrap_or(5000)
+}
 const SIM_HZ: f64 = 30.0;
 /// Frequência de snapshots de rede (ADR-0008): 20 Hz — MENOR que a simulação
 /// (30 Hz, FixedUpdate). A cadência é explícita em [`advance_snapshot_clock`].
@@ -294,7 +309,7 @@ impl Plugin for ServerNetPlugin {
             .get_resource::<ServerTransportOverride>()
             .filter(|overrides| !overrides.0.is_empty())
             .map(|overrides| overrides.0.clone())
-            .unwrap_or_else(|| vec![ServerTransport::UdpSocket(SERVER_ADDR)]);
+            .unwrap_or_else(|| vec![ServerTransport::UdpSocket(server_addr())]);
         let net_configs = overridden
             .into_iter()
             .map(|transport| NetConfig::Netcode {
@@ -456,7 +471,7 @@ impl Plugin for ServerNetPlugin {
 
 fn start_server(mut commands: Commands) {
     commands.start_server();
-    info!(addr = %SERVER_ADDR, "mareforge server listening");
+    info!(addr = %server_addr(), "mareforge server listening");
 }
 
 /// Navio autoritativo: a única cópia do estado que vale (Pilar 4). O dono é
@@ -2434,6 +2449,22 @@ mod tests {
     use mareforge_shared::ids::RegionId;
 
     use super::*;
+
+    #[test]
+    fn port_defaults_to_5000() {
+        assert_eq!(parse_port(None), 5000);
+    }
+
+    #[test]
+    fn port_accepts_valid_value() {
+        assert_eq!(parse_port(Some("5001")), 5001);
+    }
+
+    #[test]
+    #[should_panic(expected = "MAREFORGE_PORT must be an integer from 1 to 65535")]
+    fn port_rejects_out_of_range_value() {
+        parse_port(Some("65536"));
+    }
 
     #[test]
     fn repeated_hello_in_one_batch_is_handled_once() {

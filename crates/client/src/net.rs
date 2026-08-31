@@ -27,7 +27,22 @@ use mareforge_protocol::{
     WalletUpdated, WorldSnapshot, ZoneChanged, PROTOCOL_VERSION,
 };
 
-pub const SERVER_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 5000);
+pub fn server_addr() -> SocketAddr {
+    let port = parse_port(std::env::var("MAREFORGE_PORT").ok().as_deref());
+    SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port)
+}
+
+fn parse_port(value: Option<&str>) -> u16 {
+    value
+        .map(|value| {
+            value
+                .parse::<u16>()
+                .ok()
+                .filter(|port| *port != 0)
+                .unwrap_or_else(|| panic!("MAREFORGE_PORT must be an integer from 1 to 65535"))
+        })
+        .unwrap_or(5000)
+}
 /// Porta 0: o SO escolhe a porta efêmera — permite vários clients na mesma máquina.
 const CLIENT_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
 const SIM_HZ: f64 = 30.0;
@@ -87,7 +102,7 @@ impl Plugin for ClientNetPlugin {
                 // disputar o mesmo client_id no netcode (o servidor rejeita duplicado).
                 let client_id = u64::from(std::process::id());
                 let auth = Authentication::Manual {
-                    server_addr: SERVER_ADDR,
+                    server_addr: server_addr(),
                     client_id,
                     private_key: Key::default(),
                     protocol_id: 0,
@@ -366,7 +381,7 @@ fn connect(mut commands: Commands) {
 }
 
 fn log_connecting() {
-    info!(server = %SERVER_ADDR, "conectando ao servidor mareforge");
+    info!(server = %server_addr(), "conectando ao servidor mareforge");
 }
 
 /// Handshake (ADR-0011): primeira mensagem após conectar é o hello com a
@@ -616,5 +631,26 @@ fn handle_handshake(
             kind = ?message.kind,
             "navio atribuído a este client"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_port;
+
+    #[test]
+    fn port_defaults_to_5000() {
+        assert_eq!(parse_port(None), 5000);
+    }
+
+    #[test]
+    fn port_accepts_valid_value() {
+        assert_eq!(parse_port(Some("5001")), 5001);
+    }
+
+    #[test]
+    #[should_panic(expected = "MAREFORGE_PORT must be an integer from 1 to 65535")]
+    fn port_rejects_zero() {
+        parse_port(Some("0"));
     }
 }
