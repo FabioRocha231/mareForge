@@ -332,7 +332,7 @@ pub fn upsert_wreck_visuals(
             entity.insert(Sprite::from_atlas_image(
                 assets.wreck.clone(),
                 TextureAtlas {
-                    layout: assets.fort_layout.clone(),
+                    layout: assets.water_and_islands_layout.clone(),
                     index: frames::WRECK,
                 },
             ));
