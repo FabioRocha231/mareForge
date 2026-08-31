@@ -1,5 +1,6 @@
 pub mod assets;
 pub mod crafting;
+pub mod hud;
 pub mod market;
 pub mod net;
 pub mod nodes;
