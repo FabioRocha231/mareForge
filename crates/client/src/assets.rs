@@ -32,11 +32,13 @@ pub mod frames {
     pub const CORSAIR: usize = 4;
     pub const OCEAN: usize = 3;
     pub const ISLAND: usize = 0;
-    // water-island-tiles.png, linha inferior: rochas, troncos/destroço e coral.
+    // `water-island-tiles.png`: 16..18 são somente rochas.
     pub const ORE_NODE: usize = 16;
-    pub const WOOD_NODE: usize = 17;
-    pub const WRECK: usize = 17;
-    pub const CORAL_NODE: usize = 18;
+    // `fort-tiles.png`: carro de madeira e caixotes/tábuas de carga.
+    pub const WOOD_NODE: usize = 18;
+    pub const WRECK: usize = 31;
+    // `water-island-tiles.png`: vegetação e madeira; recebe tinta coral.
+    pub const CORAL_NODE: usize = 19;
     pub const PROJECTILE: usize = 157;
     pub const SERRA_CART: usize = 18;
     pub const SERRA_CRATE: usize = 31;
@@ -128,8 +130,8 @@ pub(crate) fn load_game_assets(
         small_merchant: ships.clone(),
         patrol: ships.clone(),
         corsair: ships.clone(),
-        wreck: water_and_islands.clone(),
-        wood_node: water_and_islands.clone(),
+        wreck: fort.clone(),
+        wood_node: fort.clone(),
         ore_node: water_and_islands.clone(),
         coral_node: water_and_islands,
         projectile: ships,

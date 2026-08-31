@@ -323,16 +323,16 @@ pub fn upsert_wreck_visuals(
             },
             Transform::from_xyz(wreck.x, wreck.y, layers::WRECKS),
         ));
-        if image_failed(&asset_server, &assets.water_and_islands) {
+        if image_failed(&asset_server, &assets.wreck) {
             entity.insert((
                 Mesh2d(meshes.add(Rectangle::new(14.0, 14.0))),
                 MeshMaterial2d(materials.add(Color::srgb(0.38, 0.27, 0.16))),
             ));
         } else {
             entity.insert(Sprite::from_atlas_image(
-                assets.water_and_islands.clone(),
+                assets.wreck.clone(),
                 TextureAtlas {
-                    layout: assets.water_and_islands_layout.clone(),
+                    layout: assets.fort_layout.clone(),
                     index: frames::WRECK,
                 },
             ));

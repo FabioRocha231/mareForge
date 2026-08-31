@@ -41,7 +41,7 @@ fn spawn_vertical_slice_world(
     for x in -2..=2 {
         for y in -2..=2 {
             let sprite = if water_failed {
-                Sprite::from_color(Color::srgb(0.03, 0.2, 0.31), Vec2::splat(OCEAN_TILE_STEP))
+                Sprite::from_color(Color::srgb(0.03, 0.2, 0.31), Vec2::splat(48.0))
             } else {
                 atlas_sprite(
                     assets.water_and_islands.clone(),
@@ -84,7 +84,7 @@ fn spawn_vertical_slice_world(
     });
     if let Some(position) = island {
         let sprite = if water_failed {
-            Sprite::from_color(Color::srgb(0.26, 0.05, 0.08), Vec2::splat(192.0))
+            Sprite::from_color(Color::srgb(0.26, 0.05, 0.08), Vec2::splat(48.0))
         } else {
             atlas_sprite(
                 assets.water_and_islands.clone(),

@@ -61,15 +61,6 @@ fn resource_color(name: &str) -> Color {
     }
 }
 
-fn resource_frame(name: &str) -> usize {
-    match name {
-        "Madeira" => frames::WOOD_NODE,
-        "Minério" => frames::ORE_NODE,
-        "Coral Negro" => frames::CORAL_NODE,
-        _ => frames::ORE_NODE,
-    }
-}
-
 fn dimmed(color: Color) -> Color {
     let srgba = color.to_srgba();
     Color::srgba(srgba.red * 0.35, srgba.green * 0.35, srgba.blue * 0.35, 1.0)
@@ -88,6 +79,23 @@ fn spawn_node_visual(
         "{} {}/{}",
         state.resource_name, state.stock, state.max_stock
     );
+    let (image, layout, frame) = match state.resource_name.as_str() {
+        "Madeira" => (
+            assets.wood_node.clone(),
+            assets.fort_layout.clone(),
+            frames::WOOD_NODE,
+        ),
+        "Coral Negro" => (
+            assets.coral_node.clone(),
+            assets.water_and_islands_layout.clone(),
+            frames::CORAL_NODE,
+        ),
+        _ => (
+            assets.ore_node.clone(),
+            assets.water_and_islands_layout.clone(),
+            frames::ORE_NODE,
+        ),
+    };
     let mut entity = commands.spawn((
         NodeVisual {
             node_id: state.node_id,
@@ -95,7 +103,7 @@ fn spawn_node_visual(
         },
         Transform::from_xyz(state.x, state.y, layers::RESOURCES),
     ));
-    if image_failed(asset_server, &assets.water_and_islands) {
+    if image_failed(asset_server, &image) {
         entity.insert((
             Mesh2d(meshes.add(Circle::new(9.0))),
             MeshMaterial2d(materials.add(color)),
@@ -103,10 +111,10 @@ fn spawn_node_visual(
     } else {
         entity.insert(Sprite {
             color,
-            image: assets.water_and_islands.clone(),
+            image,
             texture_atlas: Some(TextureAtlas {
-                layout: assets.water_and_islands_layout.clone(),
-                index: resource_frame(&state.resource_name),
+                layout,
+                index: frame,
             }),
             ..default()
         });
