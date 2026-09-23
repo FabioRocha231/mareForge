@@ -1,345 +1,372 @@
-//! Cenario visual estatico do vertical slice (MF-057D, MF-057E).
-//! A posicao vem do `WorldMap`; esta camada apenas escolhe arte e nunca
-//! altera geometria ou risco. Composicao e identidade dos portos moram
-//! aqui (Serra = madeira/verde, Mina = pedra/industrial).
+//! Cenário do vertical slice (MF-057D/E, MF-058). A geografia vem do
+//! `WorldMap` — zonas, portos e terra são os mesmos do servidor; esta
+//! camada só escolhe a arte. Mar e terra são um shader (`sea.wgsl`); portos,
+//! vegetação e rochas são sprites do pack Scallywag por cima.
 
-use bevy::asset::LoadState;
 use bevy::prelude::*;
-use bevy::sprite::Anchor;
-use mareforge_domain_world::{WorldMap, ZoneShape};
+use bevy::render::render_resource::{AsBindGroup, ShaderRef};
+use bevy::sprite::{Anchor, Material2d, Material2dPlugin};
+use mareforge_domain_world::{LandMass, RiskTier, WorldMap, ZoneShape};
 
-use crate::assets::{frames, image_failed, layers, GameAssets};
+use crate::assets::{deco, fort, layers, GameAssets};
+use crate::zone::CurrentZone;
 
-/// Escala base de cada tile de agua. O atlas eh 48 px; 16x = 768 px por
-/// tile, suficiente para o mundo vertical caber em ~3 tiles visiveis.
-const OCEAN_TILE_SCALE: f32 = 16.0;
-const OCEAN_TILE_STEP: f32 = 48.0 * OCEAN_TILE_SCALE;
+const MAX_LAND: usize = 48;
+const MAX_SAFE: usize = 4;
 
-/// Escala das props de porto: casas, docas, vegetacao, muros. O atlas
-/// fort-tiles.png tem tiles de 16 px; 3x = 48 px.
-/* REMOVED: PROP_SCALE was only used by spawn_shore_band, which has been
-   removed (it created the dotted stair-step artifact around ports). */
+// O derive `ShaderType` (encase) gera uma fn `check` por campo que o rustc
+// acusa como código morto; o allow fica restrito a este módulo.
+#[allow(dead_code)]
+mod uniform {
+    use super::{MAX_LAND, MAX_SAFE};
+    use bevy::math::Vec4;
+    use bevy::render::render_resource::ShaderType;
+
+    #[derive(ShaderType, Debug, Clone)]
+    pub struct SeaParams {
+        pub land: [Vec4; MAX_LAND],
+        pub safe: [Vec4; MAX_SAFE],
+        pub info: Vec4,
+    }
+}
+pub use uniform::SeaParams;
+
+#[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
+pub struct SeaMaterial {
+    #[uniform(0)]
+    pub params: SeaParams,
+}
+
+impl Material2d for SeaMaterial {
+    fn fragment_shader() -> ShaderRef {
+        "shaders/sea.wgsl".into()
+    }
+}
+
+/// Handle do material do mar, para o tom de perigo acompanhar a zona.
+#[derive(Resource)]
+struct Sea(Handle<SeaMaterial>);
+
+/// Bandeira animada (porto ou navio): cor do atlas + fase própria.
+#[derive(Component)]
+pub struct WavingFlag {
+    pub color: usize,
+    pub phase: usize,
+}
 
 pub struct WorldVisualPlugin;
 
 impl Plugin for WorldVisualPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, spawn_vertical_slice_world);
+        app.add_plugins(Material2dPlugin::<SeaMaterial>::default())
+            // PostStartup: `GameAssets` é inserido por comando no Startup.
+            .add_systems(PostStartup, spawn_vertical_slice_world)
+            .add_systems(Update, (tint_sea_by_zone, animate_flags));
     }
 }
 
-fn atlas_sprite(image: Handle<Image>, layout: Handle<TextureAtlasLayout>, index: usize) -> Sprite {
-    Sprite::from_atlas_image(image, TextureAtlas { layout, index })
-}
-
-/// MF-057D: agua com dois andares visuais. Tile base = agua do atlas
-/// (frames::OCEAN, azul claro). Onda de fundo = ocean_deep procedural
-/// (azul mais escuro, mais contraste). A combinacao da um piso de agua
-/// com profundidade visivel sem pipeline de shader.
-fn spawn_water_tile(
-    commands: &mut Commands,
-    assets: &GameAssets,
-    asset_server: &AssetServer,
-    position: Vec2,
-) {
-    let deep_failed = image_failed(asset_server, &assets.ocean_deep);
-    let water_failed = image_failed(asset_server, &assets.water_and_islands);
-
-    // Fundo: ocean_deep procedural. Sprite + leve alpha para nao cobrir
-    // totalmente o tile base.
-    if !deep_failed {
-        commands.spawn((
-            Sprite {
-                image: assets.ocean_deep.clone(),
-                color: Color::srgba(1.0, 1.0, 1.0, 0.55),
-                ..default()
-            },
-            Transform {
-                translation: position.extend(layers::OCEAN - 0.5),
-                scale: Vec3::splat(OCEAN_TILE_SCALE),
-                ..default()
-            },
-        ));
+pub fn sea_params(map: &WorldMap) -> SeaParams {
+    let mut land = [Vec4::ZERO; MAX_LAND];
+    for (slot, mass) in land.iter_mut().zip(map.land()) {
+        *slot = Vec4::new(mass.x, mass.y, mass.radius, 0.0);
     }
+    let mut safe = [Vec4::ZERO; MAX_SAFE];
+    let protected = map.zones().iter().filter(|z| z.tier == RiskTier::Protected);
+    for (slot, zone) in safe.iter_mut().zip(protected) {
+        let ZoneShape::Circle { x, y, radius } = zone.shape;
+        *slot = Vec4::new(x, y, radius, 0.0);
+    }
+    let safe_count = map
+        .zones()
+        .iter()
+        .filter(|z| z.tier == RiskTier::Protected)
+        .count()
+        .min(MAX_SAFE);
+    SeaParams {
+        land,
+        safe,
+        info: Vec4::new(
+            map.land().len().min(MAX_LAND) as f32,
+            safe_count as f32,
+            0.0,
+            0.0,
+        ),
+    }
+}
 
-    // Tile base do atlas por cima, com leve variacao de matiz.
-    let sprite = if water_failed {
-        Sprite::from_color(Color::srgb(0.04, 0.18, 0.30), Vec2::splat(48.0))
-    } else {
-        atlas_sprite(
-            assets.water_and_islands.clone(),
-            assets.water_and_islands_layout.clone(),
-            frames::OCEAN,
-        )
-    };
+fn atlas(image: &Handle<Image>, layout: &Handle<TextureAtlasLayout>, index: usize) -> Sprite {
+    Sprite::from_atlas_image(
+        image.clone(),
+        TextureAtlas {
+            layout: layout.clone(),
+            index,
+        },
+    )
+}
+
+fn prop(commands: &mut Commands, sprite: Sprite, at: Vec2, scale: f32, z: f32) {
     commands.spawn((
         sprite,
-        Transform {
-            translation: position.extend(layers::OCEAN),
-            scale: Vec3::splat(OCEAN_TILE_SCALE),
-            ..default()
-        },
+        Transform::from_translation(at.extend(z)).with_scale(Vec3::splat(scale)),
     ));
 }
 
-fn spawn_visual(commands: &mut Commands, sprite: Sprite, position: Vec2, scale: Vec3, z: f32) {
+fn label(commands: &mut Commands, text: &str, at: Vec2, size: f32, color: Color) {
     commands.spawn((
-        sprite,
-        Transform {
-            translation: position.extend(z),
-            scale,
+        Text2d::new(text),
+        TextLayout::new_with_no_wrap(),
+        TextFont {
+            font_size: size,
             ..default()
         },
+        TextColor(color),
+        Anchor::Center,
+        Transform::from_translation(at.extend(layers::LABELS)),
     ));
 }
 
-/// Spawna o cenario completo uma unica vez apos os sheets carregarem.
+/// Distância com sinal até a terra (negativa dentro), como no shader mas
+/// sem o ruído da costa — por isso quem usa pede folga.
+fn land_distance(land: &[LandMass], p: Vec2) -> f32 {
+    land.iter()
+        .map(|m| p.distance(Vec2::new(m.x, m.y)) - m.radius)
+        .fold(f32::MAX, f32::min)
+}
+
 fn spawn_vertical_slice_world(
     mut commands: Commands,
     assets: Res<GameAssets>,
-    asset_server: Res<AssetServer>,
-    mut spawned: Local<bool>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<SeaMaterial>>,
 ) {
-    if *spawned || !world_sheets_resolved(&asset_server, &assets) {
-        return;
-    }
-    *spawned = true;
-
-    let water_failed = image_failed(&asset_server, &assets.water_and_islands);
-    let fort_failed = image_failed(&asset_server, &assets.fort);
-
-    // Agua: 5x5 tiles com variacao de matiz por posicao (alternando base
-    // e deep) para a cena nao parecer um wallpaper.
-    for x in -2..=2 {
-        for y in -2..=2 {
-            spawn_water_tile(
-                &mut commands,
-                &assets,
-                &asset_server,
-                Vec2::new(x as f32 * OCEAN_TILE_STEP, y as f32 * OCEAN_TILE_STEP),
-            );
-        }
-    }
-
     let map = WorldMap::vertical_slice();
-    for region in map.regions() {
-        let Some(port) = &region.port else { continue };
-        let position = Vec2::new(port.x, port.y);
-        let theme = if port.name.contains("Mina") {
-            PortTheme::Mina
-        } else {
-            PortTheme::Serra
-        };
-        spawn_port_composition(
-            &mut commands,
-            &assets,
-            water_failed,
-            fort_failed,
-            theme,
-            position,
-        );
-    }
 
-    let island = map.zones().iter().find_map(|zone| {
-        (zone.name == "Águas da Ilha do Coral Negro").then(|| match zone.shape {
-            ZoneShape::Circle { x, y, .. } => Vec2::new(x, y),
-        })
+    let sea = materials.add(SeaMaterial {
+        params: sea_params(&map),
     });
-    if let Some(position) = island {
-        let sprite = if water_failed {
-            Sprite::from_color(Color::srgb(0.26, 0.05, 0.08), Vec2::splat(48.0))
-        } else {
-            atlas_sprite(
-                assets.water_and_islands.clone(),
-                assets.water_and_islands_layout.clone(),
-                frames::ISLAND,
-            )
-        };
-        spawn_landmark(
-            &mut commands,
-            sprite,
-            "Ilha do Coral Negro",
-            position,
-            Vec3::splat(5.0),
+    commands.insert_resource(Sea(sea.clone()));
+    commands.spawn((
+        Mesh2d(meshes.add(Rectangle::new(7000.0, 7000.0))),
+        MeshMaterial2d(sea),
+        Transform::from_xyz(0.0, 300.0, layers::OCEAN),
+    ));
+
+    let ports: Vec<Vec2> = map
+        .regions()
+        .iter()
+        .filter_map(|r| r.port.as_ref())
+        .map(|p| Vec2::new(p.x, p.y))
+        .collect();
+    for port in map.regions().iter().filter_map(|r| r.port.as_ref()) {
+        spawn_port(&mut commands, &assets, port.name, Vec2::new(port.x, port.y));
+    }
+    spawn_vegetation(&mut commands, &assets, map.land(), &ports);
+
+    label(
+        &mut commands,
+        "Ilha do Coral Negro",
+        Vec2::new(0.0, 1075.0),
+        16.0,
+        Color::srgb(1.0, 0.82, 0.78),
+    );
+}
+
+/// Porto sobre a costa: cais de tábuas até a água, torres com bandeira,
+/// carga no píer e lanternas. Serra é madeira e verde; Mina é pedra e canhão.
+fn spawn_port(commands: &mut Commands, assets: &GameAssets, name: &str, dock: Vec2) {
+    let mina = name.contains("Mina");
+    // Terra fica do lado de fora do mapa (Serra a oeste, Mina a leste).
+    let inland = if dock.x < 0.0 { -1.0 } else { 1.0 };
+    let fort_sprite = |index| atlas(&assets.fort, &assets.fort_parts, index);
+    let deco_sprite = |index| atlas(&assets.water_and_islands, &assets.deco, index);
+
+    // Cais: três seções de tábuas saindo da praia até a doca.
+    for i in 0..3 {
+        let at = dock + Vec2::new(inland * (18.0 + i as f32 * 31.0), 0.0);
+        prop(commands, fort_sprite(fort::DOCK), at, 0.5, layers::PROPS);
+    }
+    // Plataforma de carga na praia.
+    let yard = dock + Vec2::new(inland * 110.0, 0.0);
+    prop(
+        commands,
+        fort_sprite(fort::BOARDWALK),
+        yard,
+        0.9,
+        layers::PROPS,
+    );
+
+    // Torres: pedra na Mina (com canhões), madeira/pedra leve na Serra.
+    let flag_color = if mina { 4 } else { 2 };
+    for (i, side) in [-1.0_f32, 1.0].into_iter().enumerate() {
+        let tower = dock + Vec2::new(inland * 70.0, side * 46.0);
+        let index = if mina { fort::TOWER } else { fort::TOWER_PLAIN };
+        prop(
+            commands,
+            fort_sprite(index),
+            tower,
+            0.9,
+            layers::PROPS + 0.1,
         );
-        if !fort_failed {
-            spawn_visual(
-                &mut commands,
-                atlas_sprite(
-                    assets.fort.clone(),
-                    assets.fort_layout.clone(),
-                    frames::DANGER_MARKER,
-                ),
-                position + Vec2::new(34.0, 20.0),
-                Vec3::splat(2.0),
-                layers::PROPS,
+        commands.spawn((
+            fort_sprite(fort::FLAG + flag_color * 3),
+            Transform::from_translation((tower + Vec2::new(4.0, 18.0)).extend(layers::PROPS + 0.3))
+                .with_scale(Vec3::splat(1.6)),
+            WavingFlag {
+                color: flag_color,
+                phase: i,
+            },
+        ));
+        if mina {
+            let mut cannon = fort_sprite(fort::CANNON);
+            cannon.flip_x = inland > 0.0;
+            prop(
+                commands,
+                cannon,
+                tower + Vec2::new(-inland * 20.0, 0.0),
+                0.6,
+                layers::PROPS + 0.2,
             );
         }
-    } else {
-        warn!("WorldMap sem zona da Ilha do Coral Negro; marcador visual omitido");
     }
+    if mina {
+        for side in [-1.0_f32, 1.0] {
+            for k in 0..3 {
+                let at = dock + Vec2::new(inland * (98.0 + k as f32 * 28.0), side * 62.0);
+                prop(
+                    commands,
+                    fort_sprite(fort::WALL_BLOCK),
+                    at,
+                    0.9,
+                    layers::PROPS,
+                );
+            }
+        }
+    }
+
+    // Carga no píer: caixas e barris.
+    for (offset, index, scale) in [
+        (Vec2::new(inland * 100.0, 10.0), fort::CRATE, 0.45),
+        (Vec2::new(inland * 118.0, -8.0), fort::CRATE, 0.4),
+        (Vec2::new(inland * 42.0, 9.0), fort::BARREL, 0.8),
+        (Vec2::new(inland * 48.0, -9.0), fort::BARREL, 0.8),
+        (Vec2::new(inland * 124.0, 14.0), fort::BARREL, 0.8),
+    ] {
+        prop(
+            commands,
+            fort_sprite(index),
+            dock + offset,
+            scale,
+            layers::PROPS + 0.2,
+        );
+    }
+    // Lanternas na ponta do cais e bote amarrado.
+    for side in [-1.0_f32, 1.0] {
+        prop(
+            commands,
+            deco_sprite(deco::LAMP),
+            dock + Vec2::new(inland * 6.0, side * 11.0),
+            0.8,
+            layers::PROPS + 0.3,
+        );
+    }
+    prop(
+        commands,
+        deco_sprite(deco::ROWBOAT),
+        dock + Vec2::new(inland * 30.0, -22.0),
+        0.7,
+        layers::PROPS,
+    );
+
+    label(
+        commands,
+        name,
+        dock + Vec2::new(inland * 105.0, 96.0),
+        16.0,
+        Color::srgb(1.0, 0.95, 0.8),
+    );
 }
 
-#[derive(Clone, Copy)]
-enum PortTheme {
-    /// Madeira + vegetacao + comercio leve. Atmosfera organica.
-    Serra,
-    /// Pedra + peso visual + clima industrial. Mais rigido.
-    Mina,
-}
-
-/// Composicao de porto (MF-057E): silhueta reconhecivel, doca visivel,
-/// relacao clara agua/terra, props organizados com intencao.
-fn spawn_port_composition(
+/// Palmeiras e arbustos espalhados de forma determinística pela terra
+/// (longe da água e dos portos); rochas musgosas sobre os rochedos.
+fn spawn_vegetation(
     commands: &mut Commands,
     assets: &GameAssets,
-    water_failed: bool,
-    fort_failed: bool,
-    theme: PortTheme,
-    position: Vec2,
+    land: &[LandMass],
+    ports: &[Vec2],
 ) {
-    let name = match theme {
-        PortTheme::Serra => "Porto da Serra",
-        PortTheme::Mina => "Porto da Mina",
-    };
-
-    // Silhueta principal (landmark). Escala maior para os portos terem
-    // massa visual (MF-057E).
-    let primary = if fort_failed {
-        let color = match theme {
-            PortTheme::Serra => Color::srgb(0.42, 0.28, 0.14),
-            PortTheme::Mina => Color::srgb(0.32, 0.34, 0.38),
-        };
-        Sprite::from_color(color, Vec2::splat(48.0))
-    } else {
-        atlas_sprite(
-            assets.fort.clone(),
-            assets.fort_layout.clone(),
-            frames::PORT_CRATE,
-        )
-    };
-    let primary_scale = match theme {
-        PortTheme::Serra => Vec3::splat(4.5),
-        PortTheme::Mina => Vec3::splat(5.5),
-    };
-    spawn_landmark(commands, primary, name, position, primary_scale);
-
-    if fort_failed {
-        return;
-    }
-
-    // Props em volta do landmark. Quantidade e tipo variam por tema.
-    let (barrels, crates, side_gap, prop_color) = match theme {
-        PortTheme::Serra => (2, 2, 28.0, Color::srgb(1.0, 0.95, 0.8)),
-        PortTheme::Mina => (3, 1, 22.0, Color::srgb(0.85, 0.85, 0.95)),
-    };
-
-    for i in 0..barrels {
-        let angle = (i as f32 + 1.0) * std::f32::consts::TAU / (barrels as f32 + 1.0);
-        let offset = Vec2::new(angle.cos(), angle.sin()) * side_gap;
-        spawn_visual(
-            commands,
-            Sprite {
-                color: prop_color,
-                ..atlas_sprite(
-                    assets.fort.clone(),
-                    assets.fort_layout.clone(),
-                    frames::PORT_BARREL,
-                )
-            },
-            position + offset,
-            Vec3::splat(2.2),
-            layers::PROPS,
-        );
-    }
-    for i in 0..crates {
-        let angle =
-            std::f32::consts::PI + (i as f32 + 1.0) * std::f32::consts::PI / (crates as f32 + 1.0);
-        let offset = Vec2::new(angle.cos(), angle.sin()) * (side_gap + 4.0);
-        spawn_visual(
-            commands,
-            atlas_sprite(
-                assets.fort.clone(),
-                assets.fort_layout.clone(),
-                frames::PORT_CRATE,
-            ),
-            position + offset,
-            Vec3::splat(1.8),
-            layers::PROPS,
-        );
-    }
-
-    // Toque de vida: corais perto da Serra, pedras/voxels perto da Mina.
-    if !water_failed {
-        let accent_frame = match theme {
-            PortTheme::Serra => frames::CORAL_NODE,
-            PortTheme::Mina => frames::ORE_NODE,
-        };
-        for i in 0..3 {
-            let angle = i as f32 * std::f32::consts::TAU / 3.0;
-            let offset = Vec2::new(angle.cos(), angle.sin()) * (side_gap + 18.0);
-            spawn_visual(
+    let plants = [deco::PALM, deco::PALM_B, deco::BUSH, deco::BUSH_B];
+    for (i, mass) in land.iter().enumerate() {
+        let center = Vec2::new(mass.x, mass.y);
+        if mass.radius < 40.0 {
+            let index = if i % 2 == 0 {
+                deco::ROCK_MOSS
+            } else {
+                deco::ROCK_MOSS_B
+            };
+            prop(
                 commands,
-                atlas_sprite(
-                    assets.water_and_islands.clone(),
-                    assets.water_and_islands_layout.clone(),
-                    accent_frame,
-                ),
-                position + offset,
-                Vec3::splat(1.2),
+                atlas(&assets.water_and_islands, &assets.deco, index),
+                center,
+                mass.radius / 12.0,
+                layers::PROPS,
+            );
+            continue;
+        }
+        // Espiral de ouro: pontos bem distribuídos dentro do disco.
+        let count = (mass.radius / 7.0) as usize;
+        for k in 0..count {
+            let r = mass.radius * ((k as f32 + 0.5) / count as f32).sqrt();
+            let angle = k as f32 * 2.399_963 + i as f32;
+            let at = center + Vec2::from_angle(angle) * r;
+            let clear_of_port = ports.iter().all(|port| port.distance(at) > 190.0);
+            if land_distance(land, at) > -22.0 || !clear_of_port {
+                continue;
+            }
+            let index = plants[(k + i) % plants.len()];
+            prop(
+                commands,
+                atlas(&assets.water_and_islands, &assets.deco, index),
+                at,
+                1.4,
                 layers::PROPS,
             );
         }
     }
 }
 
-fn spawn_landmark(
-    commands: &mut Commands,
-    sprite: Sprite,
-    name: &str,
-    position: Vec2,
-    scale: Vec3,
+/// Alto-mar sem lei escurece a água (transição suave ao cruzar a fronteira).
+fn tint_sea_by_zone(
+    time: Res<Time>,
+    zone: Res<CurrentZone>,
+    sea: Option<Res<Sea>>,
+    mut materials: ResMut<Assets<SeaMaterial>>,
 ) {
-    commands.spawn((sprite, landmark_transform(position, scale)));
-
-    commands.spawn((
-        Text2d::new(name),
-        // MF-057: wrap default do Text2d parte a string em varias linhas
-        // em world units e quebrava "Porto da Serra" em "Porto / da /
-        // Serra" estilizado. Forcamos uma linha so para o nome caber
-        // sobre o landmark sem fragmentar.
-        TextLayout::new_with_no_wrap(),
-        TextFont {
-            font_size: 14.0,
-            ..default()
-        },
-        TextColor(Color::srgb(0.92, 0.88, 0.72)),
-        Anchor::Center,
-        Transform::from_translation(Vec3::new(
-            position.x,
-            position.y + 64.0,
-            layers::LABELS,
-        )),
-    ));
-}
-
-fn landmark_transform(position: Vec2, scale: Vec3) -> Transform {
-    Transform {
-        translation: position.extend(layers::LAND),
-        scale,
-        ..default()
+    let Some(sea) = sea else { return };
+    let goal = match zone.0.as_ref().map(|z| z.tier) {
+        Some(RiskTier::Lawless) => 1.0,
+        Some(RiskTier::Frontier) => 0.35,
+        _ => 0.0,
+    };
+    let Some(material) = materials.get(&sea.0) else {
+        return;
+    };
+    let current = material.params.info.z;
+    if (goal - current).abs() < 0.002 {
+        return;
+    }
+    let next = current + (goal - current) * (1.0 - (-1.5 * time.delta_secs()).exp());
+    if let Some(material) = materials.get_mut(&sea.0) {
+        material.params.info.z = next;
     }
 }
 
-fn world_sheets_resolved(asset_server: &AssetServer, assets: &GameAssets) -> bool {
-    [assets.water_and_islands.id(), assets.fort.id()]
-        .into_iter()
-        .all(|id| {
-            matches!(
-                asset_server.get_load_state(id),
-                Some(LoadState::Loaded | LoadState::Failed(_))
-            )
-        })
+fn animate_flags(time: Res<Time>, mut flags: Query<(&WavingFlag, &mut Sprite)>) {
+    let tick = (time.elapsed_secs() * 8.0) as usize;
+    for (flag, mut sprite) in &mut flags {
+        if let Some(atlas) = sprite.texture_atlas.as_mut() {
+            atlas.index = fort::FLAG + flag.color * 3 + (tick + flag.phase) % 3;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -347,18 +374,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn vertical_slice_exposes_the_three_visual_landmarks() {
+    fn sea_params_carry_every_land_mass_and_protected_zone() {
         let map = WorldMap::vertical_slice();
-        assert_eq!(
-            map.regions()
-                .iter()
-                .filter(|region| region.port.is_some())
-                .count(),
-            2
-        );
-        assert!(map
-            .zones()
-            .iter()
-            .any(|zone| zone.name == "Águas da Ilha do Coral Negro"));
+        let params = sea_params(&map);
+        assert!(map.land().len() <= MAX_LAND);
+        assert_eq!(params.info.x as usize, map.land().len());
+        assert_eq!(params.info.y, 2.0);
+        assert_eq!(params.land[0].z, map.land()[0].radius);
     }
 }

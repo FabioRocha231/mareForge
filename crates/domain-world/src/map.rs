@@ -10,6 +10,7 @@
 use mareforge_shared::ids::{RegionId, ZoneId};
 use thiserror::Error;
 
+use crate::land::{push_out_of_land, LandMass};
 use crate::region::{Port, Region};
 use crate::risk::RiskTier;
 use crate::zone::{Zone, ZoneShape};
@@ -29,6 +30,7 @@ pub enum WorldError {
 pub struct WorldMap {
     zones: Vec<Zone>,
     regions: Vec<Region>,
+    land: Vec<LandMass>,
 }
 
 impl WorldMap {
@@ -47,6 +49,19 @@ impl WorldMap {
 
     pub fn regions(&self) -> &[Region] {
         &self.regions
+    }
+
+    pub fn land(&self) -> &[LandMass] {
+        &self.land
+    }
+
+    /// Posição corrigida para fora da terra (ver [`push_out_of_land`]).
+    pub fn push_out_of_land(&self, x: f32, y: f32, clearance: f32) -> Option<(f32, f32)> {
+        push_out_of_land(&self.land, x, y, clearance)
+    }
+
+    pub fn is_land(&self, x: f32, y: f32) -> bool {
+        self.land.iter().any(|mass| mass.contains(x, y, 0.0))
     }
 
     pub fn region_by_name(&self, name: &str) -> Result<&Region, WorldError> {
@@ -159,7 +174,47 @@ impl WorldMap {
             },
         ];
 
-        Self { zones, regions }
+        // 4. Terra (MF-058): cada porto encosta numa costa a barlavento
+        // (Serra a oeste, Mina a leste), a ilha tem corpo e o mar aberto
+        // ganha rochedos — cobertura para quem caça e para quem foge.
+        let mut land = Vec::new();
+        for side in [-1.0_f32, 1.0] {
+            for (x, y, radius) in [
+                (820.0, 0.0, 190.0),
+                (800.0, -220.0, 150.0),
+                (790.0, 230.0, 150.0),
+                (950.0, 420.0, 250.0),
+                (950.0, -440.0, 250.0),
+                (1150.0, 0.0, 260.0),
+            ] {
+                land.push(LandMass {
+                    x: side * x,
+                    y,
+                    radius,
+                });
+            }
+        }
+        for (x, y, radius) in [
+            // Ilha do Coral Negro: corpo irregular a norte do recife.
+            (0.0, 945.0, 65.0),
+            (-50.0, 915.0, 40.0),
+            (50.0, 965.0, 42.0),
+            (10.0, 1000.0, 45.0),
+            // Rochedos do mar aberto.
+            (-250.0, -190.0, 34.0),
+            (262.0, -205.0, 28.0),
+            (-60.0, 520.0, 28.0),
+            (92.0, 600.0, 22.0),
+            (0.0, 330.0, 18.0),
+        ] {
+            land.push(LandMass { x, y, radius });
+        }
+
+        Self {
+            zones,
+            regions,
+            land,
+        }
     }
 }
 
@@ -267,5 +322,37 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn ports_and_trade_lanes_are_open_water() {
+        let map = WorldMap::vertical_slice();
+        let clearance = 20.0;
+        for region in map.regions() {
+            if let Some(port) = &region.port {
+                assert!(
+                    map.push_out_of_land(port.x, port.y, clearance).is_none(),
+                    "{}: o cais precisa de água para um casco atracar",
+                    port.name
+                );
+            }
+        }
+        // Rota da Costa e corredores: o eixo de cada círculo é navegável.
+        for zone in map.zones().iter().filter(|z| z.tier == RiskTier::Frontier) {
+            let ZoneShape::Circle { x, y, .. } = zone.shape;
+            assert!(
+                map.push_out_of_land(x, y, clearance).is_none(),
+                "{}",
+                zone.name
+            );
+        }
+    }
+
+    #[test]
+    fn island_has_land_and_ships_cannot_enter_it() {
+        let map = WorldMap::vertical_slice();
+        assert!(map.is_land(0.0, 950.0));
+        let (x, y) = map.push_out_of_land(0.0, 950.0, 15.0).unwrap();
+        assert!(!map.is_land(x, y));
     }
 }

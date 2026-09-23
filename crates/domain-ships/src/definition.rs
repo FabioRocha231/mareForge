@@ -59,7 +59,7 @@ impl ShipDefinition {
             base_turn_rate: 1.0,
             base_hp: 100,
             base_weapon_damage: 20,
-            base_weapon_range: 50.0,
+            base_weapon_range: 210.0,
         }
     }
 
@@ -85,7 +85,7 @@ impl ShipDefinition {
             base_turn_rate: 0.9,
             base_hp: 160,
             base_weapon_damage: 20,
-            base_weapon_range: 50.0,
+            base_weapon_range: 210.0,
         }
     }
 
@@ -105,7 +105,7 @@ impl ShipDefinition {
             base_turn_rate: 1.2,
             base_hp: 70,
             base_weapon_damage: 25,
-            base_weapon_range: 55.0,
+            base_weapon_range: 240.0,
         }
     }
 }

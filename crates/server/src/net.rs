@@ -104,16 +104,24 @@ pub struct CombatTuning {
     pub hit_radius: f32,
     /// Distância máxima para interagir com um wreck, em metros (PRD §27).
     pub interact_radius: f32,
+    /// Balas por salva de bordo e espaçamento entre elas ao longo do casco.
+    pub salvo_balls: u32,
+    pub salvo_spacing: f32,
 }
 
 impl Default for CombatTuning {
     fn default() -> Self {
         Self {
-            cooldown_secs: 4.0,
-            projectile_speed: 40.0,
-            muzzle_offset: 5.0,
-            hit_radius: 10.0,
-            interact_radius: 30.0,
+            // MF-058: bala 4-5x mais rápida que o navio e alcance de ~7
+            // cascos — dá para mirar com antecedência e errar por pouco,
+            // em vez de só acertar encostado.
+            cooldown_secs: 3.0,
+            projectile_speed: 150.0,
+            muzzle_offset: 9.0,
+            hit_radius: 16.0,
+            interact_radius: 40.0,
+            salvo_balls: 3,
+            salvo_spacing: 9.0,
         }
     }
 }
@@ -1298,21 +1306,24 @@ fn handle_fire(
             continue; // recarregando: clique ignorado, sem spam de projétil
         }
         let projectile_id = projectile_ids.0;
-        projectile_ids.0 += 1;
+        projectile_ids.0 += tuning.salvo_balls.max(1);
         let weapon = WeaponParams {
             damage: ship.stats.weapon_damage,
             speed: tuning.projectile_speed,
             range: ship.stats.weapon_range,
             muzzle_offset: tuning.muzzle_offset,
         };
-        let projectile = Projectile::from_broadside(
+        let salvo = Projectile::broadside_salvo(
             projectile_id,
             ship.ship_id,
             side,
             ship.motion.x,
             ship.motion.y,
             ship.motion.heading,
+            ship.motion.speed,
             weapon,
+            tuning.salvo_balls,
+            tuning.salvo_spacing,
         );
         info!(
             ship_id = ship.ship_id,
@@ -1320,7 +1331,7 @@ fn handle_fire(
             projectile_id,
             "broadside disparada"
         );
-        commands.spawn((ServerProjectile(projectile),));
+        commands.spawn_batch(salvo.into_iter().map(|p| (ServerProjectile(p),)));
     }
 }
 
@@ -1501,7 +1512,7 @@ fn simulate_world(app: &mut App) {
 
 /// Avança física dos navios (MF-017): casco atracado fica imóvel com recarga
 /// de canhão; os demais aplicam o input ao `step_motion`.
-fn simulate_movement(time: Res<Time>, mut ships: Query<&mut ServerShip>) {
+fn simulate_movement(time: Res<Time>, map: Res<ServerWorldMap>, mut ships: Query<&mut ServerShip>) {
     let dt = time.delta_secs();
 
     for mut ship in &mut ships {
@@ -1531,7 +1542,21 @@ fn simulate_movement(time: Res<Time>, mut ships: Query<&mut ServerShip>) {
             tuning,
             dt,
         );
+        ground_on_land(&map.0, motion);
         battery.advance(dt);
+    }
+}
+
+/// Meia boca do casco (m): folga mínima entre o centro do navio e a terra.
+pub(crate) const HULL_CLEARANCE: f32 = 12.0;
+
+/// Encalhe (MF-058): casco que entra na terra volta para a linha d'água e
+/// perde quase todo o seguimento — raspar na costa custa a fuga.
+pub(crate) fn ground_on_land(map: &WorldMap, motion: &mut ShipMotion) {
+    if let Some((x, y)) = map.push_out_of_land(motion.x, motion.y, HULL_CLEARANCE) {
+        motion.x = x;
+        motion.y = y;
+        motion.speed *= 0.3;
     }
 }
 
@@ -1588,6 +1613,7 @@ fn simulate_zones(
 fn simulate_combat(
     mut commands: Commands,
     time: Res<Time>,
+    map: Res<ServerWorldMap>,
     tuning: Res<CombatTuning>,
     ships: Query<&ServerShip>,
     mut projectiles: Query<(Entity, &mut ServerProjectile)>,
@@ -1603,7 +1629,8 @@ fn simulate_combat(
     impacts.0.clear();
     for (projectile_entity, mut projectile) in &mut projectiles {
         projectile.0.advance(dt);
-        if projectile.0.expired() {
+        // Bala que bate na pedra morre ali: a costa é cobertura (MF-058).
+        if projectile.0.expired() || map.0.is_land(projectile.0.x, projectile.0.y) {
             commands.entity(projectile_entity).despawn();
             continue;
         }

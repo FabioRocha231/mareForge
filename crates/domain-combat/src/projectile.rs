@@ -60,6 +60,50 @@ impl Projectile {
         }
     }
 
+    /// Salva de bordo (MF-058): `balls` projéteis alinhados ao casco, a
+    /// `spacing` metros entre si, herdando a velocidade do navio — atirar
+    /// andando não deixa a bala para trás. O dano total da arma é repartido
+    /// (sobra vai para a bala central), então a salva não muda o balanço
+    /// de dano, só a chance de acerto. IDs são `first_id..first_id+balls`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn broadside_salvo(
+        first_id: u32,
+        owner_ship_id: u32,
+        side: BroadsideSide,
+        ship_x: f32,
+        ship_y: f32,
+        ship_heading: f32,
+        ship_speed: f32,
+        weapon: WeaponParams,
+        balls: u32,
+        spacing: f32,
+    ) -> Vec<Self> {
+        let balls = balls.max(1);
+        let base_damage = weapon.damage / balls;
+        let remainder = weapon.damage % balls;
+        let (hx, hy) = (ship_heading.cos(), ship_heading.sin());
+        (0..balls)
+            .map(|i| {
+                let along = (i as f32 - (balls - 1) as f32 / 2.0) * spacing;
+                let mut p = Self::from_broadside(
+                    first_id + i,
+                    owner_ship_id,
+                    side,
+                    ship_x + hx * along,
+                    ship_y + hy * along,
+                    ship_heading,
+                    weapon,
+                );
+                p.damage = base_damage + if i == balls / 2 { remainder } else { 0 };
+                let vx = p.heading.cos() * p.speed + hx * ship_speed;
+                let vy = p.heading.sin() * p.speed + hy * ship_speed;
+                p.heading = normalize(vy.atan2(vx));
+                p.speed = (vx * vx + vy * vy).sqrt();
+                p
+            })
+            .collect()
+    }
+
     /// Movimento retilíneo por um passo de simulação.
     pub fn advance(&mut self, dt: f32) {
         self.x += self.heading.cos() * self.speed * dt;
@@ -147,5 +191,47 @@ mod tests {
         // Nasce a 5 m do centro do dono; raio 10 cobre.
         assert!(p.hit_ship(0.0, 0.0, 10.0));
         assert!(!p.hit_ship(0.0, 100.0, 10.0));
+    }
+
+    #[test]
+    fn salvo_splits_damage_and_spreads_along_hull() {
+        let salvo = Projectile::broadside_salvo(
+            7,
+            10,
+            BroadsideSide::Port,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            weapon(),
+            3,
+            8.0,
+        );
+        assert_eq!(salvo.len(), 3);
+        assert_eq!(salvo.iter().map(|p| p.damage).sum::<u32>(), 20);
+        assert_eq!(salvo[1].damage, 8);
+        let ids: Vec<u32> = salvo.iter().map(|p| p.projectile_id).collect();
+        assert_eq!(ids, vec![7, 8, 9]);
+        assert!((salvo[0].x + 8.0).abs() < 1e-4 && (salvo[2].x - 8.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn salvo_inherits_ship_velocity() {
+        let salvo = Projectile::broadside_salvo(
+            1,
+            10,
+            BroadsideSide::Port,
+            0.0,
+            0.0,
+            0.0,
+            30.0,
+            weapon(),
+            1,
+            0.0,
+        );
+        let p = salvo[0];
+        // Bala lateral (+Y a 40) somada ao navio (+X a 30): 50 m/s na diagonal.
+        assert!((p.speed - 50.0).abs() < 1e-3);
+        assert!((p.heading.cos() * p.speed - 30.0).abs() < 1e-3);
     }
 }

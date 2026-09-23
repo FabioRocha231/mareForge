@@ -1,11 +1,11 @@
 use bevy::asset::{AssetPlugin, Handle};
 use bevy::prelude::*;
 use lightyear::prelude::{ClientId, ClientReceiveMessage};
-use mareforge_client::assets::{frames, layers, GameAssets};
+use mareforge_client::assets::{layers, parts, GameAssets, HullSize};
 use mareforge_client::net::{KnownWrecks, MyShip};
 use mareforge_client::ship::{
-    expire_stale_visuals, upsert_projectile_visuals, upsert_ship_visuals,
-    upsert_wreck_visuals, DestroyedShips, ProjectileVisual, ShipVisual, WreckVisual,
+    expire_stale_visuals, upsert_projectile_visuals, upsert_ship_visuals, upsert_wreck_visuals,
+    DestroyedShips, ProjectileVisual, ShipVisual, WreckVisual,
 };
 use mareforge_domain_ships::ShipKind;
 use mareforge_protocol::{ProjectileState, ShipState, WorldSnapshot, WreckState};
@@ -36,21 +36,11 @@ fn visual_app() -> App {
 fn test_assets() -> GameAssets {
     GameAssets {
         ships: Handle::default(),
-        ships_layout: Handle::default(),
-        ships_detail_layout: Handle::default(),
+        ship_parts: Handle::default(),
         water_and_islands: Handle::default(),
-        water_and_islands_layout: Handle::default(),
+        deco: Handle::default(),
         fort: Handle::default(),
-        fort_layout: Handle::default(),
-        small_merchant: Handle::default(),
-        patrol: Handle::default(),
-        corsair: Handle::default(),
-        wreck: Handle::default(),
-        wood_node: Handle::default(),
-        ore_node: Handle::default(),
-        coral_node: Handle::default(),
-        projectile: Handle::default(),
-        port: Handle::default(),
+        fort_parts: Handle::default(),
         panel_ship: Handle::default(),
         panel_zone: Handle::default(),
         panel_cooldowns: Handle::default(),
@@ -63,12 +53,6 @@ fn test_assets() -> GameAssets {
         icon_gold: Handle::default(),
         icon_warn: Handle::default(),
         icon_skull: Handle::default(),
-        ship_shadow: Handle::default(),
-        ship_wake: Handle::default(),
-        muzzle_flash: Handle::default(),
-        smoke_puff: Handle::default(),
-        ocean_deep: Handle::default(),
-        shore_band: Handle::default(),
     }
 }
 
@@ -129,59 +113,57 @@ fn snapshot_spawns_sprite_visuals_for_ships_projectiles_and_wrecks() {
     app.update();
 
     let world: &mut World = app.world_mut();
-    let ships = world
-        .query_filtered::<(&ShipVisual, &Sprite, &Transform), ()>()
+    let mut ships = world
+        .query::<(&ShipVisual, &Transform, &Children)>()
         .iter(world)
-        .map(|(visual, sprite, transform)| {
+        .map(|(visual, transform, children)| {
             (
                 visual.target.ship_id,
-                sprite.texture_atlas.as_ref().unwrap().index,
                 transform.translation.z,
-                transform.scale,
+                transform.scale.x,
+                children.iter().copied().collect::<Vec<Entity>>(),
             )
         })
         .collect::<Vec<_>>();
-
+    ships.sort_by_key(|ship| ship.0);
     assert_eq!(ships.len(), 3);
-    assert_eq!(ships[0].0, 1);
-    assert_eq!(ships[0].1, frames::SMALL_MERCHANT);
-    assert_eq!(ships[0].2, layers::SHIPS);
-    assert_eq!(ships[1].0, 2);
-    assert_eq!(ships[1].1, frames::PATROL);
-    assert_eq!(ships[2].0, 3);
-    assert_eq!(ships[2].1, frames::CORSAIR);
+
+    // Cada navio é montado do atlas modular: o casco do tipo certo está
+    // entre os filhos (MF-058).
+    let expected_hulls = [
+        parts::hull(HullSize::Medium, 1, false),
+        parts::hull(HullSize::Large, 3, false),
+        parts::hull(HullSize::Small, 2, false),
+    ];
+    for ((ship_id, z, scale, children), hull) in ships.iter().zip(expected_hulls) {
+        assert_eq!(*z, layers::SHIPS, "navio {ship_id}");
+        assert_eq!(*scale, mareforge_client::ship::WORLD_PER_PX);
+        let indices: Vec<usize> = children
+            .iter()
+            .filter_map(|child| world.get::<Sprite>(*child))
+            .filter_map(|sprite| sprite.texture_atlas.as_ref().map(|atlas| atlas.index))
+            .collect();
+        assert!(indices.contains(&hull), "navio {ship_id}: {indices:?}");
+    }
 
     let projectiles = world
-        .query::<(&ProjectileVisual, &Sprite, &Transform)>()
+        .query::<(&ProjectileVisual, &Transform)>()
         .iter(world)
-        .map(|(visual, sprite, transform)| {
-            (
-                visual.target.projectile_id,
-                sprite.texture_atlas.as_ref().unwrap().index,
-                transform.translation.z,
-            )
-        })
+        .map(|(visual, transform)| (visual.target.projectile_id, transform.translation.z))
         .collect::<Vec<_>>();
-    assert_eq!(projectiles.len(), 1);
-    assert_eq!(projectiles[0].0, 9);
-    assert_eq!(projectiles[0].1, frames::PROJECTILE);
-    assert_eq!(projectiles[0].2, layers::PROJECTILES);
+    assert_eq!(projectiles, vec![(9, layers::PROJECTILES)]);
 
     let wrecks = world
-        .query::<(&WreckVisual, &Sprite, &Transform)>()
+        .query::<(&WreckVisual, &Transform, &Children)>()
         .iter(world)
-        .map(|(visual, sprite, transform)| {
-            (
-                visual.wreck_num,
-                sprite.texture_atlas.as_ref().unwrap().index,
-                transform.translation.z,
-            )
+        .map(|(visual, transform, children)| {
+            (visual.wreck_num, transform.translation.z, children.len())
         })
         .collect::<Vec<_>>();
     assert_eq!(wrecks.len(), 1);
     assert_eq!(wrecks[0].0, 7);
-    assert_eq!(wrecks[0].1, frames::WRECK);
-    assert_eq!(wrecks[0].2, layers::WRECKS);
+    assert_eq!(wrecks[0].1, layers::WRECKS);
+    assert!(wrecks[0].2 > 0, "destroço tem tábuas e baú");
 }
 
 #[test]

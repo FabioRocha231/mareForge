@@ -24,8 +24,8 @@ use tracing::info;
 
 use crate::crafting::DevShips;
 use crate::net::{
-    CombatTuning, ProjectileIdCounter, ServerProjectile, ServerRiskPolicy, ServerShip,
-    ServerWorldMap,
+    ground_on_land, CombatTuning, ProjectileIdCounter, ServerProjectile, ServerRiskPolicy,
+    ServerShip, ServerWorldMap,
 };
 
 /// Raio padrão de patrulha ao redor do ponto de spawn.
@@ -90,7 +90,8 @@ impl Default for NpcSpawnConfig {
         Self {
             count: 3,
             // Águas da Ilha do Coral Negro: lawless e longe dos portos.
-            spawn_positions: vec![(0.0, 900.0), (-160.0, 850.0), (160.0, 950.0)],
+            // Em volta da ilha, nunca dentro dela (MF-058: a ilha tem terra).
+            spawn_positions: vec![(0.0, 800.0), (-190.0, 860.0), (190.0, 950.0)],
             respawn_after_secs: 30.0,
         }
     }
@@ -203,7 +204,7 @@ pub(crate) fn build_npc(
                 origin: position,
                 radius: PATROL_RADIUS,
             },
-            detection_radius: 300.0,
+            detection_radius: 380.0,
             weapon_range,
             respawn_after_secs: config.respawn_after_secs,
             bounty_gold: 50,
@@ -308,6 +309,7 @@ pub fn simulate_npcs(
                         ..
                     } = &mut *npc;
                     step_motion(motion, stats, input, tuning, dt);
+                    ground_on_land(&map.0, motion);
                 }
             }
             NpcState::Chase { target } => {
@@ -326,6 +328,7 @@ pub fn simulate_npcs(
                             ..
                         } = &mut *npc;
                         step_motion(motion, stats, input, tuning, dt);
+                        ground_on_land(&map.0, motion);
                     }
                 } else {
                     npc.ai.state = NpcState::Patrol {
@@ -353,12 +356,26 @@ pub fn simulate_npcs(
                         npc.ai.state = NpcState::Chase { target };
                     }
                 } else {
-                    let side = side_for_target(
-                        npc.motion.heading,
+                    // MF-058: em vez de parar e atirar, o NPC vira o costado
+                    // para o alvo e segue navegando — broadside de verdade.
+                    let input = broadside_input(npc.motion, target_motion.x, target_motion.y);
+                    {
+                        let NpcShip {
+                            motion,
+                            stats,
+                            tuning,
+                            ..
+                        } = &mut *npc;
+                        step_motion(motion, stats, input, tuning, dt);
+                        ground_on_land(&map.0, motion);
+                    }
+                    let (dx, dy) = (
                         target_motion.x - npc.motion.x,
                         target_motion.y - npc.motion.y,
                     );
-                    if npc.battery.try_fire(side, tuning.cooldown_secs) {
+                    let side = side_for_target(npc.motion.heading, dx, dy);
+                    let on_beam = beam_error(npc.motion.heading, side, dx, dy).abs() < 0.45;
+                    if on_beam && npc.battery.try_fire(side, tuning.cooldown_secs) {
                         spawn_projectile(&mut commands, &mut projectile_ids, &npc, side, &tuning);
                     }
                 }
@@ -572,6 +589,25 @@ fn steer_input(motion: ShipMotion, target_x: f32, target_y: f32) -> MotionInput 
     }
 }
 
+/// Rumo que põe o alvo a 90° (costado), escolhendo o lado mais perto do
+/// rumo atual, a meio pano para manter manobra.
+fn broadside_input(motion: ShipMotion, target_x: f32, target_y: f32) -> MotionInput {
+    let bearing = (target_y - motion.y).atan2(target_x - motion.x);
+    let half_pi = std::f32::consts::FRAC_PI_2;
+    let a = angle_delta(bearing + half_pi, motion.heading);
+    let b = angle_delta(bearing - half_pi, motion.heading);
+    let delta = if a.abs() <= b.abs() { a } else { b };
+    MotionInput {
+        throttle: 0.6,
+        turn: (delta / half_pi).clamp(-1.0, 1.0),
+    }
+}
+
+/// Ângulo entre o alvo e o través do bordo escolhido (0 = alvo no través).
+fn beam_error(heading: f32, side: BroadsideSide, target_x: f32, target_y: f32) -> f32 {
+    angle_delta(target_y.atan2(target_x), heading + side.angle_offset())
+}
+
 fn side_for_target(heading: f32, target_x: f32, target_y: f32) -> BroadsideSide {
     let target_angle = target_y.atan2(target_x);
     let port_delta = angle_delta(target_angle, heading + std::f32::consts::FRAC_PI_2).abs();
@@ -622,23 +658,26 @@ fn spawn_projectile(
     tuning: &CombatTuning,
 ) {
     let projectile_id = projectile_ids.0;
-    projectile_ids.0 += 1;
+    projectile_ids.0 += tuning.salvo_balls.max(1);
     let weapon = WeaponParams {
         damage: npc.stats.weapon_damage,
         speed: tuning.projectile_speed,
         range: npc.stats.weapon_range,
         muzzle_offset: tuning.muzzle_offset,
     };
-    let projectile = Projectile::from_broadside(
+    let salvo = Projectile::broadside_salvo(
         projectile_id,
         npc.ship_id,
         side,
         npc.motion.x,
         npc.motion.y,
         npc.motion.heading,
+        npc.motion.speed,
         weapon,
+        tuning.salvo_balls,
+        tuning.salvo_spacing,
     );
-    commands.spawn((ServerProjectile(projectile),));
+    commands.spawn_batch(salvo.into_iter().map(|p| (ServerProjectile(p),)));
     info!(
         npc_id = npc.ship_id,
         projectile_id, "NPC broadside disparada"
@@ -733,6 +772,24 @@ mod tests {
         let mut battery = BroadsideBattery::default();
         assert!(battery.try_fire(side, 4.0));
         assert!(!battery.is_ready(side));
+    }
+
+    #[test]
+    fn attacking_npc_turns_its_beam_toward_the_target() {
+        let mut npc = npc_at((0.0, 0.0));
+        npc.motion.speed = npc.stats.speed * 0.6;
+        // Alvo à frente (+X): o NPC precisa virar até ficar de costado.
+        let target = (150.0, 0.0);
+        for _ in 0..(30 * 6) {
+            let input = broadside_input(npc.motion, target.0, target.1);
+            step_motion(&mut npc.motion, &npc.stats, input, &npc.tuning, 1.0 / 30.0);
+        }
+        let (dx, dy) = (target.0 - npc.motion.x, target.1 - npc.motion.y);
+        let side = side_for_target(npc.motion.heading, dx, dy);
+        assert!(
+            beam_error(npc.motion.heading, side, dx, dy).abs() < 0.45,
+            "alvo deveria estar no través"
+        );
     }
 
     #[test]

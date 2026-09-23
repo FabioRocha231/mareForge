@@ -1,4 +1,5 @@
 pub mod assets;
+pub mod camera;
 pub mod crafting;
 pub mod hud;
 pub mod market;

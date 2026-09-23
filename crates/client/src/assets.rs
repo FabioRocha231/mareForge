@@ -1,6 +1,10 @@
-//! Central visual asset manifest (MF-056A + MF-057). Systems consume
+//! Central visual asset manifest (MF-056A, MF-057, MF-058). Systems consume
 //! `GameAssets`; asset loading stays in this module instead of spreading
 //! `asset_server.load` across visual systems.
+//!
+//! MF-058: o pack Scallywag e modular — casco, vela, verga e cesto de gavea
+//! sao pecas separadas. Os recortes abaixo foram medidos no atlas (bounding
+//! box de pixels opacos) e o navio e montado peca a peca em `ship.rs`.
 
 use std::path::Path;
 
@@ -16,6 +20,7 @@ const FORT_SHEET: &str = "external/scallywag/fort/fort-tiles.png";
 /// de espalhar profundidades numericas que podem inverter a cena por acaso.
 pub mod layers {
     pub const OCEAN: f32 = -10.0;
+    pub const WAKE: f32 = -9.5;
     pub const LAND: f32 = -9.0;
     pub const PROPS: f32 = -8.0;
     pub const RESOURCES: f32 = -7.0;
@@ -28,26 +33,95 @@ pub mod layers {
     pub const OVERLAY: f32 = 20.0;
 }
 
-/// Frames dos sheets CC0. Os tres navios usam recortes completos do atlas.
-pub mod frames {
-    pub const SMALL_MERCHANT: usize = 0;
-    pub const PATROL: usize = 1;
-    pub const CORSAIR: usize = 2;
-    pub const OCEAN: usize = 3;
-    pub const ISLAND: usize = 0;
-    pub const ORE_NODE: usize = 16;
-    pub const WOOD_NODE: usize = 18;
-    pub const WRECK: usize = 17;
-    pub const CORAL_NODE: usize = 19;
-    pub const PROJECTILE: usize = 157;
-    pub const PORT_CRATE: usize = 31;
-    pub const PORT_BARREL: usize = 153;
-    pub const DANGER_MARKER: usize = 101;
+/// Tamanho do casco no atlas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HullSize {
+    Small,
+    Medium,
+    Large,
+}
+
+/// Cor de casco (colunas do atlas): marrom, madeira clara, vermelho, azul
+/// marinho, laranja com friso dourado.
+pub const HULL_COLORS: usize = 5;
+/// Cor de vela/verga/cesto (colunas do atlas): branco, creme, verde,
+/// amarelo, azul, vermelho.
+pub const SAIL_COLORS: usize = 6;
+
+/// Indices no layout `ship_parts`. A ordem de insercao em
+/// [`ship_parts_layout`] e a fonte da verdade; estes helpers a espelham.
+pub mod parts {
+    use super::{HullSize, HULL_COLORS, SAIL_COLORS};
+
+    const HULLS: usize = 0; // 3 tamanhos x 5 cores x (intacto, avariado)
+    const SAILS: usize = HULLS + 3 * HULL_COLORS * 2; // 3 x 6 x (recolhida, cheia)
+    const YARDS: usize = SAILS + 3 * SAIL_COLORS * 2; // 3 x 6
+    const NESTS: usize = YARDS + 3 * SAIL_COLORS; // 6
+    pub const BOW_WAVE: usize = NESTS + SAIL_COLORS; // 3 frames
+    pub const SMOKE: usize = BOW_WAVE + 3; // 4 frames
+    pub const FIRE: usize = SMOKE + 4; // 4 frames
+    pub const COUNT: usize = FIRE + 4;
+
+    fn size_index(size: HullSize) -> usize {
+        match size {
+            HullSize::Small => 0,
+            HullSize::Medium => 1,
+            HullSize::Large => 2,
+        }
+    }
+
+    pub fn hull(size: HullSize, color: usize, damaged: bool) -> usize {
+        HULLS + (size_index(size) * HULL_COLORS + color % HULL_COLORS) * 2 + damaged as usize
+    }
+
+    pub fn sail(size: HullSize, color: usize, full: bool) -> usize {
+        SAILS + (size_index(size) * SAIL_COLORS + color % SAIL_COLORS) * 2 + full as usize
+    }
+
+    pub fn yard(size: HullSize, color: usize) -> usize {
+        YARDS + size_index(size) * SAIL_COLORS + color % SAIL_COLORS
+    }
+
+    pub fn nest(color: usize) -> usize {
+        NESTS + color % SAIL_COLORS
+    }
+}
+
+/// Indices no layout `deco` (water-islands sheet).
+pub mod deco {
+    pub const ROCK: usize = 0;
+    pub const ROCK_B: usize = 1;
+    pub const ROCK_MOSS: usize = 2;
+    pub const ROCK_MOSS_B: usize = 3;
+    pub const ROWBOAT: usize = 4;
+    pub const PALM: usize = 5;
+    pub const PALM_B: usize = 6;
+    pub const BUSH: usize = 7;
+    pub const BUSH_B: usize = 8;
+    pub const LAMP: usize = 9;
+    pub const PLANK: usize = 10;
+    pub const PLANK_B: usize = 11;
+    pub const PLANK_DIAG: usize = 12;
+    pub const CHEST: usize = 13;
+    pub const CHEST_GOLD: usize = 14;
+}
+
+/// Indices no layout `fort_parts`.
+pub mod fort {
+    pub const TOWER: usize = 0;
+    pub const TOWER_PLAIN: usize = 1;
+    pub const WALL_BLOCK: usize = 2;
+    pub const CRATE: usize = 3;
+    pub const DOCK: usize = 4;
+    pub const BOARDWALK: usize = 5;
+    pub const BARREL: usize = 6;
+    pub const CANNON: usize = 7;
+    /// 6 cores x 3 frames de bandeira tremulando.
+    pub const FLAG: usize = 8;
 }
 
 /// `mareforge/...` resolve para o asset root configurado em `lib.rs`
-/// (workspace_root/assets/mareforge/...). Usado para os sprites gerados
-/// em `MF-057` (HUD, sombra, wake, muzzle flash, smoke, ocean variants).
+/// (workspace_root/assets/mareforge/...). Usado pelos paineis de HUD.
 pub fn mareforge_sprite(rel: &str) -> String {
     Path::new("mareforge")
         .join(rel)
@@ -58,21 +132,11 @@ pub fn mareforge_sprite(rel: &str) -> String {
 #[derive(Resource)]
 pub struct GameAssets {
     pub ships: Handle<Image>,
-    pub ships_layout: Handle<TextureAtlasLayout>,
-    pub ships_detail_layout: Handle<TextureAtlasLayout>,
+    pub ship_parts: Handle<TextureAtlasLayout>,
     pub water_and_islands: Handle<Image>,
-    pub water_and_islands_layout: Handle<TextureAtlasLayout>,
+    pub deco: Handle<TextureAtlasLayout>,
     pub fort: Handle<Image>,
-    pub fort_layout: Handle<TextureAtlasLayout>,
-    pub small_merchant: Handle<Image>,
-    pub patrol: Handle<Image>,
-    pub corsair: Handle<Image>,
-    pub wreck: Handle<Image>,
-    pub wood_node: Handle<Image>,
-    pub ore_node: Handle<Image>,
-    pub coral_node: Handle<Image>,
-    pub projectile: Handle<Image>,
-    pub port: Handle<Image>,
+    pub fort_parts: Handle<TextureAtlasLayout>,
     // MF-057A HUD.
     pub panel_ship: Handle<Image>,
     pub panel_zone: Handle<Image>,
@@ -86,15 +150,6 @@ pub struct GameAssets {
     pub icon_gold: Handle<Image>,
     pub icon_warn: Handle<Image>,
     pub icon_skull: Handle<Image>,
-    // MF-057F ship presence.
-    pub ship_shadow: Handle<Image>,
-    pub ship_wake: Handle<Image>,
-    // MF-057J combat feel.
-    pub muzzle_flash: Handle<Image>,
-    pub smoke_puff: Handle<Image>,
-    // MF-057D ocean polish.
-    pub ocean_deep: Handle<Image>,
-    pub shore_band: Handle<Image>,
 }
 
 pub struct AssetManifestPlugin;
@@ -113,57 +168,112 @@ impl Plugin for AssetManifestPlugin {
     }
 }
 
+fn rect(x: u32, y: u32, w: u32, h: u32) -> URect {
+    URect::new(x, y, x + w, y + h)
+}
+
+pub fn ship_parts_layout() -> TextureAtlasLayout {
+    let mut layout = TextureAtlasLayout::new_empty(UVec2::new(720, 672));
+    // Cascos: (x0, passo, largura, altura). Avariado fica logo abaixo.
+    for (x0, w, h) in [(1, 30, 64), (162, 44, 80), (401, 46, 128)] {
+        let step = if w == 30 { 32 } else { 48 };
+        for color in 0..HULL_COLORS as u32 {
+            for damaged in 0..2 {
+                layout.add_texture(rect(x0 + color * step, damaged * h, w, h));
+            }
+        }
+    }
+    // Velas: (x recolhida, x cheia, y, largura, altura, passo por cor).
+    for (x_furled, x_full, y, w, h, step) in [
+        (6, 38, 328, 20, 8, 64),
+        (2, 34, 363, 28, 10, 64),
+        (0, 32, 427, 32, 13, 64),
+    ] {
+        for color in 0..SAIL_COLORS as u32 {
+            layout.add_texture(rect(x_furled + color * step, y, w, h));
+            layout.add_texture(rect(x_full + color * step, y, w, h));
+        }
+    }
+    // Vergas (o "T" de mastro visto de cima).
+    for (x0, y, w, h) in [(9, 519, 20, 12), (2, 487, 28, 12), (0, 551, 32, 15)] {
+        for color in 0..SAIL_COLORS as u32 {
+            layout.add_texture(rect(x0 + color * 32, y, w, h));
+        }
+    }
+    for color in 0..SAIL_COLORS as u32 {
+        layout.add_texture(rect(4 + color * 48, 612, 24, 24));
+    }
+    for frame in 0..3 {
+        layout.add_texture(rect(352 + frame * 32, 558, 24, 52));
+    }
+    for frame in 0..4 {
+        layout.add_texture(rect(448 + frame * 16, 609, 16, 15));
+    }
+    for frame in 0..4 {
+        layout.add_texture(rect(448 + frame * 16, 624, 16, 17));
+    }
+    debug_assert_eq!(layout.textures.len(), parts::COUNT);
+    layout
+}
+
+pub fn deco_layout() -> TextureAtlasLayout {
+    let mut layout = TextureAtlasLayout::new_empty(UVec2::new(384, 144));
+    for r in [
+        rect(1, 98, 15, 13),    // ROCK
+        rect(17, 98, 15, 14),   // ROCK_B
+        rect(48, 129, 16, 15),  // ROCK_MOSS
+        rect(33, 114, 15, 14),  // ROCK_MOSS_B
+        rect(64, 97, 32, 14),   // ROWBOAT
+        rect(144, 97, 16, 16),  // PALM
+        rect(128, 99, 16, 13),  // PALM_B
+        rect(112, 112, 16, 16), // BUSH
+        rect(97, 114, 14, 14),  // BUSH_B
+        rect(163, 98, 9, 13),   // LAMP
+        rect(96, 132, 16, 8),   // PLANK
+        rect(113, 133, 13, 7),  // PLANK_B
+        rect(67, 132, 10, 12),  // PLANK_DIAG
+        rect(210, 35, 13, 11),  // CHEST
+        rect(226, 49, 13, 15),  // CHEST_GOLD
+    ] {
+        layout.add_texture(r);
+    }
+    layout
+}
+
+pub fn fort_parts_layout() -> TextureAtlasLayout {
+    let mut layout = TextureAtlasLayout::new_empty(UVec2::new(432, 256));
+    for r in [
+        rect(192, 96, 32, 32),  // TOWER
+        rect(192, 128, 32, 32), // TOWER_PLAIN
+        rect(0, 96, 32, 32),    // WALL_BLOCK
+        rect(192, 160, 32, 32), // CRATE
+        rect(144, 200, 64, 40), // DOCK
+        rect(208, 192, 64, 48), // BOARDWALK
+        rect(290, 82, 12, 13),  // BARREL
+        rect(305, 17, 31, 15),  // CANNON
+    ] {
+        layout.add_texture(r);
+    }
+    for color in 0..SAIL_COLORS as u32 {
+        for frame in 0..3 {
+            layout.add_texture(rect(392 + frame * 16, 99 + color * 16, 8, 9));
+        }
+    }
+    layout
+}
+
 pub(crate) fn load_game_assets(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut layouts: ResMut<Assets<TextureAtlasLayout>>,
 ) {
-    let ships = asset_server.load(SHIP_SHEET);
-    let water_and_islands = asset_server.load(WATER_AND_ISLANDS_SHEET);
-    let fort = asset_server.load(FORT_SHEET);
-    let mut ships_layout = TextureAtlasLayout::new_empty(UVec2::new(720, 672));
-    ships_layout.add_texture(URect::new(1, 0, 30, 62));
-    ships_layout.add_texture(URect::new(306, 0, 349, 94));
-    ships_layout.add_texture(URect::new(497, 0, 542, 127));
-    let ships_layout = layouts.add(ships_layout);
-    let ships_detail_layout = layouts.add(TextureAtlasLayout::from_grid(
-        UVec2::new(48, 48),
-        15,
-        14,
-        None,
-        None,
-    ));
-    let water_and_islands_layout = layouts.add(TextureAtlasLayout::from_grid(
-        UVec2::new(48, 48),
-        8,
-        3,
-        None,
-        None,
-    ));
-    let fort_layout = layouts.add(TextureAtlasLayout::from_grid(
-        UVec2::new(16, 16),
-        27,
-        16,
-        None,
-        None,
-    ));
     commands.insert_resource(GameAssets {
-        ships: ships.clone(),
-        ships_layout,
-        ships_detail_layout,
-        water_and_islands: water_and_islands.clone(),
-        water_and_islands_layout,
-        fort: fort.clone(),
-        fort_layout,
-        small_merchant: ships.clone(),
-        patrol: ships.clone(),
-        corsair: ships.clone(),
-        wreck: water_and_islands.clone(),
-        wood_node: fort.clone(),
-        ore_node: water_and_islands.clone(),
-        coral_node: water_and_islands,
-        projectile: ships,
-        port: fort,
+        ships: asset_server.load(SHIP_SHEET),
+        ship_parts: layouts.add(ship_parts_layout()),
+        water_and_islands: asset_server.load(WATER_AND_ISLANDS_SHEET),
+        deco: layouts.add(deco_layout()),
+        fort: asset_server.load(FORT_SHEET),
+        fort_parts: layouts.add(fort_parts_layout()),
         panel_ship: asset_server.load(mareforge_sprite("ui/panel_ship.png")),
         panel_zone: asset_server.load(mareforge_sprite("ui/panel_zone.png")),
         panel_cooldowns: asset_server.load(mareforge_sprite("ui/panel_cooldowns.png")),
@@ -176,12 +286,6 @@ pub(crate) fn load_game_assets(
         icon_gold: asset_server.load(mareforge_sprite("ui/icon_gold.png")),
         icon_warn: asset_server.load(mareforge_sprite("ui/icon_warn.png")),
         icon_skull: asset_server.load(mareforge_sprite("ui/icon_skull.png")),
-        ship_shadow: asset_server.load(mareforge_sprite("ships/shadow.png")),
-        ship_wake: asset_server.load(mareforge_sprite("effects/wake.png")),
-        muzzle_flash: asset_server.load(mareforge_sprite("effects/muzzle_flash.png")),
-        smoke_puff: asset_server.load(mareforge_sprite("effects/smoke.png")),
-        ocean_deep: asset_server.load(mareforge_sprite("world/ocean_deep.png")),
-        shore_band: asset_server.load(mareforge_sprite("world/shore_band.png")),
     });
 }
 
@@ -215,5 +319,38 @@ fn report_asset_load_result(
     }) {
         info!("CC0 Scallywag visual assets loaded");
         *reported = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn part_indices_match_layout_insertion_order() {
+        let layout = ship_parts_layout();
+        assert_eq!(layout.textures.len(), parts::COUNT);
+        // Casco medio intacto da 2a cor comeca em x=210 (passo de 48 px).
+        let medium = layout.textures[parts::hull(HullSize::Medium, 1, false)];
+        assert_eq!((medium.min.x, medium.min.y, medium.height()), (210, 0, 80));
+        let damaged = layout.textures[parts::hull(HullSize::Large, 0, true)];
+        assert_eq!((damaged.min.y, damaged.height()), (128, 128));
+        let full_red = layout.textures[parts::sail(HullSize::Large, 5, true)];
+        assert_eq!(full_red.min.x, 352);
+        let nest = layout.textures[parts::nest(0)];
+        assert_eq!((nest.min.x, nest.min.y), (4, 612));
+    }
+
+    #[test]
+    fn every_rect_fits_its_sheet() {
+        for (layout, (w, h)) in [
+            (ship_parts_layout(), (720, 672)),
+            (deco_layout(), (384, 144)),
+            (fort_parts_layout(), (432, 256)),
+        ] {
+            for r in &layout.textures {
+                assert!(r.max.x <= w && r.max.y <= h, "{r:?}");
+            }
+        }
     }
 }

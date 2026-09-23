@@ -36,19 +36,19 @@ pub struct NodeIdCounter(pub u32);
 /// Porto da Serra, minério no Porto da Mina, coral em Lawless na ilha. O
 /// "Bosque/Mina do Caminho" fica na saída de cada baía, na rota leste-oeste.
 const NODE_LAYOUT: &[(&str, &str, f32, f32, u32)] = &[
-    ("Bosque da Serra", "Porto da Serra", -700.0, 90.0, 60),
+    ("Bosque da Serra", "Porto da Serra", -620.0, 175.0, 60),
     ("Bosque da Serra", "Porto da Serra", -500.0, 130.0, 60),
-    ("Bosque da Serra", "Porto da Serra", -690.0, -110.0, 60),
+    ("Bosque da Serra", "Porto da Serra", -610.0, -165.0, 60),
     ("Bosque da Serra", "Porto da Serra", -470.0, -70.0, 60),
     ("Bosque do Caminho", "Porto da Serra", -430.0, 20.0, 60),
-    ("Mina Profunda", "Porto da Mina", 700.0, 90.0, 60),
+    ("Mina Profunda", "Porto da Mina", 620.0, 175.0, 60),
     ("Mina Profunda", "Porto da Mina", 500.0, 130.0, 60),
-    ("Mina Profunda", "Porto da Mina", 690.0, -110.0, 60),
+    ("Mina Profunda", "Porto da Mina", 610.0, -165.0, 60),
     ("Mina Profunda", "Porto da Mina", 470.0, -70.0, 60),
     ("Mina do Caminho", "Porto da Mina", 430.0, 20.0, 60),
-    ("Recife do Coral", "Ilha do Coral Negro", 0.0, 860.0, 30),
-    ("Recife do Coral", "Ilha do Coral Negro", -120.0, 950.0, 30),
-    ("Recife do Coral", "Ilha do Coral Negro", 130.0, 990.0, 30),
+    ("Recife do Coral", "Ilha do Coral Negro", 0.0, 855.0, 30),
+    ("Recife do Coral", "Ilha do Coral Negro", -125.0, 950.0, 30),
+    ("Recife do Coral", "Ilha do Coral Negro", 135.0, 1000.0, 30),
 ];
 
 /// Recurso de cada região do slice (MF-020: disponibilidade distinta).
@@ -284,6 +284,29 @@ mod tests {
     use super::*;
     use crate::net::DEV_SPAWN;
     use mareforge_domain_world::WorldMap;
+
+    /// MF-058: terra é obstáculo — node, spawn de jogador e spawn de NPC
+    /// precisam estar na água, com folga de casco.
+    #[test]
+    fn nodes_and_spawns_are_on_open_water() {
+        let map = WorldMap::vertical_slice();
+        let clearance = crate::net::HULL_CLEARANCE;
+        for (name, _, x, y, _) in NODE_LAYOUT {
+            assert!(
+                map.push_out_of_land(*x, *y, clearance).is_none(),
+                "{name} ({x},{y})"
+            );
+        }
+        assert!(map
+            .push_out_of_land(DEV_SPAWN.0, DEV_SPAWN.1, clearance)
+            .is_none());
+        for (x, y) in crate::npc::NpcSpawnConfig::default().spawn_positions {
+            assert!(
+                map.push_out_of_land(x, y, clearance).is_none(),
+                "NPC ({x},{y})"
+            );
+        }
+    }
 
     /// A distribuição regional do slice tem que ser distinta (MF-020) e a
     /// geografia honesta: cada node dentro das águas da sua região, e o

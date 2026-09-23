@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 use crate::assets::AssetManifestPlugin;
+use crate::camera::{follow_camera, setup_camera, zoom_from_wheel, CameraZoom};
 use crate::crafting::{send_craft_input, CraftPlugin};
 use crate::hud::{setup_hud, toggle_sea_hud, HudPlugin};
 use crate::market::{send_market_input, spawn_market_panel, MarketPlugin};
@@ -8,10 +9,11 @@ use crate::net::{ClientNetPlugin, MyDocked};
 use crate::nodes::NodePlugin;
 use crate::port_screen::PortPlugin;
 use crate::ship::{
-    expire_stale_visuals, lerp_projectile_visuals, lerp_ship_visuals, upsert_projectile_visuals,
-    upsert_ship_visuals, upsert_wreck_visuals,
+    animate_ship_parts, animate_sinking, draw_broadside_lanes, emit_foam, expire_stale_visuals,
+    lerp_projectile_visuals, lerp_ship_visuals, upsert_projectile_visuals, upsert_ship_visuals,
+    upsert_wreck_visuals,
 };
-use crate::vfx::{expire_vfx, spawn_combat_vfx, VfxPlugin};
+use crate::vfx::VfxPlugin;
 use crate::world::WorldVisualPlugin;
 use crate::zone::ZonePlugin;
 
@@ -19,7 +21,8 @@ pub struct ClientPlugin;
 
 impl Plugin for ClientPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(ClearColor(Color::srgb(0.04, 0.10, 0.18)))
+        app.insert_resource(ClearColor(Color::srgb(0.08, 0.30, 0.56)))
+            .init_resource::<CameraZoom>()
             // ADR-0008: simulacao a 30 Hz; render desacoplado.
             .insert_resource(Time::<Fixed>::from_hz(30.0))
             .add_plugins(AssetManifestPlugin)
@@ -45,28 +48,19 @@ impl Plugin for ClientPlugin {
                     lerp_projectile_visuals,
                     upsert_wreck_visuals,
                     expire_stale_visuals,
-                    spawn_combat_vfx,
-                    expire_vfx,
+                    animate_ship_parts,
+                    animate_sinking,
+                    emit_foam,
+                    draw_broadside_lanes,
                     toggle_sea_hud,
-                    crate::ship::follow_camera,
+                    zoom_from_wheel,
+                    follow_camera.after(lerp_ship_visuals),
                     send_craft_input,
                     send_market_input,
                     close_on_esc,
                 ),
             );
     }
-}
-
-fn setup_camera(mut commands: Commands) {
-    // 2 px por metro: o navio de 26 m ocupa 52 px e a velocidade de cruzeiro
-    // (30 m/s) fica visivel - 1:1 fazia o mar parecer congelado.
-    commands.spawn((
-        Camera2d,
-        Projection::Orthographic(OrthographicProjection {
-            scale: 0.5,
-            ..OrthographicProjection::default_2d()
-        }),
-    ));
 }
 
 fn close_on_esc(
