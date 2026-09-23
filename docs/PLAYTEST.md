@@ -6,14 +6,14 @@ variavel de automacao dev e ligada: o jogador usa apenas teclado e UI.
 ## Como iniciar
 
 ```sh
-cargo run --bin mareforge_playtest --release
+cargo run --bin marvyr_playtest --release
 ```
 
 Alternativa para rodar servidor e client em processos separados:
 
 ```sh
-cargo run --bin mareforge-server --release
-cargo run --bin mareforge-client --release -- --playtest
+cargo run --bin marvyr-server --release
+cargo run --bin marvyr-client --release -- --playtest
 ```
 
 O client conecta automaticamente em `127.0.0.1:5000`. O servidor do playtest

@@ -5,9 +5,9 @@
 //! `Wreck`. A resolução é determinística: mesmo `DestructionEventId` + mesma
 //! entrada → mesmo resultado (§24), auditável sem Bevy.
 
-use mareforge_domain_items::instance::ItemInstance;
-use mareforge_domain_items::location::{Custody, ItemLocation};
-use mareforge_shared::ids::{DestructionEventId, ItemDefinitionId, ItemInstanceId, WreckId};
+use marvyr_domain_items::instance::ItemInstance;
+use marvyr_domain_items::location::{Custody, ItemLocation};
+use marvyr_shared::ids::{DestructionEventId, ItemDefinitionId, ItemInstanceId, WreckId};
 use serde::{Deserialize, Serialize};
 
 /// Taxas de sobrevivência por categoria (PRD §23: tuning inicial — casco é
@@ -147,8 +147,8 @@ impl Default for WreckPolicy {
 pub fn can_loot(
     elapsed_secs: f32,
     policy: &WreckPolicy,
-    requester: mareforge_shared::ids::CharacterId,
-    exclusive_looter: Option<mareforge_shared::ids::CharacterId>,
+    requester: marvyr_shared::ids::CharacterId,
+    exclusive_looter: Option<marvyr_shared::ids::CharacterId>,
 ) -> bool {
     match exclusive_looter {
         Some(killer) if elapsed_secs < policy.exclusive_window_secs => requester == killer,
@@ -215,7 +215,7 @@ impl WreckChest {
 
 #[cfg(test)]
 mod tests {
-    use mareforge_shared::ids::{ItemDefinitionId, ItemInstanceId};
+    use marvyr_shared::ids::{ItemDefinitionId, ItemInstanceId};
 
     use super::*;
 
@@ -322,7 +322,7 @@ mod tests {
 
     #[test]
     fn wreck_window_is_exclusive_to_killer_then_ffa() {
-        use mareforge_shared::ids::CharacterId;
+        use marvyr_shared::ids::CharacterId;
         let policy = WreckPolicy::default();
         let killer = CharacterId::new();
         let other = CharacterId::new();

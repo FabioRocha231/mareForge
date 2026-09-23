@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::instance::ItemInstance;
-use mareforge_shared::ids::{ItemInstanceId, MarketOrderId, RegionId, ShipInstanceId, WreckId};
+use marvyr_shared::ids::{ItemInstanceId, MarketOrderId, RegionId, ShipInstanceId, WreckId};
 
 /// Onde um item está fisicamente (PRD §29). Novas variantes entram quando o
 /// jogo pedir.

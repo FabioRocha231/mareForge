@@ -1,7 +1,5 @@
 use chrono::{DateTime, Utc};
-use mareforge_shared::ids::{
-    CharacterId, ItemDefinitionId, MarketOrderId, RegionId, TransactionId,
-};
+use marvyr_shared::ids::{CharacterId, ItemDefinitionId, MarketOrderId, RegionId, TransactionId};
 use serde::{Deserialize, Serialize};
 
 use crate::currency::Money;

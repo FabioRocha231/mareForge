@@ -16,8 +16,8 @@ use std::time::Instant;
 use bevy::ecs::prelude::*;
 use bevy::prelude::*;
 use lightyear::prelude::ClientReceiveMessage;
-use mareforge_domain_ships::ShipKind;
-use mareforge_protocol::{Faction, ProjectileState, ShipState, WorldSnapshot, TIER_PROCURADO};
+use marvyr_domain_ships::ShipKind;
+use marvyr_protocol::{Faction, ProjectileState, ShipState, WorldSnapshot, TIER_PROCURADO};
 
 use crate::assets::{deco, fort, layers, parts, GameAssets, HullSize};
 use crate::vfx::{spawn_animation, spawn_particle, Particle, VfxHandles};

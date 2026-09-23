@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 use bevy::asset::AssetPlugin;
 use bevy::prelude::*;
 
-/// Window app shared by `mareforge-client` and the playtest binary.
+/// Window app shared by `marvyr-client` and the playtest binary.
 pub fn windowed_app() -> App {
     let mut app = App::new();
     app.add_plugins(
@@ -39,11 +39,11 @@ pub fn windowed_app() -> App {
             .set(ImagePlugin::default_nearest())
             .set(WindowPlugin {
                 primary_window: Some(Window {
-                    title: "Mareforge — Playtest α".into(),
+                    title: "Marvyr — Playtest α".into(),
                     resolution: (1280.0_f32, 720.0_f32).into(),
                     // Captura de dev não rouba o foco (nem o teclado) de
                     // quem está usando a máquina.
-                    focused: std::env::var_os("MAREFORGE_SHOT").is_none(),
+                    focused: std::env::var_os("MARVYR_SHOT").is_none(),
                     ..default()
                 }),
                 ..default()
@@ -64,7 +64,7 @@ fn workspace_assets() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)
-        .expect("mareforge-client lives under the workspace crates directory")
+        .expect("marvyr-client lives under the workspace crates directory")
         .join("assets")
 }
 

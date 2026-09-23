@@ -1,4 +1,4 @@
-use mareforge_shared::ids::{ItemDefinitionId, RecipeId};
+use marvyr_shared::ids::{ItemDefinitionId, RecipeId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

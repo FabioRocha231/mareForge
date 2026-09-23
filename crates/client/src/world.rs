@@ -6,8 +6,8 @@
 use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, ShaderRef};
 use bevy::sprite::{Anchor, Material2d, Material2dPlugin};
-use mareforge_domain_world::map::{MAELSTROM_POINTS, MAELSTROM_X, PIRATE_PORT};
-use mareforge_domain_world::{LandMass, RiskTier, WorldMap, ZoneShape};
+use marvyr_domain_world::map::{MAELSTROM_POINTS, MAELSTROM_X, PIRATE_PORT};
+use marvyr_domain_world::{LandMass, RiskTier, WorldMap, ZoneShape};
 
 use crate::assets::{deco, fort, layers, GameAssets};
 use crate::zone::CurrentZone;
@@ -466,7 +466,7 @@ mod tests {
         // Nada das instâncias longínquas entra na vista do porto.
         assert!(near_serra.land[..count].iter().all(|disc| disc.w == 0.0));
         // Dentro de uma cerração, as paredes são penhasco.
-        let (x, y) = mareforge_domain_world::map::FOG_SLOTS[1];
+        let (x, y) = marvyr_domain_world::map::FOG_SLOTS[1];
         let fog = sea_params(&map, Vec2::new(x, y), 900.0);
         let count = fog.info.x as usize;
         assert!(count <= MAX_LAND);

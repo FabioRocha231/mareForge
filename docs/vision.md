@@ -1,4 +1,4 @@
-# Visão do mareForge
+# Visão do Marvyr
 
 > Albion Online encontra Son Korsan. A economia sandbox mais implacável do gênero
 > acontece em cima de um convés.
@@ -15,7 +15,7 @@ Economia player-driven só funciona quando transportar riqueza custa sangue. É
 por isso que Albion tem full loot e zonas vermelhas: sem risco, todo recurso
 vale o mesmo em todo lugar e o mercado morre.
 
-O mareForge leva essa tese para o mar. O transporte não é um jogador a pé com
+O Marvyr leva essa tese para o mar. O transporte não é um jogador a pé com
 uma mula numa estrada — é um **navio de madeira lento, cheio de carga,
 navegando mar aberto**. E do outro lado do horizonte tem um corsário sabendo
 disso.
@@ -35,7 +35,7 @@ coração do jogo, e por isso validação de inventário, receita e transação 
 ### 2. O navio é o courier e o dungeon
 
 Em Albion, o courier carrega riqueza. Em Son Korsan, o navio é o alvo. No
-mareForge é a mesma coisa: **a carga é a riqueza móvel do servidor e o casco
+Marvyr é a mesma coisa: **a carga é a riqueza móvel do servidor e o casco
 que a carrega é afundável**. Full loot naval não é feature de PvP — é o
 regulador econômico central. O `SmallMerchant` existe para mover valor; o
 `Corsair` existe para taxá-lo. Um não faz sentido sem o outro.
@@ -74,7 +74,7 @@ de fazer. Progressão é construir/comprar/navios melhores, não moer XP.
 **No código:** `ShipDefinition` + slots + `EquippedComponents` → `ShipStats`.
 **Nos ADRs:** 0006 (regras de negócio fora do ECS, definições ricas).
 
-## O que o mareForge NÃO é
+## O que o Marvyr NÃO é
 
 - **Não é theme park.** Sem corrente de quests como espinha dorsal. O mundo
   apresenta sistemas; os jogadores geram as histórias.
@@ -92,7 +92,7 @@ de fazer. Progressão é construir/comprar/navios melhores, não moer XP.
 Quando uma feature futura entrar em conflito com um pilar, o pilar vence — e
 quando entrar em conflito com dois, o Pilar 2 vence, porque a tese inteira do
 jogo está nele: **o transporte arriscado de riqueza fabricada por jogadores é
-o coração do mareForge.**
+o coração do Marvyr.**
 
 Se uma feature precisa de uma exceção divina para não quebrar a economia, a
 feature está errada. O conserto é no design do risco, nunca na exceção.

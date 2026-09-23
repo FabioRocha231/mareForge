@@ -15,10 +15,10 @@ use bevy::ecs::prelude::*;
 use bevy::prelude::*;
 use lightyear::prelude::client::*;
 use lightyear::prelude::*;
-use mareforge_domain_combat::BroadsideSide;
-use mareforge_domain_items::EquipmentSlot;
-use mareforge_domain_ships::ShipKind;
-use mareforge_protocol::{
+use marvyr_domain_combat::BroadsideSide;
+use marvyr_domain_items::EquipmentSlot;
+use marvyr_domain_ships::ShipKind;
+use marvyr_protocol::{
     AssignShip, BuySellOrder, CancelSellOrder, CatalogSnapshot, ClientHello, CraftItem,
     CraftResult, CreateSellOrder, Dock, DockResult, EquipItem, FireBroadside, GatherNode,
     GatherResult, LoadoutResult, LoadoutSnapshot, LootResult, LootWreck, MarketResult, NodeUpdated,
@@ -28,7 +28,7 @@ use mareforge_protocol::{
 };
 
 pub fn server_addr() -> SocketAddr {
-    let port = parse_port(std::env::var("MAREFORGE_PORT").ok().as_deref());
+    let port = parse_port(std::env::var("MARVYR_PORT").ok().as_deref());
     SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port)
 }
 
@@ -39,7 +39,7 @@ fn parse_port(value: Option<&str>) -> u16 {
                 .parse::<u16>()
                 .ok()
                 .filter(|port| *port != 0)
-                .unwrap_or_else(|| panic!("MAREFORGE_PORT must be an integer from 1 to 65535"))
+                .unwrap_or_else(|| panic!("MARVYR_PORT must be an integer from 1 to 65535"))
         })
         .unwrap_or(5000)
 }
@@ -80,7 +80,7 @@ pub struct KnownShipKind(pub Option<ShipKind>);
 pub struct ClientNetOverride(pub Option<NetConfig>);
 
 /// Identidade usada no `ClientHello` dos testes. Quando ausente, o client
-/// continua lendo `MAREFORGE_IDENTITY`/`~/.mareforge/identity`.
+/// continua lendo `MARVYR_IDENTITY`/`~/.marvyr/identity`.
 #[derive(Resource, Default)]
 pub struct ClientIdentity(pub Option<String>);
 
@@ -143,7 +143,7 @@ impl Plugin for ClientNetPlugin {
         app.register_message::<EquipItem>(ChannelDirection::ClientToServer);
         app.register_message::<UnequipItem>(ChannelDirection::ClientToServer);
         app.register_message::<FireBroadside>(ChannelDirection::ClientToServer);
-        app.register_message::<mareforge_protocol::SelectAmmo>(ChannelDirection::ClientToServer);
+        app.register_message::<marvyr_protocol::SelectAmmo>(ChannelDirection::ClientToServer);
         app.register_message::<LootWreck>(ChannelDirection::ClientToServer);
         app.register_message::<GatherNode>(ChannelDirection::ClientToServer);
         app.register_message::<CraftItem>(ChannelDirection::ClientToServer);
@@ -158,7 +158,7 @@ impl Plugin for ClientNetPlugin {
         app.register_message::<LoadoutSnapshot>(ChannelDirection::ServerToClient);
         app.register_message::<LoadoutResult>(ChannelDirection::ServerToClient);
         app.register_message::<WorldSnapshot>(ChannelDirection::ServerToClient);
-        app.register_message::<mareforge_protocol::PortalsUpdate>(ChannelDirection::ServerToClient);
+        app.register_message::<marvyr_protocol::PortalsUpdate>(ChannelDirection::ServerToClient);
         app.register_message::<ShipDestroyed>(ChannelDirection::ServerToClient);
         app.register_message::<LootResult>(ChannelDirection::ServerToClient);
         app.register_message::<ZoneChanged>(ChannelDirection::ServerToClient);
@@ -172,25 +172,17 @@ impl Plugin for ClientNetPlugin {
         app.register_message::<OrdersSnapshot>(ChannelDirection::ServerToClient);
         app.register_message::<PortStorageSnapshot>(ChannelDirection::ServerToClient);
         app.register_message::<MarketResult>(ChannelDirection::ServerToClient);
-        app.register_message::<mareforge_protocol::SellToGuild>(ChannelDirection::ClientToServer);
-        app.register_message::<mareforge_protocol::AcceptContract>(
-            ChannelDirection::ClientToServer,
-        );
-        app.register_message::<mareforge_protocol::AbandonContract>(
-            ChannelDirection::ClientToServer,
-        );
-        app.register_message::<mareforge_protocol::GuildPrices>(ChannelDirection::ServerToClient);
-        app.register_message::<mareforge_protocol::ContractsSnapshot>(
+        app.register_message::<marvyr_protocol::SellToGuild>(ChannelDirection::ClientToServer);
+        app.register_message::<marvyr_protocol::AcceptContract>(ChannelDirection::ClientToServer);
+        app.register_message::<marvyr_protocol::AbandonContract>(ChannelDirection::ClientToServer);
+        app.register_message::<marvyr_protocol::GuildPrices>(ChannelDirection::ServerToClient);
+        app.register_message::<marvyr_protocol::ContractsSnapshot>(
             ChannelDirection::ServerToClient,
         );
-        app.register_message::<mareforge_protocol::ContractResult>(
-            ChannelDirection::ServerToClient,
-        );
-        app.register_message::<mareforge_protocol::WeatherUpdate>(ChannelDirection::ServerToClient);
-        app.register_message::<mareforge_protocol::ReputationUpdate>(
-            ChannelDirection::ServerToClient,
-        );
-        app.register_message::<mareforge_protocol::WorldEvent>(ChannelDirection::ServerToClient);
+        app.register_message::<marvyr_protocol::ContractResult>(ChannelDirection::ServerToClient);
+        app.register_message::<marvyr_protocol::WeatherUpdate>(ChannelDirection::ServerToClient);
+        app.register_message::<marvyr_protocol::ReputationUpdate>(ChannelDirection::ServerToClient);
+        app.register_message::<marvyr_protocol::WorldEvent>(ChannelDirection::ServerToClient);
         app.init_resource::<crate::ship::DestroyedShips>();
         app.init_resource::<KnownWrecks>();
         app.init_resource::<MyDocked>();
@@ -242,7 +234,7 @@ pub const LOOT_RADIUS_SQ: f32 = 38.0 * 38.0;
 pub const GATHER_RADIUS_SQ: f32 = 43.0 * 43.0;
 
 /// E alterna atracar/desatracar (MF-036). Dev tooling (§39):
-/// MAREFORGE_AUTODOCK=1 tenta atracar sozinho até conseguir — smoke da
+/// MARVYR_AUTODOCK=1 tenta atracar sozinho até conseguir — smoke da
 /// rotina de porto sem digitar.
 fn send_dock_input(
     keys: Res<ButtonInput<KeyCode>>,
@@ -261,7 +253,7 @@ fn send_dock_input(
         }
         return;
     }
-    if std::env::var_os("MAREFORGE_AUTODOCK").is_some() && !my_docked.0 {
+    if std::env::var_os("MARVYR_AUTODOCK").is_some() && !my_docked.0 {
         *autodock_timer += time.delta_secs();
         if *autodock_timer >= 1.5 {
             *autodock_timer = 0.0;
@@ -272,7 +264,7 @@ fn send_dock_input(
 
 /// T/Y/U equipam Casco/Velas/Canhão do storage; Shift+T/Y/U desequipam os
 /// slots Hull/Sail/Weapon (MF-039, dev keys — a tela de porto do P3 substitui
-/// isto). MAREFORGE_AUTOEQUIP=1 instala os três em sequência para o smoke.
+/// isto). MARVYR_AUTOEQUIP=1 instala os três em sequência para o smoke.
 fn send_loadout_input(
     keys: Res<ButtonInput<KeyCode>>,
     known_catalog: Res<crate::market::KnownCatalog>,
@@ -308,7 +300,7 @@ fn send_loadout_input(
         }
     }
 
-    if std::env::var_os("MAREFORGE_AUTOEQUIP").is_some() {
+    if std::env::var_os("MARVYR_AUTOEQUIP").is_some() {
         *auto_timer += time.delta_secs();
         if *auto_timer >= 1.0 {
             *auto_timer = 0.0;
@@ -342,11 +334,11 @@ fn handle_dock_result(
 
 /// Token de identidade persistente do jogador (MF-035): a MESMA identidade
 /// sobrevive a restart de client — a conexão é descartável, o personagem
-/// não. Ordem: `MAREFORGE_IDENTITY` (testes/smoke) → `~/.mareforge/identity`
+/// não. Ordem: `MARVYR_IDENTITY` (testes/smoke) → `~/.marvyr/identity`
 /// → gera e salva. Fail-closed seria negar jogo; aqui gerar é a política
 /// dev declarada (identidade nova = personagem novo, sem inventar dono).
 fn identity_token() -> String {
-    if let Ok(token) = std::env::var("MAREFORGE_IDENTITY") {
+    if let Ok(token) = std::env::var("MARVYR_IDENTITY") {
         if !token.trim().is_empty() {
             return token;
         }
@@ -354,10 +346,10 @@ fn identity_token() -> String {
     let path = std::env::var("HOME")
         .map(|home| {
             std::path::PathBuf::from(home)
-                .join(".mareforge")
+                .join(".marvyr")
                 .join("identity")
         })
-        .unwrap_or_else(|_| std::path::PathBuf::from("mareforge-identity"));
+        .unwrap_or_else(|_| std::path::PathBuf::from("marvyr-identity"));
     if let Ok(token) = std::fs::read_to_string(&path) {
         let token = token.trim().to_string();
         if !token.is_empty() {
@@ -406,7 +398,7 @@ fn connect(mut commands: Commands) {
 }
 
 fn log_connecting() {
-    info!(server = %server_addr(), "conectando ao servidor mareforge");
+    info!(server = %server_addr(), "conectando ao servidor marvyr");
 }
 
 /// Handshake (ADR-0011): primeira mensagem após conectar é o hello com a
@@ -474,8 +466,8 @@ fn send_ship_input(
     let input = match override_input.0 {
         Some(input) => input,
         None => {
-            // Dev tooling (PRD §39): MAREFORGE_AUTOSAIL=1 navega a pano cheio.
-            let autosail = std::env::var_os("MAREFORGE_AUTOSAIL").is_some();
+            // Dev tooling (PRD §39): MARVYR_AUTOSAIL=1 navega a pano cheio.
+            let autosail = std::env::var_os("MARVYR_AUTOSAIL").is_some();
             let throttle = if autosail { 1.0 } else { sail.throttle() };
             let left = keys.pressed(KeyCode::KeyA) || keys.pressed(KeyCode::ArrowLeft);
             let right = keys.pressed(KeyCode::KeyD) || keys.pressed(KeyCode::ArrowRight);
@@ -501,7 +493,7 @@ fn send_fire_input(
     } else if keys.just_pressed(KeyCode::KeyR) {
         Some(BroadsideSide::Starboard)
     } else if autofire_enabled() {
-        // Dev tooling (PRD §39): MAREFORGE_AUTOFIRE=1 dispara bordos
+        // Dev tooling (PRD §39): MARVYR_AUTOFIRE=1 dispara bordos
         // alternados sozinho, respeitando a recarga — smoke/playtest sem
         // interação. Não é mecânica de jogo.
         *autofire_timer += time.delta_secs();
@@ -526,7 +518,7 @@ fn send_fire_input(
 }
 
 fn autofire_enabled() -> bool {
-    std::env::var_os("MAREFORGE_AUTOFIRE").is_some()
+    std::env::var_os("MARVYR_AUTOFIRE").is_some()
 }
 
 /// Navio afundou: remove o visual e memoriza o id (snapshots antigos ainda
@@ -618,7 +610,7 @@ fn send_loot_input(
 }
 
 /// G coleta o node mais próximo com estoque (PRD MF-019). Dev tooling
-/// (§39): MAREFORGE_AUTOGATHER=1 coleta sozinho — smoke do loop de recursos.
+/// (§39): MARVYR_AUTOGATHER=1 coleta sozinho — smoke do loop de recursos.
 fn send_gather_input(
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
@@ -667,7 +659,7 @@ fn send_gather_input(
 }
 
 fn autogather_enabled() -> bool {
-    std::env::var_os("MAREFORGE_AUTOGATHER").is_some()
+    std::env::var_os("MARVYR_AUTOGATHER").is_some()
 }
 
 fn handle_handshake(
@@ -718,7 +710,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "MAREFORGE_PORT must be an integer from 1 to 65535")]
+    #[should_panic(expected = "MARVYR_PORT must be an integer from 1 to 65535")]
     fn port_rejects_zero() {
         parse_port(Some("0"));
     }

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use mareforge_shared::ids::ItemDefinitionId;
+use marvyr_shared::ids::ItemDefinitionId;
 use thiserror::Error;
 
 use crate::definition::{ItemDefinition, ItemKind};

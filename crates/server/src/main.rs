@@ -1,3 +1,3 @@
 fn main() {
-    mareforge_server::run_headless();
+    marvyr_server::run_headless();
 }

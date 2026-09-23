@@ -5,7 +5,7 @@
 
 use crate::cargo::CargoError;
 use crate::location::{Custody, ItemLocation};
-use mareforge_shared::ids::ItemDefinitionId;
+use marvyr_shared::ids::ItemDefinitionId;
 
 /// Quantidade total de `item` nas pilhas.
 pub fn quantity_of(storage: &[Custody], item: ItemDefinitionId) -> u32 {
@@ -88,7 +88,7 @@ pub fn put_stack(storage: &mut Vec<Custody>, custody: Custody, max_stack: u32) -
 mod tests {
     use crate::instance::ItemInstance;
     use crate::location::{Custody, ItemLocation};
-    use mareforge_shared::ids::{ItemDefinitionId, ItemInstanceId, RegionId, ShipInstanceId};
+    use marvyr_shared::ids::{ItemDefinitionId, ItemInstanceId, RegionId, ShipInstanceId};
 
     use super::{put_stack, quantity_of, take_stacks};
 

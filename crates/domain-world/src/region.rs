@@ -3,7 +3,7 @@
 //! não aparecem em outra. Regiões se especializam (Porto da Serra: madeira;
 //! Porto da Mina: minério) para criar o triângulo de arbitragem.
 
-use mareforge_shared::ids::RegionId;
+use marvyr_shared::ids::RegionId;
 
 /// Porto (PRD §5): área de serviços, não cidade caminhável. A área é um
 /// círculo de serviço; dock, market e storage serão acessíveis dentro dela.

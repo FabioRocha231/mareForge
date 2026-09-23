@@ -7,7 +7,7 @@
 //! vence** (ordem de declaração = prioridade). Águas protegidas vêm primeiro
 //! para que a beira dos portos nunca seja engolida pelas rotas.
 
-use mareforge_shared::ids::{RegionId, ZoneId};
+use marvyr_shared::ids::{RegionId, ZoneId};
 use thiserror::Error;
 
 use crate::land::{push_out_of_land, LandMass};

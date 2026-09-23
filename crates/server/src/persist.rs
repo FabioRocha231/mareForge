@@ -22,10 +22,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use bevy::ecs::prelude::Resource;
-use mareforge_domain_economy::{LedgerKind, MarketOrder, Money, OrderStatus};
-use mareforge_domain_items::{Custody, ItemInstance};
-use mareforge_domain_ships::{ShipKind, VesselPresence};
-use mareforge_shared::ids::{CharacterId, ShipInstanceId, WreckId};
+use marvyr_domain_economy::{LedgerKind, MarketOrder, Money, OrderStatus};
+use marvyr_domain_items::{Custody, ItemInstance};
+use marvyr_domain_ships::{ShipKind, VesselPresence};
+use marvyr_shared::ids::{CharacterId, ShipInstanceId, WreckId};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -93,7 +93,7 @@ pub trait StateStore: Send + Sync {
     fn delete_wreck(&self, wreck_num: u32) -> Result<(), String>;
 }
 
-/// Snapshot JSON em arquivo (`MAREFORGE_STATE_PATH`), escrita atômica via
+/// Snapshot JSON em arquivo (`MARVYR_STATE_PATH`), escrita atômica via
 /// tmp+rename. Escopo: dev, smoke e testes (MF-033) — NÃO é a persistência
 /// de produção. Navios não são persistidos aqui: no modo dev o mundo nasce
 /// limpo por sessão.
@@ -300,8 +300,8 @@ impl StateStore for PostgresStateStore {
             let mut escrow: Vec<crate::market::EscrowEntry> = Vec::new();
             for (id, owner, definition, quantity, durability, location) in item_rows {
                 let instance = ItemInstance {
-                    id: mareforge_shared::ids::ItemInstanceId(id),
-                    definition: mareforge_shared::ids::ItemDefinitionId(definition),
+                    id: marvyr_shared::ids::ItemInstanceId(id),
+                    definition: marvyr_shared::ids::ItemDefinitionId(definition),
                     quantity: quantity.max(0) as u32,
                     durability: durability.map(|d| d.max(0) as u16),
                 };
@@ -309,7 +309,7 @@ impl StateStore for PostgresStateStore {
                     return Err(format!("item {id} com location ilegível no banco"));
                 };
                 match location {
-                    mareforge_domain_items::ItemLocation::PortStorage(region) => {
+                    marvyr_domain_items::ItemLocation::PortStorage(region) => {
                         let custody = Custody { instance, location };
                         let owner_id = CharacterId(owner);
                         match storage
@@ -324,7 +324,7 @@ impl StateStore for PostgresStateStore {
                             }),
                         }
                     }
-                    mareforge_domain_items::ItemLocation::MarketEscrow(order_id) => {
+                    marvyr_domain_items::ItemLocation::MarketEscrow(order_id) => {
                         let order_num = escrow_order_num(&mut tx, order_id).await?;
                         let custody = Custody { instance, location };
                         match escrow.iter_mut().find(|entry| entry.order_num == order_num) {
@@ -385,18 +385,18 @@ impl StateStore for PostgresStateStore {
                 };
                 let status = status.0;
                 board.push(MarketOrder {
-                    id: mareforge_shared::ids::MarketOrderId(id),
+                    id: marvyr_shared::ids::MarketOrderId(id),
                     seller: CharacterId(seller),
-                    item: mareforge_shared::ids::ItemDefinitionId(item),
+                    item: marvyr_shared::ids::ItemDefinitionId(item),
                     quantity: quantity.max(0) as u32,
                     unit_price: Money(unit_price.max(0) as u64),
-                    region: mareforge_shared::ids::RegionId(region),
+                    region: marvyr_shared::ids::RegionId(region),
                     status,
                     created_at,
                     expires_at,
                     filled_quantity: filled.max(0) as u32,
                 });
-                order_nums.insert(num as u32, mareforge_shared::ids::MarketOrderId(id));
+                order_nums.insert(num as u32, marvyr_shared::ids::MarketOrderId(id));
                 next_order_num = next_order_num.max(num as u32 + 1);
             }
 
@@ -408,7 +408,7 @@ impl StateStore for PostgresStateStore {
             .fetch_all(&mut *tx)
             .await
             .map_err(|error| error.to_string())?;
-            let mut ledger = mareforge_domain_economy::Ledger::default();
+            let mut ledger = marvyr_domain_economy::Ledger::default();
             for (seq, kind, amount, memo) in ledger_rows {
                 let Ok(kind) = kind.parse::<StoredLedgerKind>() else {
                     return Err(format!("ledger seq {seq} com kind desconhecido"));
@@ -584,8 +584,8 @@ impl StateStore for PostgresStateStore {
                 };
                 let custody = Custody {
                     instance: ItemInstance {
-                        id: mareforge_shared::ids::ItemInstanceId(item_id),
-                        definition: mareforge_shared::ids::ItemDefinitionId(definition),
+                        id: marvyr_shared::ids::ItemInstanceId(item_id),
+                        definition: marvyr_shared::ids::ItemDefinitionId(definition),
                         quantity: quantity.max(0) as u32,
                         durability: durability.map(|d| d.max(0) as u16),
                     },
@@ -593,7 +593,7 @@ impl StateStore for PostgresStateStore {
                 };
                 if matches!(
                     custody.location,
-                    mareforge_domain_items::ItemLocation::Equipped { .. }
+                    marvyr_domain_items::ItemLocation::Equipped { .. }
                 ) {
                     equipped.push(custody);
                 } else {
@@ -804,7 +804,7 @@ impl std::str::FromStr for StoredOrderStatus {
 /// mais no board — os itens órfãos não agrupam com nenhuma escrow ativa).
 async fn escrow_order_num(
     tx: &mut sqlx::PgConnection,
-    order_id: mareforge_shared::ids::MarketOrderId,
+    order_id: marvyr_shared::ids::MarketOrderId,
 ) -> Result<u32, String> {
     let row: Option<(i32,)> = sqlx::query_as("SELECT order_num FROM market_orders WHERE id = $1")
         .bind(order_id.0)
@@ -846,18 +846,18 @@ impl StoreHandle {
 /// dev, ou nada. Banco configurado e inacessível é erro de boot (fail-closed,
 /// §69) — silenciosamente degradar persistência é como não tê-la.
 pub fn store_from_env() -> StoreHandle {
-    if let Ok(url) = std::env::var("MAREFORGE_DATABASE_URL") {
+    if let Ok(url) = std::env::var("MARVYR_DATABASE_URL") {
         match PostgresStateStore::connect(&url) {
             Ok(store) => {
                 tracing::info!("persistência: PostgreSQL (ADR-0004)");
                 return StoreHandle(Some(Arc::new(store)));
             }
             Err(error) => {
-                panic!("MAREFORGE_DATABASE_URL configurado mas o banco não abriu: {error}");
+                panic!("MARVYR_DATABASE_URL configurado mas o banco não abriu: {error}");
             }
         }
     }
-    if let Some(path) = std::env::var_os("MAREFORGE_STATE_PATH") {
+    if let Some(path) = std::env::var_os("MARVYR_STATE_PATH") {
         tracing::info!(
             path = %path.to_string_lossy(),
             "persistência: arquivo de dev (não é produção)"

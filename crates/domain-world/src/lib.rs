@@ -1,4 +1,4 @@
-//! domain-world: geografia econômica do mareForge (PRD §6-§10, §57). Regras
+//! domain-world: geografia econômica do Marvyr (PRD §6-§10, §57). Regras
 //! puras de mundo — regiões, zonas de risco, portos, nós de recurso — sem
 //! ECS, sem Bevy. O servidor conecta as peças; o client apenas representa.
 

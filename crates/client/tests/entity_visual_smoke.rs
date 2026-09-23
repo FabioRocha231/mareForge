@@ -1,14 +1,14 @@
 use bevy::asset::{AssetPlugin, Handle};
 use bevy::prelude::*;
 use lightyear::prelude::{ClientId, ClientReceiveMessage};
-use mareforge_client::assets::{layers, parts, GameAssets, HullSize};
-use mareforge_client::net::{KnownWrecks, MyShip};
-use mareforge_client::ship::{
+use marvyr_client::assets::{layers, parts, GameAssets, HullSize};
+use marvyr_client::net::{KnownWrecks, MyShip};
+use marvyr_client::ship::{
     expire_stale_visuals, upsert_projectile_visuals, upsert_ship_visuals, upsert_wreck_visuals,
     DestroyedShips, ProjectileVisual, ShipVisual, WreckVisual,
 };
-use mareforge_domain_ships::ShipKind;
-use mareforge_protocol::{ProjectileState, ShipState, WorldSnapshot, WreckState};
+use marvyr_domain_ships::ShipKind;
+use marvyr_protocol::{ProjectileState, ShipState, WorldSnapshot, WreckState};
 
 fn visual_app() -> App {
     let mut app = App::new();
@@ -64,7 +64,7 @@ fn ship_state(ship_id: u32, kind: ShipKind) -> ShipState {
         cargo_capacity: 100,
         sail_hp: 100.0,
         ammo: Default::default(),
-        faction: mareforge_protocol::Faction::Player,
+        faction: marvyr_protocol::Faction::Player,
         notoriety_tier: 0,
     }
 }
@@ -129,7 +129,7 @@ fn snapshot_spawns_sprite_visuals_for_ships_projectiles_and_wrecks() {
     ];
     for ((ship_id, z, scale, children), hull) in ships.iter().zip(expected_hulls) {
         assert_eq!(*z, layers::SHIPS, "navio {ship_id}");
-        assert_eq!(*scale, mareforge_client::ship::WORLD_PER_PX);
+        assert_eq!(*scale, marvyr_client::ship::WORLD_PER_PX);
         let indices: Vec<usize> = children
             .iter()
             .filter_map(|child| world.get::<Sprite>(*child))
@@ -195,7 +195,7 @@ fn entities_absent_from_snapshot_decay_via_ttl() {
 
     {
         let world: &mut World = app.world_mut();
-        let ttl = mareforge_client::ship::STALE_VISUAL_TTL;
+        let ttl = marvyr_client::ship::STALE_VISUAL_TTL;
         let aged_at = Instant::now() - Duration::from_secs_f32(ttl + 0.1);
         let mut ships = world.query::<&mut ShipVisual>();
         for mut visual in ships.iter_mut(world) {

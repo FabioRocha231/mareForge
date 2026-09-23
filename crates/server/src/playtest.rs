@@ -10,7 +10,7 @@ use std::time::Instant;
 use bevy::app::{App, AppExit, TerminalCtrlCHandlerPlugin};
 use bevy::ecs::event::EventReader;
 use bevy::prelude::{IntoSystemConfigs, Query, Res, Resource, Update};
-use mareforge_domain_economy::Ledger;
+use marvyr_domain_economy::Ledger;
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -172,7 +172,7 @@ extern "C" fn handle_sigterm(_sig: libc::c_int) {
 mod tests {
     use super::*;
     use crate::net::TradeRouteKey;
-    use mareforge_shared::ids::RegionId;
+    use marvyr_shared::ids::RegionId;
 
     #[test]
     fn report_builder_emits_zero_fields_for_empty_metrics() {

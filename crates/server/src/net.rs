@@ -19,22 +19,22 @@ use bevy::prelude::*;
 use chrono::Utc;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
-use mareforge_domain_combat::{
+use marvyr_domain_combat::{
     apply_damage, can_loot, is_expired, resolve_ship_destruction, sail_points, Ammo,
     BroadsideBattery, DamageOutcome, LootPolicy, Projectile, WeaponParams, WreckChest, WreckPolicy,
 };
-use mareforge_domain_economy::MarketPriceIndex;
-use mareforge_domain_items::{
+use marvyr_domain_economy::MarketPriceIndex;
+use marvyr_domain_items::{
     CargoHold, Custody, EquipmentDefinition, EquipmentSlot, EquipmentStats, ItemCatalog,
     ItemDefinition, ItemInstance, ItemKind,
 };
-use mareforge_domain_ships::{
+use marvyr_domain_ships::{
     compute_ship_stats, dock as dock_vessel, step_motion, undock as undock_vessel, DockPolicy,
     EquippedComponents, MotionInput, MotionTuning, ShipKind, ShipLoadout, ShipMotion, ShipStats,
     VesselPresence, SAIL_HP_MAX,
 };
-use mareforge_domain_world::{GatheringPolicy, RiskPolicy, WorldMap};
-use mareforge_protocol::{
+use marvyr_domain_world::{GatheringPolicy, RiskPolicy, WorldMap};
+use marvyr_protocol::{
     AssignShip, BuySellOrder, CancelSellOrder, CatalogSnapshot, ClientHello, CraftItem,
     CraftResult, CreateSellOrder, Dock, DockResult, EquipItem, FireBroadside, GatherNode,
     GatherResult, LoadoutResult, LoadoutSnapshot, LootResult, LootWreck, MarketResult, NodeUpdated,
@@ -43,7 +43,7 @@ use mareforge_protocol::{
     StorageWithdrawAll, Undock, UnequipItem, WalletUpdated, WorldSnapshot, WreckState, ZoneChanged,
     PROTOCOL_VERSION,
 };
-use mareforge_shared::ids::{
+use marvyr_shared::ids::{
     CharacterId, DestructionEventId, ItemDefinitionId, ItemInstanceId, RegionId, ShipInstanceId,
     WreckId, ZoneId,
 };
@@ -51,7 +51,7 @@ use smallvec::SmallVec;
 use tracing::{info, warn};
 
 pub fn server_addr() -> SocketAddr {
-    let port = parse_port(std::env::var("MAREFORGE_PORT").ok().as_deref());
+    let port = parse_port(std::env::var("MARVYR_PORT").ok().as_deref());
     SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port)
 }
 
@@ -62,7 +62,7 @@ fn parse_port(value: Option<&str>) -> u16 {
                 .parse::<u16>()
                 .ok()
                 .filter(|port| *port != 0)
-                .unwrap_or_else(|| panic!("MAREFORGE_PORT must be an integer from 1 to 65535"))
+                .unwrap_or_else(|| panic!("MARVYR_PORT must be an integer from 1 to 65535"))
         })
         .unwrap_or(5000)
 }
@@ -379,10 +379,10 @@ pub struct ServerDockPolicy(pub DockPolicy);
 /// (Pilar 3). O mapa fixa em teste que este ponto é Protected.
 pub const DEV_SPAWN: (f32, f32) = (-560.0, 0.0);
 
-/// Dev tooling (MF-059): `MAREFORGE_DEV_SPAWN=x,y` faz o navio novo nascer
+/// Dev tooling (MF-059): `MARVYR_DEV_SPAWN=x,y` faz o navio novo nascer
 /// em outro ponto — revisar zonas distantes sem navegar até lá.
 fn dev_spawn_point() -> (f32, f32) {
-    parse_spawn(std::env::var("MAREFORGE_DEV_SPAWN").ok().as_deref()).unwrap_or(DEV_SPAWN)
+    parse_spawn(std::env::var("MARVYR_DEV_SPAWN").ok().as_deref()).unwrap_or(DEV_SPAWN)
 }
 
 fn parse_spawn(value: Option<&str>) -> Option<(f32, f32)> {
@@ -507,7 +507,7 @@ impl Plugin for ServerNetPlugin {
         app.register_message::<LoadoutSnapshot>(ChannelDirection::ServerToClient);
         app.register_message::<LoadoutResult>(ChannelDirection::ServerToClient);
         app.register_message::<WorldSnapshot>(ChannelDirection::ServerToClient);
-        app.register_message::<mareforge_protocol::PortalsUpdate>(ChannelDirection::ServerToClient);
+        app.register_message::<marvyr_protocol::PortalsUpdate>(ChannelDirection::ServerToClient);
         app.register_message::<ShipDestroyed>(ChannelDirection::ServerToClient);
         app.register_message::<LootResult>(ChannelDirection::ServerToClient);
         app.register_message::<ZoneChanged>(ChannelDirection::ServerToClient);
@@ -521,27 +521,19 @@ impl Plugin for ServerNetPlugin {
         app.register_message::<OrdersSnapshot>(ChannelDirection::ServerToClient);
         app.register_message::<PortStorageSnapshot>(ChannelDirection::ServerToClient);
         app.register_message::<MarketResult>(ChannelDirection::ServerToClient);
-        app.register_message::<mareforge_protocol::SellToGuild>(ChannelDirection::ClientToServer);
-        app.register_message::<mareforge_protocol::AcceptContract>(
-            ChannelDirection::ClientToServer,
-        );
-        app.register_message::<mareforge_protocol::AbandonContract>(
-            ChannelDirection::ClientToServer,
-        );
-        app.register_message::<mareforge_protocol::GuildPrices>(ChannelDirection::ServerToClient);
-        app.register_message::<mareforge_protocol::ContractsSnapshot>(
+        app.register_message::<marvyr_protocol::SellToGuild>(ChannelDirection::ClientToServer);
+        app.register_message::<marvyr_protocol::AcceptContract>(ChannelDirection::ClientToServer);
+        app.register_message::<marvyr_protocol::AbandonContract>(ChannelDirection::ClientToServer);
+        app.register_message::<marvyr_protocol::GuildPrices>(ChannelDirection::ServerToClient);
+        app.register_message::<marvyr_protocol::ContractsSnapshot>(
             ChannelDirection::ServerToClient,
         );
-        app.register_message::<mareforge_protocol::ContractResult>(
-            ChannelDirection::ServerToClient,
-        );
+        app.register_message::<marvyr_protocol::ContractResult>(ChannelDirection::ServerToClient);
         app.add_plugins(crate::guild::GuildPlugin);
-        app.register_message::<mareforge_protocol::WeatherUpdate>(ChannelDirection::ServerToClient);
+        app.register_message::<marvyr_protocol::WeatherUpdate>(ChannelDirection::ServerToClient);
         crate::weather::install(app);
-        app.register_message::<mareforge_protocol::ReputationUpdate>(
-            ChannelDirection::ServerToClient,
-        );
-        app.register_message::<mareforge_protocol::WorldEvent>(ChannelDirection::ServerToClient);
+        app.register_message::<marvyr_protocol::ReputationUpdate>(ChannelDirection::ServerToClient);
+        app.register_message::<marvyr_protocol::WorldEvent>(ChannelDirection::ServerToClient);
         app.add_systems(Startup, start_server);
         app.add_systems(Startup, crate::nodes::spawn_dev_nodes.after(start_server));
         app.add_systems(Startup, crate::npc::setup_npcs.after(start_server));
@@ -627,7 +619,7 @@ impl Plugin for ServerNetPlugin {
 
 fn start_server(mut commands: Commands) {
     commands.start_server();
-    info!(addr = %server_addr(), "mareforge server listening");
+    info!(addr = %server_addr(), "marvyr server listening");
 }
 
 /// Navio autoritativo: a única cópia do estado que vale (Pilar 4). O dono é
@@ -1044,7 +1036,7 @@ pub(crate) fn restore_ship_from_record(
     let mut loadout = ShipLoadout::new();
     for custody in record.equipped {
         let slot = match custody.location {
-            mareforge_domain_items::ItemLocation::Equipped { slot, .. } => slot,
+            marvyr_domain_items::ItemLocation::Equipped { slot, .. } => slot,
             _ => continue,
         };
         loadout.equip(record.ship_instance, custody, slot);
@@ -1718,7 +1710,7 @@ fn simulate_movement(
             stats,
             MotionInput {
                 throttle: input.throttle.clamp(0.0, 1.0)
-                    * mareforge_domain_ships::sail_speed_multiplier(*sail_hp),
+                    * marvyr_domain_ships::sail_speed_multiplier(*sail_hp),
                 turn: input.turn,
             },
             wind,
@@ -2170,7 +2162,7 @@ fn to_ship_state(ship: &ServerShip, catalog: &ItemCatalog) -> ShipState {
         cargo_capacity: ship.stats.cargo_capacity,
         sail_hp: ship.sail_hp,
         ammo: ship.ammo,
-        faction: mareforge_protocol::Faction::Player,
+        faction: marvyr_protocol::Faction::Player,
         // Preenchido em `send_snapshots` a partir da `Reputation`.
         notoriety_tier: 0,
     }
@@ -2293,11 +2285,11 @@ fn world_status(
         ships_destroyed = metrics.ships_destroyed,
         npc_bounty_gold_minted = metrics.npc_bounty_gold_minted,
         merchant_deaths =
-            metrics.ship_losses_by_kind[mareforge_domain_ships::ShipKind::SmallMerchant as usize],
+            metrics.ship_losses_by_kind[marvyr_domain_ships::ShipKind::SmallMerchant as usize],
         patrol_deaths =
-            metrics.ship_losses_by_kind[mareforge_domain_ships::ShipKind::Patrol as usize],
+            metrics.ship_losses_by_kind[marvyr_domain_ships::ShipKind::Patrol as usize],
         corsair_deaths =
-            metrics.ship_losses_by_kind[mareforge_domain_ships::ShipKind::Corsair as usize],
+            metrics.ship_losses_by_kind[marvyr_domain_ships::ShipKind::Corsair as usize],
         wrecks_looted = metrics.wrecks_looted,
         pvp_engagements = metrics.pvp_engagements,
         zone_transitions = metrics.zone_transitions,
@@ -2696,8 +2688,8 @@ fn handle_undock(
 
 #[cfg(test)]
 mod tests {
-    use mareforge_domain_items::ItemLocation;
-    use mareforge_shared::ids::RegionId;
+    use marvyr_domain_items::ItemLocation;
+    use marvyr_shared::ids::RegionId;
 
     use super::*;
 
@@ -2719,7 +2711,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "MAREFORGE_PORT must be an integer from 1 to 65535")]
+    #[should_panic(expected = "MARVYR_PORT must be an integer from 1 to 65535")]
     fn port_rejects_out_of_range_value() {
         parse_port(Some("65536"));
     }

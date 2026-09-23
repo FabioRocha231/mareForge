@@ -5,7 +5,7 @@
 
 use bevy::prelude::*;
 use lightyear::prelude::ClientReceiveMessage;
-use mareforge_protocol::{
+use marvyr_protocol::{
     DockResult, ReputationUpdate, WorldEvent, WorldEventKind, TIER_PROCURADO, TIER_SUSPEITO,
 };
 

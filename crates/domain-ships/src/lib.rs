@@ -12,7 +12,7 @@ pub mod weather;
 pub use components::{EquippedComponent, EquippedComponents};
 pub use definition::{ShipDefinition, ShipKind, SlotSpec};
 pub use loadout::{can_equip, LoadoutError, ShipLoadout};
-pub use mareforge_domain_items::EquipmentSlot;
+pub use marvyr_domain_items::EquipmentSlot;
 pub use motion::{step_motion, MotionInput, MotionTuning, ShipMotion};
 pub use presence::{dock, undock, DockError, DockPolicy, VesselPresence};
 pub use sailing::{

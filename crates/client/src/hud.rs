@@ -5,8 +5,8 @@
 //! placa de PvP com fade. Atracado, o HUD do mar esconde; o Port Screen assume.
 
 use bevy::prelude::*;
-use mareforge_domain_world::RiskTier;
-use mareforge_shared::ids::ItemDefinitionId;
+use marvyr_domain_world::RiskTier;
+use marvyr_shared::ids::ItemDefinitionId;
 
 use crate::market::{KnownCatalog, Wallet};
 use crate::net::{KnownWrecks, MyShip, GATHER_RADIUS_SQ, LOOT_RADIUS_SQ};
@@ -377,8 +377,8 @@ fn ratio(current: u32, max: u32) -> f32 {
     }
 }
 
-fn ship_kind_label(kind: mareforge_domain_ships::ShipKind) -> &'static str {
-    use mareforge_domain_ships::ShipKind;
+fn ship_kind_label(kind: marvyr_domain_ships::ShipKind) -> &'static str {
+    use marvyr_domain_ships::ShipKind;
     match kind {
         ShipKind::SmallMerchant => "Mercante",
         ShipKind::Patrol => "Patrulha",
@@ -460,7 +460,7 @@ fn context_prompt(context: &HudContext, catalog: &KnownCatalog, port: Option<&st
 fn my_visual<'a>(
     my_ship: &MyShip,
     visuals: &'a Query<&crate::ship::ShipVisual>,
-) -> Option<&'a mareforge_protocol::ShipState> {
+) -> Option<&'a marvyr_protocol::ShipState> {
     let my_id = my_ship.0?;
     visuals
         .iter()
@@ -725,8 +725,8 @@ mod tests {
     use std::time::Instant;
 
     use bevy::ecs::schedule::Schedule;
-    use mareforge_domain_world::RiskTier;
-    use mareforge_protocol::ItemLine;
+    use marvyr_domain_world::RiskTier;
+    use marvyr_protocol::ItemLine;
 
     use crate::ship::ShipVisual;
     use crate::zone::ServerZone;
@@ -740,10 +740,10 @@ mod tests {
         assert_eq!(sail_indicator_text(SailLevel(3)), "[###]\nPano cheio");
     }
 
-    fn ship_state(port_cooldown: f32, starboard_cooldown: f32) -> mareforge_protocol::ShipState {
-        mareforge_protocol::ShipState {
+    fn ship_state(port_cooldown: f32, starboard_cooldown: f32) -> marvyr_protocol::ShipState {
+        marvyr_protocol::ShipState {
             ship_id: 1,
-            kind: mareforge_domain_ships::ShipKind::SmallMerchant,
+            kind: marvyr_domain_ships::ShipKind::SmallMerchant,
             x: 0.0,
             y: 0.0,
             heading: 0.0,
@@ -760,7 +760,7 @@ mod tests {
             cargo_capacity: 100,
             sail_hp: 100.0,
             ammo: Default::default(),
-            faction: mareforge_protocol::Faction::Player,
+            faction: marvyr_protocol::Faction::Player,
             notoriety_tier: 0,
         }
     }

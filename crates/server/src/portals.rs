@@ -5,10 +5,10 @@
 use bevy::prelude::*;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
-use mareforge_domain_ships::VesselPresence;
-use mareforge_domain_world::map::FOG_RADIUS;
-use mareforge_domain_world::{PortalDirector, PortalKind, PortalTuning};
-use mareforge_protocol::{PortalKindWire, PortalState, PortalsUpdate};
+use marvyr_domain_ships::VesselPresence;
+use marvyr_domain_world::map::FOG_RADIUS;
+use marvyr_domain_world::{PortalDirector, PortalKind, PortalTuning};
+use marvyr_protocol::{PortalKindWire, PortalState, PortalsUpdate};
 use tracing::info;
 
 use crate::net::{ReliableChannel, ServerShip, ServerWorldMap, DEV_SPAWN};
@@ -137,7 +137,7 @@ fn broadcast_portals(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mareforge_domain_world::WorldMap;
+    use marvyr_domain_world::WorldMap;
 
     #[test]
     fn wire_states_report_remaining_time_and_uses() {

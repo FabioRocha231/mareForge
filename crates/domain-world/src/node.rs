@@ -3,7 +3,7 @@
 //! regional (MF-020) é geografia: cada node pertence a uma região, e região
 //! rara fica longe e sem lei (Pilar 3).
 
-use mareforge_shared::ids::{ItemDefinitionId, RegionId, ResourceNodeId};
+use marvyr_shared::ids::{ItemDefinitionId, RegionId, ResourceNodeId};
 
 /// Um depósito de recurso no mar: posição fixa, estoque finito, resposta
 /// regional. O `resource` é o `ItemDefinitionId` que o servidor entrega por

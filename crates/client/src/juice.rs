@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 use bevy::ui::FocusPolicy;
 use lightyear::prelude::ClientReceiveMessage;
-use mareforge_protocol::WorldSnapshot;
+use marvyr_protocol::WorldSnapshot;
 
 use crate::assets::layers;
 use crate::camera::{follow_camera, shake_camera, unshake_camera, CameraShake};
@@ -435,10 +435,10 @@ mod tests {
         assert!(cluster_points(&[], SALVO_RADIUS).is_empty());
     }
 
-    fn ship(ship_id: u32, x: f32, hp: u32) -> mareforge_protocol::ShipState {
-        mareforge_protocol::ShipState {
+    fn ship(ship_id: u32, x: f32, hp: u32) -> marvyr_protocol::ShipState {
+        marvyr_protocol::ShipState {
             ship_id,
-            kind: mareforge_domain_ships::ShipKind::Corsair,
+            kind: marvyr_domain_ships::ShipKind::Corsair,
             x,
             y: 0.0,
             heading: 0.0,
@@ -454,14 +454,14 @@ mod tests {
             is_npc: false,
             cargo_capacity: 0,
             sail_hp: 100.0,
-            ammo: mareforge_domain_combat::Ammo::Round,
-            faction: mareforge_protocol::Faction::Player,
+            ammo: marvyr_domain_combat::Ammo::Round,
+            faction: marvyr_protocol::Faction::Player,
             notoriety_tier: 0,
         }
     }
 
-    fn ball(projectile_id: u32, x: f32) -> mareforge_protocol::ProjectileState {
-        mareforge_protocol::ProjectileState {
+    fn ball(projectile_id: u32, x: f32) -> marvyr_protocol::ProjectileState {
+        marvyr_protocol::ProjectileState {
             projectile_id,
             x,
             y: 30.0,
@@ -471,8 +471,8 @@ mod tests {
 
     fn step(
         app: &mut App,
-        ships: Vec<mareforge_protocol::ShipState>,
-        projectiles: Vec<mareforge_protocol::ProjectileState>,
+        ships: Vec<marvyr_protocol::ShipState>,
+        projectiles: Vec<marvyr_protocol::ProjectileState>,
     ) -> Vec<SeaEvent> {
         let snapshot = WorldSnapshot {
             tick: 0,

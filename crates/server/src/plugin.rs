@@ -25,7 +25,7 @@ impl Plugin for ServerPlugin {
 }
 
 fn setup() {
-    tracing::info!("mareforge server starting");
+    tracing::info!("marvyr server starting");
 }
 
 pub fn should_tick(limit: Res<TickLimit>, counter: Res<TickCounter>) -> bool {

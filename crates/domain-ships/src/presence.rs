@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use mareforge_shared::ids::RegionId;
+use marvyr_shared::ids::RegionId;
 
 /// Estado de presença da embarcação. No slice, PortId == RegionId (PRD §6:
 /// um porto por região) — a régua muda quando o mundo pedir portos múltiplos.

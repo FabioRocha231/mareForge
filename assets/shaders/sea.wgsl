@@ -1,4 +1,4 @@
-// Mar e terra do mareForge (MF-058). Um único quad cobre o mundo; a terra
+// Mar e terra do Marvyr (MF-058). Um único quad cobre o mundo; a terra
 // vem das mesmas `LandMass` que o servidor usa para colisão, então o que o
 // jogador vê é exatamente onde o casco encalha. Pixelado em grade de 1 m
 // para casar com os sprites pixel art.

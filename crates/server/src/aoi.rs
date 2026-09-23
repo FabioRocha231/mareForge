@@ -9,7 +9,7 @@
 //! Toda a lógica é pura: o sistema ECS só coleta os estados e chama
 //! [`build_snapshot`] por destinatário.
 
-use mareforge_protocol::{ProjectileState, ShipState, WorldSnapshot, WreckState};
+use marvyr_protocol::{ProjectileState, ShipState, WorldSnapshot, WreckState};
 
 /// Lado do chunk da grade espacial, em metros (ADR-0009: 256 m — métrica a
 /// validar com benchmarks; não mudar sem nova decisão).
@@ -75,7 +75,7 @@ mod tests {
     fn ship(id: u32, x: f32, y: f32) -> ShipState {
         ShipState {
             ship_id: id,
-            kind: mareforge_domain_ships::ShipKind::SmallMerchant,
+            kind: marvyr_domain_ships::ShipKind::SmallMerchant,
             x,
             y,
             heading: 0.0,
@@ -92,7 +92,7 @@ mod tests {
             cargo_capacity: 100,
             sail_hp: 100.0,
             ammo: Default::default(),
-            faction: mareforge_protocol::Faction::Player,
+            faction: marvyr_protocol::Faction::Player,
             notoriety_tier: 0,
         }
     }

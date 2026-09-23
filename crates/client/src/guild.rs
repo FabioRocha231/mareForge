@@ -6,11 +6,11 @@
 use bevy::prelude::*;
 use lightyear::prelude::client::*;
 use lightyear::prelude::*;
-use mareforge_protocol::{
+use marvyr_protocol::{
     AbandonContract, AcceptContract, ContractLine, ContractResult, ContractsSnapshot, GuildPrices,
     SellToGuild, StorageDepositAll, StorageLine, Undock,
 };
-use mareforge_shared::ids::ItemDefinitionId;
+use marvyr_shared::ids::ItemDefinitionId;
 
 use crate::hud::SeaHud;
 use crate::net::ReliableChannel;
@@ -106,7 +106,7 @@ fn handle_guild_clicks(
     }
 }
 
-/// Dev (§39): MAREFORGE_AUTOGUILD=1, atracado, deposita o porão, vende
+/// Dev (§39): MARVYR_AUTOGUILD=1, atracado, deposita o porão, vende
 /// tudo à guilda, aceita a primeira oferta e desatraca — smoke do loop.
 fn auto_guild(
     time: Res<Time>,
@@ -117,7 +117,7 @@ fn auto_guild(
     mut step: Local<u8>,
     mut connection_manager: ResMut<ConnectionManager>,
 ) {
-    if std::env::var_os("MAREFORGE_AUTOGUILD").is_none() || !docked.0 {
+    if std::env::var_os("MARVYR_AUTOGUILD").is_none() || !docked.0 {
         return;
     }
     *timer += time.delta_secs();
@@ -503,7 +503,7 @@ fn update_contract_hud(
 
 #[cfg(test)]
 mod tests {
-    use mareforge_protocol::GuildPriceLine;
+    use marvyr_protocol::GuildPriceLine;
 
     use super::*;
 

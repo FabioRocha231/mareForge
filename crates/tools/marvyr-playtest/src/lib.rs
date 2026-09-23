@@ -1,4 +1,4 @@
-pub use mareforge_client::playtest::{disable_dev_automation, PLAYTEST_BANNER};
+pub use marvyr_client::playtest::{disable_dev_automation, PLAYTEST_BANNER};
 
 #[cfg(test)]
 mod tests {
@@ -15,12 +15,12 @@ mod tests {
 
     #[test]
     fn playtest_disables_inherited_automation_env() {
-        std::env::set_var("MAREFORGE_AUTODOCK", "1");
-        std::env::set_var("MAREFORGE_AUTOEQUIP", "1");
+        std::env::set_var("MARVYR_AUTODOCK", "1");
+        std::env::set_var("MARVYR_AUTOEQUIP", "1");
 
         disable_dev_automation();
 
-        assert!(std::env::var_os("MAREFORGE_AUTODOCK").is_none());
-        assert!(std::env::var_os("MAREFORGE_AUTOEQUIP").is_none());
+        assert!(std::env::var_os("MARVYR_AUTODOCK").is_none());
+        assert!(std::env::var_os("MARVYR_AUTOEQUIP").is_none());
     }
 }

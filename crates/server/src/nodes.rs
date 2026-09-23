@@ -9,10 +9,10 @@ use std::time::{Duration, Instant};
 use bevy::ecs::prelude::*;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
-use mareforge_domain_items::{ItemCatalog, ItemInstance};
-use mareforge_domain_world::ResourceNode;
-use mareforge_protocol::{GatherNode, GatherResult, NodeState, NodeUpdated, NodesSnapshot};
-use mareforge_shared::ids::{ItemDefinitionId, ItemInstanceId, ResourceNodeId};
+use marvyr_domain_items::{ItemCatalog, ItemInstance};
+use marvyr_domain_world::ResourceNode;
+use marvyr_protocol::{GatherNode, GatherResult, NodeState, NodeUpdated, NodesSnapshot};
+use marvyr_shared::ids::{ItemDefinitionId, ItemInstanceId, ResourceNodeId};
 use tracing::{info, warn};
 
 use crate::net::{DevItems, ReliableChannel, ServerGatherPolicy, ServerShip};
@@ -204,7 +204,7 @@ pub fn handle_gather(
         // MF-036: coleta é ação de mar — atracado, o casco não pega machado.
         if matches!(
             ship.presence,
-            mareforge_domain_ships::VesselPresence::Docked(_)
+            marvyr_domain_ships::VesselPresence::Docked(_)
         ) {
             info!(node_num, "coleta recusada: atracado (MF-036)");
             send_failure(&mut connection_manager, client_id, node_num);
@@ -340,7 +340,7 @@ pub fn respawn_nodes(
 mod tests {
     use super::*;
     use crate::net::DEV_SPAWN;
-    use mareforge_domain_world::WorldMap;
+    use marvyr_domain_world::WorldMap;
 
     /// MF-058: terra é obstáculo — node, spawn de jogador e spawn de NPC
     /// precisam estar na água, com folga de casco.
@@ -389,9 +389,9 @@ mod tests {
                 .zone_at(*x, *y)
                 .unwrap_or_else(|_| panic!("node {name} fora do mar declarado"));
             let expected_tier = if *region_name == "Ilha do Coral Negro" {
-                mareforge_domain_world::RiskTier::Lawless
+                marvyr_domain_world::RiskTier::Lawless
             } else {
-                mareforge_domain_world::RiskTier::Protected
+                marvyr_domain_world::RiskTier::Protected
             };
             assert_eq!(
                 zone.tier, expected_tier,

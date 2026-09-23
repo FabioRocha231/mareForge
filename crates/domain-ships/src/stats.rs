@@ -1,4 +1,4 @@
-use mareforge_domain_items::{CatalogError, ItemCatalog};
+use marvyr_domain_items::{CatalogError, ItemCatalog};
 use serde::{Deserialize, Serialize};
 
 use crate::components::EquippedComponents;
@@ -59,13 +59,13 @@ pub fn compute_ship_stats(
 
 #[cfg(test)]
 mod tests {
-    use mareforge_domain_items::{EquipmentStats, ItemDefinition};
-    use mareforge_shared::ids::{ItemDefinitionId, ShipDefinitionId};
+    use marvyr_domain_items::{EquipmentStats, ItemDefinition};
+    use marvyr_shared::ids::{ItemDefinitionId, ShipDefinitionId};
 
     use super::*;
     use crate::components::EquippedComponent;
     use crate::definition::ShipKind;
-    use mareforge_domain_items::EquipmentSlot;
+    use marvyr_domain_items::EquipmentSlot;
 
     fn def() -> ShipDefinition {
         ShipDefinition {
@@ -198,7 +198,7 @@ mod tests {
         catalog
             .register(ItemDefinition {
                 id,
-                kind: mareforge_domain_items::ItemKind::Resource,
+                kind: marvyr_domain_items::ItemKind::Resource,
                 equipment: None,
                 max_stack: 10,
                 base_weight: 100,

@@ -12,19 +12,19 @@ use bevy::ecs::prelude::*;
 use bevy::time::Time;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
-use mareforge_domain_economy::contract::OFFERS_PER_PORT;
-use mareforge_domain_economy::guild::GUILD_BASE_VALUES;
-use mareforge_domain_economy::{
+use marvyr_domain_economy::contract::OFFERS_PER_PORT;
+use marvyr_domain_economy::guild::GUILD_BASE_VALUES;
+use marvyr_domain_economy::{
     generate_offers, ActiveContract, Contract, ContractKind, GuildBook, LedgerKind, Money, PortSite,
 };
-use mareforge_domain_items::ItemCatalog;
-use mareforge_domain_ships::VesselPresence;
-use mareforge_domain_world::WorldMap;
-use mareforge_protocol::{
+use marvyr_domain_items::ItemCatalog;
+use marvyr_domain_ships::VesselPresence;
+use marvyr_domain_world::WorldMap;
+use marvyr_protocol::{
     AbandonContract, AcceptContract, ContractLine, ContractResult, ContractsSnapshot,
     GuildPriceLine, GuildPrices, PortStorageSnapshot, SellToGuild,
 };
-use mareforge_shared::ids::{CharacterId, ItemDefinitionId, ItemInstanceId, RegionId};
+use marvyr_shared::ids::{CharacterId, ItemDefinitionId, ItemInstanceId, RegionId};
 use tracing::info;
 
 use crate::market::{market_result, region_name, send_wallet, ServerMarket};

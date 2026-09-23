@@ -6,10 +6,10 @@
 
 use std::collections::HashMap;
 
-use mareforge_domain_items::{
+use marvyr_domain_items::{
     put_stack, take_stacks, CargoHold, Custody, ItemCatalog, ItemInstance, ItemLocation,
 };
-use mareforge_shared::ids::{ItemDefinitionId, ItemInstanceId, RegionId};
+use marvyr_shared::ids::{ItemDefinitionId, ItemInstanceId, RegionId};
 
 use crate::recipe::{Recipe, StationKind};
 use crate::validate::{can_craft, CraftError, InventoryView};
@@ -25,14 +25,14 @@ pub fn craft(
     catalog: &ItemCatalog,
     station: StationKind,
 ) -> Result<ItemInstance, CraftError> {
-    let mut quantities: HashMap<mareforge_shared::ids::ItemDefinitionId, u32> = HashMap::new();
+    let mut quantities: HashMap<marvyr_shared::ids::ItemDefinitionId, u32> = HashMap::new();
     for custody in hold.items() {
         *quantities.entry(custody.instance.definition).or_insert(0) += custody.instance.quantity;
     }
     // Definições relevantes para a validação: output e ingredientes. Output
     // ausente do catálogo cai no UnknownOutputItem de `can_craft`.
     let mut definitions = HashMap::new();
-    let mut reference = |id: mareforge_shared::ids::ItemDefinitionId| {
+    let mut reference = |id: marvyr_shared::ids::ItemDefinitionId| {
         if let Some(definition) = catalog.get(id) {
             definitions.insert(id, definition);
         }
@@ -165,8 +165,8 @@ pub fn craft_in_storage(
 mod tests {
     use smallvec::SmallVec;
 
-    use mareforge_domain_items::{CargoHold, ItemCatalog, ItemDefinition, ItemInstance, ItemKind};
-    use mareforge_shared::ids::{ItemDefinitionId, ItemInstanceId, RecipeId, ShipInstanceId};
+    use marvyr_domain_items::{CargoHold, ItemCatalog, ItemDefinition, ItemInstance, ItemKind};
+    use marvyr_shared::ids::{ItemDefinitionId, ItemInstanceId, RecipeId, ShipInstanceId};
 
     use super::craft;
     use crate::recipe::{Ingredient, Recipe, StationKind};
@@ -187,9 +187,9 @@ mod tests {
         ItemDefinition {
             id,
             kind: ItemKind::Equipment,
-            equipment: Some(mareforge_domain_items::EquipmentDefinition {
-                slot: mareforge_domain_items::EquipmentSlot::Hull,
-                stats: mareforge_domain_items::EquipmentStats::default(),
+            equipment: Some(marvyr_domain_items::EquipmentDefinition {
+                slot: marvyr_domain_items::EquipmentSlot::Hull,
+                stats: marvyr_domain_items::EquipmentStats::default(),
             }),
             max_stack: 1,
             base_weight: weight,
@@ -314,7 +314,7 @@ mod tests {
         assert!(matches!(
             error,
             crate::validate::CraftError::Cargo(
-                mareforge_domain_items::CargoError::CargoCapacityExceeded { .. }
+                marvyr_domain_items::CargoError::CargoCapacityExceeded { .. }
             )
         ));
         // Nada foi consumido: o porão segue com as 20 madeiras inteiras.
@@ -328,10 +328,10 @@ mod tests {
 mod storage_tests {
     use smallvec::SmallVec;
 
-    use mareforge_domain_items::{
+    use marvyr_domain_items::{
         quantity_of, Custody, ItemCatalog, ItemDefinition, ItemInstance, ItemKind, ItemLocation,
     };
-    use mareforge_shared::ids::{ItemDefinitionId, ItemInstanceId, RecipeId, RegionId};
+    use marvyr_shared::ids::{ItemDefinitionId, ItemInstanceId, RecipeId, RegionId};
 
     use super::craft_in_storage;
     use crate::recipe::{Ingredient, Recipe, StationKind};
@@ -352,9 +352,9 @@ mod storage_tests {
         ItemDefinition {
             id,
             kind: ItemKind::Equipment,
-            equipment: Some(mareforge_domain_items::EquipmentDefinition {
-                slot: mareforge_domain_items::EquipmentSlot::Hull,
-                stats: mareforge_domain_items::EquipmentStats::default(),
+            equipment: Some(marvyr_domain_items::EquipmentDefinition {
+                slot: marvyr_domain_items::EquipmentSlot::Hull,
+                stats: marvyr_domain_items::EquipmentStats::default(),
             }),
             max_stack: 1,
             base_weight: weight,

@@ -8,17 +8,17 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use lightyear::prelude::client::*;
 use lightyear::prelude::*;
-use mareforge_domain_crafting::recipe::StationKind;
-use mareforge_domain_items::{
+use marvyr_domain_crafting::recipe::StationKind;
+use marvyr_domain_items::{
     EquipmentDefinition, EquipmentSlot, EquipmentStats, ItemDefinition, ItemKind,
 };
-use mareforge_domain_ships::{can_equip, ShipDefinition, ShipKind, SlotSpec};
-use mareforge_protocol::{
+use marvyr_domain_ships::{can_equip, ShipDefinition, ShipKind, SlotSpec};
+use marvyr_protocol::{
     CraftItem, CraftResult, DockResult, EquipItem, ItemLine, LoadoutLine, LoadoutResult,
     LoadoutSnapshot, MarketResult, PortStorageSnapshot, RecipeEntry, StorageDepositAll,
     StorageLine, StorageWithdrawAll, Undock, UnequipItem,
 };
-use mareforge_shared::ids::{ItemDefinitionId, ShipDefinitionId};
+use marvyr_shared::ids::{ItemDefinitionId, ShipDefinitionId};
 
 use crate::crafting::KnownRecipes;
 use crate::guild::{
@@ -121,9 +121,9 @@ pub struct PortScreenState {
 
 impl Default for PortScreenState {
     fn default() -> Self {
-        // Dev (§39): MAREFORGE_PORT_TAB=Guilda|Contratos abre direto na aba
-        // (capturas MAREFORGE_SHOT sem teclado).
-        let dev_tab = std::env::var("MAREFORGE_PORT_TAB").ok().and_then(|label| {
+        // Dev (§39): MARVYR_PORT_TAB=Guilda|Contratos abre direto na aba
+        // (capturas MARVYR_SHOT sem teclado).
+        let dev_tab = std::env::var("MARVYR_PORT_TAB").ok().and_then(|label| {
             PortTab::ALL
                 .into_iter()
                 .find(|tab| tab.label().eq_ignore_ascii_case(&label))
@@ -974,7 +974,7 @@ fn update_port_screen(
 #[cfg(test)]
 mod tests {
     use bevy::ecs::system::RunSystemOnce;
-    use mareforge_protocol::IngredientLine;
+    use marvyr_protocol::IngredientLine;
 
     use super::*;
 
