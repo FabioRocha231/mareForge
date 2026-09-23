@@ -160,6 +160,23 @@ pub fn upsert_ship_visuals(
             ));
         }
 
+        // MF-057G: marcador de heading somente no navio do jogador
+        // (is_npc=false). Pequeno triangulo dourado a frente do casco —
+        // sem isso o sprite em escala ~0.4 vira um borrão sem direcao.
+        if !state.is_npc && !image_failed(&asset_server, &assets.ships) {
+            entity.with_children(|parent| {
+                parent.spawn((
+                    Mesh2d(meshes.add(Triangle2d::new(
+                        Vec2::new(0.0, 14.0),
+                        Vec2::new(-6.0, 6.0),
+                        Vec2::new(6.0, 6.0),
+                    ))),
+                    MeshMaterial2d(materials.add(Color::srgb(1.0, 0.85, 0.35))),
+                    Transform::from_xyz(0.0, 0.0, layers::SHIPS + 0.1),
+                ));
+            });
+        }
+
         // MF-057F: sombra + esteira (wake) atras do casco. Sombra fica
         // sempre visivel; wake so aparece quando o navio tem velocidade.
         if !image_failed(&asset_server, &assets.ship_shadow) {

@@ -31,7 +31,7 @@ pub fn windowed_app() -> App {
             .set(ImagePlugin::default_nearest())
             .set(WindowPlugin {
                 primary_window: Some(Window {
-                    title: "Mareforge".into(),
+                    title: "Mareforge — Playtest α".into(),
                     resolution: (1280.0_f32, 720.0_f32).into(),
                     ..default()
                 }),

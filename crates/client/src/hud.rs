@@ -4,6 +4,7 @@
 //! com o navio. Atracado, o HUD do mar esconde; o Port Screen assume.
 
 use bevy::prelude::*;
+use bevy::sprite::Anchor;
 use mareforge_shared::ids::ItemDefinitionId;
 
 use crate::assets::{layers, GameAssets};
@@ -81,13 +82,20 @@ fn spawn_hud_line(
     color: Color,
     local_offset: Vec3,
 ) {
+    // Icon sempre a esquerda do valor, com folga para que "100/100"
+    // (texto mais largo do HUD) nao encoste no glifo do icone.
     parent.spawn((
         Sprite {
             image: icon,
             color: Color::WHITE,
             ..default()
         },
-        Transform::from_translation(Vec3::new(local_offset.x, local_offset.y, layers::HUD + 0.1)),
+        Transform::from_translation(Vec3::new(
+            local_offset.x,
+            local_offset.y,
+            layers::HUD + 0.1,
+        ))
+        .with_scale(Vec3::splat(1.5)),
         HudIcon,
     ));
     parent.spawn((
@@ -98,10 +106,11 @@ fn spawn_hud_line(
         },
         TextColor(color),
         Transform::from_translation(Vec3::new(
-            local_offset.x + 16.0,
+            local_offset.x + 24.0,
             local_offset.y,
             layers::HUD + 0.1,
         )),
+        Anchor::CenterLeft,
     ));
 }
 
@@ -115,8 +124,8 @@ pub fn setup_hud(
     };
     let win_w = 1280.0_f32;
     let win_h = 720.0_f32;
-    let half_w = win_w / 2.0 * 0.5;
-    let half_h = win_h / 2.0 * 0.5;
+    let half_w = win_w / 2.0;
+    let half_h = win_h / 2.0;
 
     let ship_origin = Vec2::new(-half_w + 96.0, half_h - 56.0);
     commands
@@ -179,9 +188,11 @@ pub fn setup_hud(
         ))
         .with_children(|parent| {
             parent.spawn((
-                Text2d::new(String::from("Aguas da Ilha")),
+                // Placeholder ate o snapshot chegar — o texto definitivo vem
+                // do servidor e ja passa por short_zone_name no update.
+                Text2d::new(String::from("Aguas")),
                 TextFont {
-                    font_size: 13.0,
+                    font_size: 12.0,
                     ..default()
                 },
                 TextColor(Color::srgb(0.85, 0.92, 1.0)),
@@ -436,7 +447,12 @@ pub fn update_zone_panel(
 }
 
 fn short_zone_name(full: &str) -> String {
+    // Servidor manda "Águas do Porto da Serra" etc. — encurtamos para caber
+    // no painel do HUD.
     if let Some(rest) = full.strip_prefix("Aguas do Porto ") {
+        return format!("P. {rest}");
+    }
+    if let Some(rest) = full.strip_prefix("Águas do Porto ") {
         return format!("P. {rest}");
     }
     if let Some(rest) = full.strip_prefix("Águas da Ilha do ") {
@@ -522,6 +538,9 @@ fn _recipes_unused(_recipes: &KnownRecipes) {}
 /// Spawna o banner momentaneo de zona (fade-in/out) ao entrar em uma nova
 /// regiao. Vive enquanto o timer estiver ativo; some depois.
 pub fn spawn_zone_banner(commands: &mut Commands, camera: Entity, assets: &GameAssets, name: &str) {
+    // Mesmo encurtamento do HUD de zona persistente — "Águas do Porto da
+    // Serra" -> "P. da Serra" — para nao estourar a largura do painel.
+    let display = short_zone_name(name);
     commands
         .spawn((
             Sprite {
@@ -529,15 +548,17 @@ pub fn spawn_zone_banner(commands: &mut Commands, camera: Entity, assets: &GameA
                 color: Color::srgba(1.0, 1.0, 1.0, 0.0),
                 ..default()
             },
-            Transform::from_translation(Vec3::new(0.0, 220.0, layers::HUD + 5.0)),
+            // MF-057B: banner fica logo abaixo do HUD de zona persistente
+            // (que ocupa y ~+260), com folga para nao ser cortado pelo topo.
+            Transform::from_translation(Vec3::new(0.0, 120.0, layers::HUD + 5.0)),
             ZoneBannerPanel,
             ZoneBannerFade::default(),
         ))
         .with_children(|parent| {
             parent.spawn((
-                Text2d::new(name.to_owned()),
+                Text2d::new(display),
                 TextFont {
-                    font_size: 22.0,
+                    font_size: 14.0,
                     ..default()
                 },
                 TextColor(Color::srgba(0.95, 0.95, 0.95, 0.0)),

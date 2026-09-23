@@ -6,6 +6,7 @@ use std::collections::HashMap;
 
 use bevy::ecs::prelude::*;
 use bevy::prelude::*;
+use bevy::sprite::Anchor;
 use lightyear::prelude::*;
 use mareforge_protocol::{GatherResult, NodeState, NodeUpdated, NodesSnapshot};
 
@@ -75,8 +76,11 @@ fn spawn_node_visual(
     state: &NodeState,
 ) {
     let color = resource_color(&state.resource_name);
+    // Quebra o label em duas linhas e usa fonte menor — nome longo + estoque
+    // em uma linha cobria o icone do node seguinte no mapa denso.
     let label = format!(
-        "{} {}/{}",
+        "{}
+{}/{}",
         state.resource_name, state.stock, state.max_stock
     );
     let (image, layout, frame) = match state.resource_name.as_str() {
@@ -128,11 +132,12 @@ fn spawn_node_visual(
             },
             Text2d::new(label),
             TextFont {
-                font_size: 11.0,
+                font_size: 9.0,
                 ..default()
             },
             TextColor(Color::srgb(1.0, 0.98, 0.85)),
-            Transform::from_xyz(0.0, -18.0, layers::LABELS - layers::RESOURCES + 0.1),
+            Anchor::Center,
+            Transform::from_xyz(0.0, -34.0, layers::LABELS - layers::RESOURCES + 0.1),
         ));
     });
 }
@@ -214,7 +219,8 @@ fn handle_node_updated(
             sprite.color = tint;
         }
         let label_text = format!(
-            "{} {}/{}",
+            "{}
+{}/{}",
             state.resource_name, state.stock, state.max_stock
         );
         for (mut text, label) in &mut labels {

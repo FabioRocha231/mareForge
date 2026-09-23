@@ -5,6 +5,7 @@
 
 use bevy::asset::LoadState;
 use bevy::prelude::*;
+use bevy::sprite::Anchor;
 use mareforge_domain_world::{WorldMap, ZoneShape};
 
 use crate::assets::{frames, image_failed, layers, GameAssets};
@@ -16,7 +17,8 @@ const OCEAN_TILE_STEP: f32 = 48.0 * OCEAN_TILE_SCALE;
 
 /// Escala das props de porto: casas, docas, vegetacao, muros. O atlas
 /// fort-tiles.png tem tiles de 16 px; 3x = 48 px.
-const PROP_SCALE: f32 = 3.0;
+/* REMOVED: PROP_SCALE was only used by spawn_shore_band, which has been
+   removed (it created the dotted stair-step artifact around ports). */
 
 pub struct WorldVisualPlugin;
 
@@ -80,31 +82,6 @@ fn spawn_water_tile(
     ));
 }
 
-fn spawn_shore_band(
-    commands: &mut Commands,
-    assets: &GameAssets,
-    asset_server: &AssetServer,
-    position: Vec2,
-    rotation: f32,
-    scale: Vec3,
-) {
-    if image_failed(asset_server, &assets.shore_band) {
-        return;
-    }
-    commands.spawn((
-        Sprite {
-            image: assets.shore_band.clone(),
-            color: Color::WHITE,
-            ..default()
-        },
-        Transform {
-            translation: position.extend(layers::LAND - 0.2),
-            rotation: Quat::from_rotation_z(rotation),
-            scale,
-        },
-    ));
-}
-
 fn spawn_visual(commands: &mut Commands, sprite: Sprite, position: Vec2, scale: Vec3, z: f32) {
     commands.spawn((
         sprite,
@@ -161,18 +138,6 @@ fn spawn_vertical_slice_world(
             theme,
             position,
         );
-        // MF-057D: faixa de agua rasa ao redor do porto.
-        for (i, offset) in SHORE_OFFSETS.iter().enumerate() {
-            let rot = (i as f32) * std::f32::consts::PI / 2.0;
-            spawn_shore_band(
-                &mut commands,
-                &assets,
-                &asset_server,
-                position + *offset,
-                rot,
-                Vec3::splat(PROP_SCALE * 2.0),
-            );
-        }
     }
 
     let island = map.zones().iter().find_map(|zone| {
@@ -214,13 +179,6 @@ fn spawn_vertical_slice_world(
         warn!("WorldMap sem zona da Ilha do Coral Negro; marcador visual omitido");
     }
 }
-
-const SHORE_OFFSETS: [Vec2; 4] = [
-    Vec2::new(60.0, 0.0),
-    Vec2::new(0.0, 60.0),
-    Vec2::new(-60.0, 0.0),
-    Vec2::new(0.0, -60.0),
-];
 
 #[derive(Clone, Copy)]
 enum PortTheme {
@@ -342,19 +300,27 @@ fn spawn_landmark(
     position: Vec2,
     scale: Vec3,
 ) {
-    commands
-        .spawn((sprite, landmark_transform(position, scale)))
-        .with_children(|parent| {
-            parent.spawn((
-                Text2d::new(name),
-                TextFont {
-                    font_size: 14.0,
-                    ..default()
-                },
-                TextColor(Color::srgb(0.92, 0.88, 0.72)),
-                Transform::from_xyz(0.0, 40.0, layers::LABELS - layers::LAND),
-            ));
-        });
+    commands.spawn((sprite, landmark_transform(position, scale)));
+
+    commands.spawn((
+        Text2d::new(name),
+        // MF-057: wrap default do Text2d parte a string em varias linhas
+        // em world units e quebrava "Porto da Serra" em "Porto / da /
+        // Serra" estilizado. Forcamos uma linha so para o nome caber
+        // sobre o landmark sem fragmentar.
+        TextLayout::new_with_no_wrap(),
+        TextFont {
+            font_size: 14.0,
+            ..default()
+        },
+        TextColor(Color::srgb(0.92, 0.88, 0.72)),
+        Anchor::Center,
+        Transform::from_translation(Vec3::new(
+            position.x,
+            position.y + 64.0,
+            layers::LABELS,
+        )),
+    ));
 }
 
 fn landmark_transform(position: Vec2, scale: Vec3) -> Transform {
