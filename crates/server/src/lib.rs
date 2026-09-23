@@ -31,7 +31,13 @@ pub fn run_headless() {
     let playtest = std::env::args().any(|arg| arg == "--playtest");
 
     let mut app = App::new();
-    app.add_plugins(MinimalPlugins)
+    // Sem `run_loop` o MinimalPlugins gira o loop sem pausa (130%+ de CPU
+    // ocioso). 60 Hz de frame folga o FixedUpdate de 30 Hz e a rede.
+    app.add_plugins(
+        MinimalPlugins.set(bevy::app::ScheduleRunnerPlugin::run_loop(
+            std::time::Duration::from_secs_f64(1.0 / 60.0),
+        )),
+    )
         .add_plugins(TerminalCtrlCHandlerPlugin)
         .add_plugins(ServerPlugin)
         .add_plugins(net::ServerNetPlugin);

@@ -41,7 +41,7 @@ pub fn tick(
     mut exit: EventWriter<AppExit>,
 ) {
     counter.0 += 1;
-    tracing::info!(tick = counter.0, "server tick");
+    tracing::trace!(tick = counter.0, "server tick");
     if limit.0.is_some_and(|max| counter.0 >= max) {
         exit.send(AppExit::Success);
     }
