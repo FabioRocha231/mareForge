@@ -1,18 +1,18 @@
-//! HUD do mar (MF-057A, MF-057B, MF-057C, MF-057O, MF-057R).
-//! Quatro paineis discretos nos cantos da tela, banner momentaneo de zona
-//! e placa de aviso de PvP com fade. Tudo eh filho da Camera2d para navegar
-//! com o navio. Atracado, o HUD do mar esconde; o Port Screen assume.
+//! HUD do mar (MF-057A/B/C, MF-058) em bevy_ui: espaço de tela, independente
+//! da câmera, do zoom e do tamanho da janela. Painel do navio (topo-esq.),
+//! zona (topo-centro), recarga dos bordos + velas + prompt (base-centro),
+//! toasts (direita-meio), dica de controles (base-dir.), banner de zona e
+//! placa de PvP com fade. Atracado, o HUD do mar esconde; o Port Screen assume.
 
 use bevy::prelude::*;
-use bevy::sprite::Anchor;
+use mareforge_domain_world::RiskTier;
 use mareforge_shared::ids::ItemDefinitionId;
 
-use crate::assets::{layers, GameAssets};
-use crate::crafting::KnownRecipes;
 use crate::market::{KnownCatalog, Wallet};
 use crate::net::{KnownWrecks, MyShip, GATHER_RADIUS_SQ, LOOT_RADIUS_SQ};
 use crate::nodes::KnownNodes;
-use crate::zone::CurrentZone;
+use crate::ui::{self, UiFade};
+use crate::zone::{risk_tag, CurrentZone};
 
 /// Tudo que vive no HUD do mar. Atracado, todos os paineis escondem juntos.
 #[derive(Component)]
@@ -27,21 +27,55 @@ pub struct CooldownPanel;
 #[derive(Component)]
 pub struct PromptPanel;
 
-/// Sprite de icone anexado a uma linha do HUD.
+/// Texto do indicador de velas/marcha; o texto é dirigido por outro sistema.
 #[derive(Component)]
-pub struct HudIcon;
+pub struct SailIndicator;
 
-/// Marcador do texto de banner momentaneo de zona (zone_changed -> fade).
+/// Âncora (centro-topo) onde o banner de zona nasce.
 #[derive(Component)]
-pub struct ZoneBannerText;
+pub struct ZoneBannerAnchor;
+/// Âncora (centro) onde a placa de PvP nasce.
+#[derive(Component)]
+pub struct PvpWarningAnchor;
+/// Pilha de toasts de contexto (direita-meio).
+#[derive(Component)]
+pub struct ToastStack;
 
-/// Marcador da placa de fundo do banner momentaneo de zona.
 #[derive(Component)]
 pub struct ZoneBannerPanel;
-
-/// Marcador da placa de fundo do aviso de PvP com fade.
 #[derive(Component)]
 pub struct PvpWarningPanel;
+/// Toast curto de feedback de ação de contexto (atracar, coletar, saquear).
+#[derive(Component)]
+pub struct ContextToast;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Broadside {
+    Port,
+    Starboard,
+}
+
+/// Qual texto do HUD este nó mostra (um único `Query<&mut Text>` por sistema).
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HudText {
+    ShipName,
+    Hp,
+    Cargo,
+    Gold,
+    ZoneName,
+    ZoneTag,
+    ZoneRisk,
+    Reload(Broadside),
+    Prompt,
+}
+
+/// Qual barra este nó de preenchimento representa.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HudFill {
+    Hp,
+    Cargo,
+    Reload(Broadside),
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HudContext {
@@ -51,243 +85,270 @@ pub enum HudContext {
     NearNode(ItemDefinitionId),
 }
 
+/// Recarga de bordo do servidor (`server::net` tuning.cooldown_secs).
+// ponytail: espelha a constante do servidor; mandar no snapshot se virar por navio.
+const BROADSIDE_RELOAD_SECS: f32 = 4.0;
+
+pub const CONTROLS_HINT: &str =
+    "W/S velas | A/D leme | Q/R canhoes | E atracar | G coletar | F saquear | roda do mouse: zoom";
+
 pub struct HudPlugin;
 
 impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
+        app.add_systems(Startup, setup_hud).add_systems(
             Update,
             (
                 update_ship_panel,
                 update_zone_panel,
                 update_cooldown_panel,
                 update_prompt_panel,
-                tick_zone_banner,
-                tick_pvp_warning,
-                tick_context_toasts,
+                ui::tick_ui_fades,
             ),
         );
     }
 }
 
-fn panel_pos(local_x: f32, local_y: f32) -> Vec3 {
-    Vec3::new(local_x, local_y, layers::HUD)
+fn anchored(node: Node) -> Node {
+    Node {
+        position_type: PositionType::Absolute,
+        ..node
+    }
 }
 
-fn spawn_hud_line(
-    parent: &mut ChildBuilder,
-    icon: Handle<Image>,
-    text: &str,
-    font_size: f32,
-    color: Color,
-    local_offset: Vec3,
-) {
-    // Icon sempre a esquerda do valor, com folga para que "100/100"
-    // (texto mais largo do HUD) nao encoste no glifo do icone.
-    parent.spawn((
-        Sprite {
-            image: icon,
-            color: Color::WHITE,
+fn spawn_stat_row(parent: &mut ChildBuilder, label: &str, text: HudText, fill: HudFill) {
+    parent
+        .spawn(Node {
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(8.0),
             ..default()
-        },
-        Transform::from_translation(Vec3::new(
-            local_offset.x,
-            local_offset.y,
-            layers::HUD + 0.1,
-        ))
-        .with_scale(Vec3::splat(1.5)),
-        HudIcon,
-    ));
-    parent.spawn((
-        Text2d::new(text.to_owned()),
-        TextFont {
-            font_size,
-            ..default()
-        },
-        TextColor(color),
-        Transform::from_translation(Vec3::new(
-            local_offset.x + 24.0,
-            local_offset.y,
-            layers::HUD + 0.1,
-        )),
-        Anchor::CenterLeft,
-    ));
+        })
+        .with_children(|row| {
+            row.spawn((
+                ui::text(label, 11.0, ui::TEXT_DIM),
+                Node {
+                    width: Val::Px(44.0),
+                    ..default()
+                },
+            ));
+            ui::spawn_bar(row, 140.0, ui::OK_GREEN, fill);
+            row.spawn((ui::text("-", 12.0, ui::TEXT), text));
+        });
 }
 
-pub fn setup_hud(
-    mut commands: Commands,
-    camera: Query<Entity, With<Camera2d>>,
-    assets: Res<GameAssets>,
-) {
-    let Ok(camera) = camera.get_single() else {
-        return;
-    };
-    let win_w = 1280.0_f32;
-    let win_h = 720.0_f32;
-    let half_w = win_w / 2.0;
-    let half_h = win_h / 2.0;
+fn spawn_reload(parent: &mut ChildBuilder, label: &str, side: Broadside) {
+    parent
+        .spawn(Node {
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(4.0),
+            width: Val::Px(150.0),
+            flex_shrink: 0.0,
+            ..default()
+        })
+        .with_children(|col| {
+            col.spawn(Node {
+                justify_content: JustifyContent::SpaceBetween,
+                ..default()
+            })
+            .with_children(|row| {
+                row.spawn(ui::text(label, 11.0, ui::TEXT_DIM));
+                row.spawn((
+                    ui::text(cooldown_label(0.0), 11.0, ui::OK_GREEN),
+                    HudText::Reload(side),
+                ));
+            });
+            ui::spawn_bar(col, 150.0, ui::OK_GREEN, HudFill::Reload(side));
+        });
+}
 
-    let ship_origin = Vec2::new(-half_w + 96.0, half_h - 56.0);
+pub fn setup_hud(mut commands: Commands) {
+    // Topo-esquerda: painel do navio.
     commands
         .spawn((
-            Sprite {
-                image: assets.panel_ship.clone(),
-                color: Color::WHITE,
+            ui::panel(anchored(Node {
+                left: Val::Px(ui::MARGIN),
+                top: Val::Px(ui::MARGIN),
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(6.0),
                 ..default()
-            },
-            Transform::from_translation(panel_pos(ship_origin.x, ship_origin.y)),
+            })),
             SeaHud,
             ShipPanel,
         ))
-        .with_children(|parent| {
-            spawn_hud_line(
-                parent,
-                assets.icon_ship.clone(),
-                "Mercante",
-                14.0,
-                Color::srgb(0.95, 0.92, 0.78),
-                Vec3::new(-78.0, 28.0, 0.0),
-            );
-            spawn_hud_line(
-                parent,
-                assets.icon_hp.clone(),
-                "120/150",
-                13.0,
-                Color::srgb(0.7, 0.95, 0.75),
-                Vec3::new(-78.0, 8.0, 0.0),
-            );
-            spawn_hud_line(
-                parent,
-                assets.icon_cargo.clone(),
-                "0/100",
-                13.0,
-                Color::srgb(0.85, 0.85, 0.85),
-                Vec3::new(-78.0, -12.0, 0.0),
-            );
-            spawn_hud_line(
-                parent,
-                assets.icon_gold.clone(),
-                "0g",
-                13.0,
-                Color::srgb(0.95, 0.85, 0.55),
-                Vec3::new(-78.0, -32.0, 0.0),
-            );
+        .with_children(|panel| {
+            panel.spawn((ui::text("-", 15.0, ui::TEXT), HudText::ShipName));
+            spawn_stat_row(panel, "CASCO", HudText::Hp, HudFill::Hp);
+            spawn_stat_row(panel, "CARGA", HudText::Cargo, HudFill::Cargo);
+            panel.spawn((ui::text("0g", 13.0, ui::GOLD), HudText::Gold));
         });
 
-    let zone_origin = Vec2::new(half_w - 110.0, half_h - 36.0);
+    // Topo-centro: zona atual.
     commands
         .spawn((
-            Sprite {
-                image: assets.panel_zone.clone(),
-                color: Color::WHITE,
+            anchored(Node {
+                top: Val::Px(ui::MARGIN),
+                left: Val::Px(0.0),
+                right: Val::Px(0.0),
+                justify_content: JustifyContent::Center,
                 ..default()
-            },
-            Transform::from_translation(panel_pos(zone_origin.x, zone_origin.y)),
+            }),
             SeaHud,
-            ZonePanel,
         ))
-        .with_children(|parent| {
-            parent.spawn((
-                // Placeholder ate o snapshot chegar — o texto definitivo vem
-                // do servidor e ja passa por short_zone_name no update.
-                Text2d::new(String::from("Aguas")),
-                TextFont {
-                    font_size: 12.0,
+        .with_children(|row| {
+            row.spawn((
+                ui::panel(Node {
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Center,
+                    row_gap: Val::Px(2.0),
                     ..default()
-                },
-                TextColor(Color::srgb(0.85, 0.92, 1.0)),
-                Transform::from_translation(Vec3::new(-90.0, 8.0, layers::HUD + 0.1)),
-            ));
-            parent.spawn((
-                Text2d::new(String::from("protegido")),
-                TextFont {
-                    font_size: 11.0,
-                    ..default()
-                },
-                TextColor(Color::srgb(0.55, 0.85, 0.65)),
-                Transform::from_translation(Vec3::new(-90.0, -10.0, layers::HUD + 0.1)),
-            ));
+                }),
+                ZonePanel,
+            ))
+            .with_children(|panel| {
+                panel.spawn((ui::text("-", 16.0, ui::TEXT), HudText::ZoneName));
+                panel
+                    .spawn(Node {
+                        column_gap: Val::Px(8.0),
+                        align_items: AlignItems::Center,
+                        ..default()
+                    })
+                    .with_children(|tags| {
+                        tags.spawn((ui::text("", 12.0, ui::OK_GREEN), HudText::ZoneTag));
+                        tags.spawn((ui::text("", 11.0, ui::TEXT_DIM), HudText::ZoneRisk));
+                    });
+            });
         });
 
-    let cd_origin = Vec2::new(-half_w + 76.0, -half_h + 32.0);
+    // Base-centro: prompt de contexto acima da recarga + velas.
     commands
         .spawn((
-            Sprite {
-                image: assets.panel_cooldowns.clone(),
-                color: Color::WHITE,
+            anchored(Node {
+                bottom: Val::Px(ui::MARGIN),
+                left: Val::Px(0.0),
+                right: Val::Px(0.0),
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                row_gap: Val::Px(8.0),
                 ..default()
-            },
-            Transform::from_translation(panel_pos(cd_origin.x, cd_origin.y)),
+            }),
             SeaHud,
-            CooldownPanel,
         ))
-        .with_children(|parent| {
-            parent.spawn((
-                Text2d::new(String::from("BOM  pronto")),
-                TextFont {
-                    font_size: 11.0,
+        .with_children(|col| {
+            col.spawn((
+                ui::panel(Node {
+                    display: Display::None,
                     ..default()
-                },
-                TextColor(Color::srgb(0.85, 0.85, 0.85)),
-                Transform::from_translation(Vec3::new(-58.0, 6.0, layers::HUD + 0.1)),
-            ));
-            parent.spawn((
-                Text2d::new(String::from("EST  pronto")),
-                TextFont {
-                    font_size: 11.0,
+                }),
+                PromptPanel,
+            ))
+            .with_children(|panel| {
+                panel.spawn((ui::text("", 14.0, ui::GOLD), HudText::Prompt));
+            });
+            col.spawn((
+                ui::panel(Node {
+                    align_items: AlignItems::Center,
+                    column_gap: Val::Px(18.0),
                     ..default()
-                },
-                TextColor(Color::srgb(0.85, 0.85, 0.85)),
-                Transform::from_translation(Vec3::new(-58.0, -10.0, layers::HUD + 0.1)),
-            ));
+                }),
+                CooldownPanel,
+            ))
+            .with_children(|panel| {
+                spawn_reload(panel, "BOMBORDO (Q)", Broadside::Port);
+                panel.spawn((
+                    ui::text("VELAS: -", 12.0, ui::TEXT),
+                    Node {
+                        min_width: Val::Px(96.0),
+                        flex_shrink: 0.0,
+                        justify_content: JustifyContent::Center,
+                        ..default()
+                    },
+                    TextLayout::new_with_justify(JustifyText::Center),
+                    SailIndicator,
+                ));
+                spawn_reload(panel, "BORESTE (R)", Broadside::Starboard);
+            });
         });
 
-    let prompt_origin = Vec2::new(half_w - 140.0, -half_h + 26.0);
+    // Base-direita: dica de controles.
     commands
         .spawn((
-            Sprite {
-                image: assets.panel_prompt.clone(),
-                color: Color::WHITE,
+            ui::panel(anchored(Node {
+                right: Val::Px(ui::MARGIN),
+                bottom: Val::Px(ui::MARGIN),
+                max_width: Val::Px(240.0),
                 ..default()
-            },
-            Transform::from_translation(panel_pos(prompt_origin.x, prompt_origin.y)),
+            })),
             SeaHud,
-            PromptPanel,
         ))
-        .with_children(|parent| {
-            parent.spawn((
-                Text2d::new(String::new()),
-                TextFont {
-                    font_size: 13.0,
-                    ..default()
-                },
-                TextColor(Color::srgb(0.75, 0.92, 0.72)),
-                Transform::from_translation(Vec3::new(-118.0, 0.0, layers::HUD + 0.1)),
-            ));
+        .with_children(|panel| {
+            panel.spawn(ui::text(CONTROLS_HINT, 11.0, ui::TEXT_DIM));
         });
 
-    let _ = camera;
+    // Direita-meio: pilha de toasts.
+    commands.spawn((
+        anchored(Node {
+            right: Val::Px(ui::MARGIN),
+            top: Val::Percent(40.0),
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::End,
+            row_gap: Val::Px(6.0),
+            ..default()
+        }),
+        SeaHud,
+        ToastStack,
+    ));
+
+    // Âncoras de banner de zona e aviso de PvP (acima de tudo).
+    for (top, anchor_zone) in [(22.0, true), (38.0, false)] {
+        let mut anchor = commands.spawn((
+            anchored(Node {
+                top: Val::Percent(top),
+                left: Val::Px(0.0),
+                right: Val::Px(0.0),
+                justify_content: JustifyContent::Center,
+                ..default()
+            }),
+            GlobalZIndex(10),
+        ));
+        if anchor_zone {
+            anchor.insert(ZoneBannerAnchor);
+        } else {
+            anchor.insert(PvpWarningAnchor);
+        }
+    }
 }
 
 fn cooldown_label(secs: f32) -> String {
     if secs <= 0.0 {
-        String::from("pronto")
+        String::from("PRONTO")
     } else {
         format!("{:.0}s", secs.ceil())
     }
 }
 
+fn reload_fraction(secs: f32) -> f32 {
+    1.0 - (secs / BROADSIDE_RELOAD_SECS).clamp(0.0, 1.0)
+}
+
 fn hp_color(current: u32, max: u32) -> Color {
     if max == 0 {
-        return Color::srgb(0.95, 0.65, 0.55);
+        return ui::DANGER;
     }
     let ratio = current as f32 / max as f32;
     if ratio > 0.6 {
-        Color::srgb(0.7, 0.95, 0.75)
+        ui::OK_GREEN
     } else if ratio > 0.3 {
-        Color::srgb(0.95, 0.85, 0.55)
+        ui::AMBER
     } else {
-        Color::srgb(0.95, 0.55, 0.5)
+        ui::DANGER
+    }
+}
+
+fn ratio(current: u32, max: u32) -> f32 {
+    if max == 0 {
+        0.0
+    } else {
+        current as f32 / max as f32
     }
 }
 
@@ -300,6 +361,22 @@ fn ship_kind_label(kind: mareforge_domain_ships::ShipKind) -> &'static str {
     }
 }
 
+fn zone_tag(tier: RiskTier) -> (&'static str, Color) {
+    match tier {
+        RiskTier::Protected => ("PROTEGIDO", ui::OK_GREEN),
+        RiskTier::Frontier => ("FRONTEIRA", ui::AMBER),
+        RiskTier::Lawless => ("SEM LEI", ui::DANGER),
+    }
+}
+
+/// "Águas do Porto da Serra" -> Some("Porto da Serra").
+fn port_of_zone(zone_name: &str) -> Option<&str> {
+    let rest = zone_name
+        .strip_prefix("Águas do ")
+        .or_else(|| zone_name.strip_prefix("Aguas do "))?;
+    rest.starts_with("Porto").then_some(rest)
+}
+
 fn hud_context(
     pos: Vec2,
     zone: &CurrentZone,
@@ -310,7 +387,7 @@ fn hud_context(
     if zone
         .0
         .as_ref()
-        .is_some_and(|zone| zone.name.starts_with("Aguas do Porto"))
+        .is_some_and(|zone| port_of_zone(&zone.name).is_some())
     {
         return HudContext::NearPort;
     }
@@ -338,11 +415,11 @@ fn hud_context(
     HudContext::Idle
 }
 
-fn context_prompt(context: &HudContext, catalog: &KnownCatalog) -> String {
+fn context_prompt(context: &HudContext, catalog: &KnownCatalog, port: Option<&str>) -> String {
     match context {
         HudContext::Idle => String::new(),
-        HudContext::NearPort => String::from("E - Atracar"),
-        HudContext::NearWreck => String::from("F - Saquear destroco"),
+        HudContext::NearPort => format!("[E] Atracar em {}", port.unwrap_or("porto")),
+        HudContext::NearWreck => String::from("[F] Saquear destroço"),
         HudContext::NearNode(item) => {
             let name = catalog
                 .0
@@ -350,67 +427,62 @@ fn context_prompt(context: &HudContext, catalog: &KnownCatalog) -> String {
                 .find(|line| line.id == *item)
                 .map(|line| line.name.as_str())
                 .unwrap_or("recurso");
-            format!("G - Coletar {name}")
+            format!("[G] Coletar {name}")
         }
     }
 }
 
-/// Retorna as entidades Text2d filhas do painel na ordem do spawn.
-fn text_children(children: &Children, texts: &Query<&mut Text2d>) -> Vec<Entity> {
-    children
+fn my_visual<'a>(
+    my_ship: &MyShip,
+    visuals: &'a Query<&crate::ship::ShipVisual>,
+) -> Option<&'a mareforge_protocol::ShipState> {
+    let my_id = my_ship.0?;
+    visuals
         .iter()
-        .filter(|c| texts.get(**c).is_ok())
-        .copied()
-        .collect()
+        .find(|v| v.target.ship_id == my_id)
+        .map(|v| &v.target)
 }
 
-#[allow(clippy::type_complexity)]
 pub fn update_ship_panel(
     my_ship: Res<MyShip>,
     wallet: Res<Wallet>,
     visuals: Query<&crate::ship::ShipVisual>,
-    panel: Query<&Children, With<ShipPanel>>,
-    mut texts: Query<&mut Text2d>,
-    mut icons: Query<&mut TextColor, With<HudIcon>>,
+    mut texts: Query<(&mut Text, &HudText)>,
+    mut fills: Query<(&mut Node, &mut BackgroundColor, &HudFill)>,
 ) {
-    let Some(my_id) = my_ship.0 else {
+    let Some(state) = my_visual(&my_ship, &visuals) else {
         return;
     };
-    let Some(visual) = visuals.iter().find(|v| v.target.ship_id == my_id) else {
-        return;
-    };
-    let state = &visual.target;
-    let Ok(children) = panel.get_single() else {
-        return;
-    };
-    let text_entities = text_children(children, &texts);
-    if text_entities.len() >= 4 {
-        if let Ok([mut t0, mut t1, mut t2, mut t3]) = texts.get_many_mut([
-            text_entities[0],
-            text_entities[1],
-            text_entities[2],
-            text_entities[3],
-        ]) {
-            t0.0 = ship_kind_label(state.kind).to_owned();
-            t1.0 = format!("{}/{}", state.hp, state.max_hp);
-            t2.0 = format!("{}/{}", state.cargo_weight, state.cargo_capacity);
-            t3.0 = format!("{}g", wallet.0);
+    for (mut text, kind) in &mut texts {
+        let value = match kind {
+            HudText::ShipName => ship_kind_label(state.kind).to_owned(),
+            HudText::Hp => format!("{}/{}", state.hp, state.max_hp),
+            HudText::Cargo => format!("{}/{}", state.cargo_weight, state.cargo_capacity),
+            HudText::Gold => format!("{}g", wallet.0),
+            _ => continue,
+        };
+        if text.0 != value {
+            text.0 = value;
         }
     }
-    let hp_color_v = hp_color(state.hp, state.max_hp);
-    if let Some(child) = children.get(1) {
-        if let Ok(mut tc) = icons.get_mut(*child) {
-            tc.0 = hp_color_v;
+    for (mut node, mut bg, fill) in &mut fills {
+        match fill {
+            HudFill::Hp => {
+                node.width = ui::bar_width(ratio(state.hp, state.max_hp));
+                bg.0 = hp_color(state.hp, state.max_hp);
+            }
+            HudFill::Cargo => {
+                node.width = ui::bar_width(ratio(state.cargo_weight, state.cargo_capacity));
+                bg.0 = ui::GOLD.with_alpha(0.85);
+            }
+            HudFill::Reload(_) => {}
         }
     }
 }
 
-#[allow(clippy::type_complexity)]
 pub fn update_zone_panel(
     zone: Res<CurrentZone>,
-    panel: Query<&Children, With<ZonePanel>>,
-    mut texts: Query<&mut Text2d>,
-    mut icons: Query<&mut TextColor, With<HudIcon>>,
+    mut texts: Query<(&mut Text, &mut TextColor, &HudText)>,
 ) {
     if !zone.is_changed() {
         return;
@@ -418,30 +490,16 @@ pub fn update_zone_panel(
     let Some(zone) = zone.0.as_ref() else {
         return;
     };
-    let name = short_zone_name(&zone.name);
-    let tag_color = match zone.tier {
-        mareforge_domain_world::RiskTier::Protected => Color::srgb(0.55, 0.85, 0.65),
-        mareforge_domain_world::RiskTier::Frontier => Color::srgb(0.95, 0.75, 0.45),
-        mareforge_domain_world::RiskTier::Lawless => Color::srgb(0.95, 0.55, 0.5),
-    };
-    let tag = match zone.tier {
-        mareforge_domain_world::RiskTier::Protected => "protegido",
-        mareforge_domain_world::RiskTier::Frontier => "pvp ativo",
-        mareforge_domain_world::RiskTier::Lawless => "pvp ativo",
-    };
-    let Ok(children) = panel.get_single() else {
-        return;
-    };
-    let text_entities = text_children(children, &texts);
-    if text_entities.len() >= 2 {
-        if let Ok([mut t0, mut t1]) = texts.get_many_mut([text_entities[0], text_entities[1]]) {
-            t0.0 = name;
-            t1.0 = tag.to_owned();
-        }
-    }
-    for child in children.iter() {
-        if let Ok(mut tc) = icons.get_mut(*child) {
-            tc.0 = tag_color;
+    let (tag, tag_color) = zone_tag(zone.tier);
+    for (mut text, mut color, kind) in &mut texts {
+        match kind {
+            HudText::ZoneName => text.0 = short_zone_name(&zone.name),
+            HudText::ZoneTag => {
+                text.0 = tag.to_owned();
+                color.0 = tag_color;
+            }
+            HudText::ZoneRisk => text.0 = risk_tag(zone.tier).to_owned(),
+            _ => {}
         }
     }
 }
@@ -461,34 +519,36 @@ fn short_zone_name(full: &str) -> String {
     full.to_owned()
 }
 
-#[allow(clippy::type_complexity)]
 pub fn update_cooldown_panel(
     my_ship: Res<MyShip>,
     visuals: Query<&crate::ship::ShipVisual>,
-    panel: Query<&Children, With<CooldownPanel>>,
-    mut texts: Query<&mut Text2d>,
+    mut texts: Query<(&mut Text, &mut TextColor, &HudText)>,
+    mut fills: Query<(&mut Node, &mut BackgroundColor, &HudFill)>,
 ) {
-    let Some(my_id) = my_ship.0 else {
+    let Some(state) = my_visual(&my_ship, &visuals) else {
         return;
     };
-    let Some(visual) = visuals.iter().find(|v| v.target.ship_id == my_id) else {
-        return;
+    let secs = |side: Broadside| match side {
+        Broadside::Port => state.port_cooldown_secs,
+        Broadside::Starboard => state.starboard_cooldown_secs,
     };
-    let bom = cooldown_label(visual.target.port_cooldown_secs);
-    let est = cooldown_label(visual.target.starboard_cooldown_secs);
-    let Ok(children) = panel.get_single() else {
-        return;
-    };
-    let text_entities = text_children(children, &texts);
-    if text_entities.len() >= 2 {
-        if let Ok([mut t0, mut t1]) = texts.get_many_mut([text_entities[0], text_entities[1]]) {
-            t0.0 = format!("BOM  {bom}");
-            t1.0 = format!("EST  {est}");
+    for (mut text, mut color, kind) in &mut texts {
+        if let HudText::Reload(side) = kind {
+            let s = secs(*side);
+            text.0 = cooldown_label(s);
+            color.0 = if s <= 0.0 { ui::OK_GREEN } else { ui::TEXT_DIM };
+        }
+    }
+    for (mut node, mut bg, fill) in &mut fills {
+        if let HudFill::Reload(side) = fill {
+            let s = secs(*side);
+            node.width = ui::bar_width(reload_fraction(s));
+            bg.0 = if s <= 0.0 { ui::OK_GREEN } else { ui::AMBER };
         }
     }
 }
 
-#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 pub fn update_prompt_panel(
     my_ship: Res<MyShip>,
     zone: Res<CurrentZone>,
@@ -496,24 +556,29 @@ pub fn update_prompt_panel(
     nodes: Res<KnownNodes>,
     catalog: Res<KnownCatalog>,
     visuals: Query<&crate::ship::ShipVisual>,
-    panel: Query<&Children, With<PromptPanel>>,
-    mut texts: Query<&mut Text2d>,
+    mut panel: Query<&mut Node, With<PromptPanel>>,
+    mut texts: Query<(&mut Text, &HudText)>,
 ) {
-    let Some(my_id) = my_ship.0 else {
+    let Some(state) = my_visual(&my_ship, &visuals) else {
         return;
     };
-    let Some(visual) = visuals.iter().find(|v| v.target.ship_id == my_id) else {
-        return;
-    };
-    let pos = Vec2::new(visual.target.x, visual.target.y);
+    let pos = Vec2::new(state.x, state.y);
     let context = hud_context(pos, &zone, &wrecks, &nodes, &catalog);
-    let prompt = context_prompt(&context, &catalog);
-    let Ok(children) = panel.get_single() else {
-        return;
+    let port = zone.0.as_ref().and_then(|zone| port_of_zone(&zone.name));
+    let prompt = context_prompt(&context, &catalog, port);
+    let display = if prompt.is_empty() {
+        Display::None
+    } else {
+        Display::Flex
     };
-    for child in children.iter() {
-        if let Ok(mut t) = texts.get_mut(*child) {
-            t.0 = prompt.clone();
+    for mut node in &mut panel {
+        if node.display != display {
+            node.display = display;
+        }
+    }
+    for (mut text, kind) in &mut texts {
+        if *kind == HudText::Prompt && text.0 != prompt {
+            text.0 = prompt.clone();
         }
     }
 }
@@ -532,228 +597,81 @@ pub fn toggle_sea_hud(
     }
 }
 
-#[allow(dead_code)]
-fn _recipes_unused(_recipes: &KnownRecipes) {}
-
-/// Spawna o banner momentaneo de zona (fade-in/out) ao entrar em uma nova
-/// regiao. Vive enquanto o timer estiver ativo; some depois.
-pub fn spawn_zone_banner(commands: &mut Commands, camera: Entity, assets: &GameAssets, name: &str) {
-    // Mesmo encurtamento do HUD de zona persistente — "Águas do Porto da
-    // Serra" -> "P. da Serra" — para nao estourar a largura do painel.
-    let display = short_zone_name(name);
-    commands
-        .spawn((
-            Sprite {
-                image: assets.panel_zone.clone(),
-                color: Color::srgba(1.0, 1.0, 1.0, 0.0),
-                ..default()
-            },
-            // MF-057B: banner fica logo abaixo do HUD de zona persistente
-            // (que ocupa y ~+260), com folga para nao ser cortado pelo topo.
-            Transform::from_translation(Vec3::new(0.0, 120.0, layers::HUD + 5.0)),
-            ZoneBannerPanel,
-            ZoneBannerFade::default(),
-        ))
-        .with_children(|parent| {
-            parent.spawn((
-                Text2d::new(display),
-                TextFont {
-                    font_size: 14.0,
-                    ..default()
-                },
-                TextColor(Color::srgba(0.95, 0.95, 0.95, 0.0)),
-                Transform::from_translation(Vec3::new(0.0, 0.0, layers::HUD + 5.1)),
-                ZoneBannerText,
-            ));
-        })
-        .set_parent(camera);
-}
-
-#[derive(Component, Default)]
-pub struct ZoneBannerFade {
-    pub elapsed: f32,
-}
-
-/// Spawna a placa de aviso de PvP com fade out.
-pub fn spawn_pvp_warning(commands: &mut Commands, camera: Entity, assets: &GameAssets) {
-    commands
-        .spawn((
-            Sprite {
-                image: assets.panel_warning.clone(),
-                color: Color::srgba(1.0, 0.6, 0.5, 0.0),
-                ..default()
-            },
-            Transform::from_translation(Vec3::new(0.0, -40.0, layers::OVERLAY)),
-            PvpWarningPanel,
-            PvpWarningFade::default(),
-        ))
-        .with_children(|parent| {
-            parent.spawn((
-                Text2d::new(String::from("AGUAS DE RISCO")),
-                TextFont {
-                    font_size: 22.0,
-                    ..default()
-                },
-                TextColor(Color::srgba(1.0, 0.85, 0.65, 0.0)),
-                Transform::from_translation(Vec3::new(0.0, 18.0, layers::OVERLAY + 0.1)),
-                PvpWarningText,
-            ));
-            parent.spawn((
-                Text2d::new(String::from(
-                    "Seu navio, equipamentos e carga podem ser perdidos.",
-                )),
-                TextFont {
-                    font_size: 13.0,
-                    ..default()
-                },
-                TextColor(Color::srgba(0.95, 0.85, 0.7, 0.0)),
-                Transform::from_translation(Vec3::new(0.0, -8.0, layers::OVERLAY + 0.1)),
-                PvpWarningSubText,
-            ));
-        })
-        .set_parent(camera);
-}
-
-#[derive(Component)]
-pub struct PvpWarningText;
-
-#[derive(Component)]
-pub struct PvpWarningSubText;
-
-#[derive(Component, Default)]
-pub struct PvpWarningFade {
-    pub elapsed: f32,
-}
-
-pub fn tick_zone_banner(
-    time: Res<Time>,
-    mut commands: Commands,
-    mut banners: Query<(Entity, &mut ZoneBannerFade, &mut Sprite, &Children)>,
-    mut texts: Query<&mut TextColor, With<ZoneBannerText>>,
-) {
-    for (entity, mut fade, mut sprite, children) in &mut banners {
-        fade.elapsed += time.delta_secs();
-        let alpha = if fade.elapsed < 0.4 {
-            fade.elapsed / 0.4
-        } else if fade.elapsed < 2.4 {
-            1.0
-        } else if fade.elapsed < 3.2 {
-            1.0 - (fade.elapsed - 2.4) / 0.8
-        } else {
-            0.0
-        };
-        let srgba = sprite.color.to_srgba();
-        sprite.color = Color::srgba(srgba.red, srgba.green, srgba.blue, alpha);
-        for child in children.iter() {
-            if let Ok(mut tc) = texts.get_mut(*child) {
-                let c = tc.0.to_srgba();
-                tc.0 = Color::srgba(c.red, c.green, c.blue, alpha);
-            }
-        }
-        if fade.elapsed >= 3.2 {
-            commands.entity(entity).despawn();
-        }
-    }
-}
-
-pub fn tick_pvp_warning(
-    time: Res<Time>,
-    mut commands: Commands,
-    mut plates: Query<(Entity, &mut PvpWarningFade, &mut Sprite, &Children)>,
-    mut text_colors: Query<&mut TextColor>,
-) {
-    let dt = time.delta_secs();
-    for (entity, mut fade, mut sprite, children) in &mut plates {
-        fade.elapsed += dt;
-        let alpha = if fade.elapsed < 0.5 {
-            fade.elapsed / 0.5
-        } else if fade.elapsed < 4.0 {
-            1.0
-        } else if fade.elapsed < 5.0 {
-            1.0 - (fade.elapsed - 4.0) / 1.0
-        } else {
-            0.0
-        };
-        let srgba = sprite.color.to_srgba();
-        sprite.color = Color::srgba(srgba.red, srgba.green, srgba.blue, alpha);
-        for child in children.iter() {
-            if let Ok(mut tc) = text_colors.get_mut(*child) {
-                let c = tc.0.to_srgba();
-                tc.0 = Color::srgba(c.red, c.green, c.blue, alpha);
-            }
-        }
-        if fade.elapsed >= 5.0 {
-            commands.entity(entity).despawn();
-        }
-    }
-}
-
-/// Componente de toast: notificação curta que aparece no rodape e some.
-/// Usada para feedback de acoes de contexto (atracar, coletar, lootear).
-#[derive(Component)]
-pub struct ContextToast {
-    pub elapsed: f32,
-}
-
-pub fn spawn_context_toast(
+fn spawn_faded_panel(
     commands: &mut Commands,
-    camera: Entity,
-    assets: &GameAssets,
-    message: &str,
+    parent: Entity,
+    fade: (f32, f32, f32),
+    border: Color,
+    marker: impl Bundle,
+    lines: &[(&str, f32, Color)],
 ) {
+    let bg = ui::PANEL_BG;
     commands
         .spawn((
-            Sprite {
-                image: assets.panel_prompt.clone(),
-                color: Color::srgba(1.0, 1.0, 1.0, 0.0),
+            Node {
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                row_gap: Val::Px(4.0),
+                padding: UiRect::axes(Val::Px(22.0), Val::Px(10.0)),
+                border: UiRect::all(Val::Px(1.0)),
                 ..default()
             },
-            Transform::from_translation(Vec3::new(0.0, -200.0, layers::OVERLAY - 1.0)),
-            ContextToast { elapsed: 0.0 },
+            BackgroundColor(bg.with_alpha(0.0)),
+            BorderColor(border.with_alpha(0.0)),
+            BorderRadius::all(Val::Px(6.0)),
+            UiFade::new(fade.0, fade.1, fade.2, bg, border),
+            marker,
         ))
-        .with_children(|parent| {
-            parent.spawn((
-                Text2d::new(message.to_owned()),
-                TextFont {
-                    font_size: 14.0,
-                    ..default()
-                },
-                TextColor(Color::srgba(0.95, 0.95, 0.85, 0.0)),
-                Transform::from_translation(Vec3::new(0.0, 0.0, layers::OVERLAY - 0.9)),
-            ));
+        .with_children(|panel| {
+            for (value, size, color) in lines {
+                panel.spawn(ui::text(*value, *size, color.with_alpha(0.0)));
+            }
         })
-        .set_parent(camera);
+        .set_parent(parent);
 }
 
-pub fn tick_context_toasts(
-    time: Res<Time>,
-    mut commands: Commands,
-    mut toasts: Query<(Entity, &mut ContextToast, &mut Sprite, &Children)>,
-    mut texts: Query<&mut TextColor>,
-) {
-    for (entity, mut toast, mut sprite, children) in &mut toasts {
-        toast.elapsed += time.delta_secs();
-        let alpha = if toast.elapsed < 0.3 {
-            toast.elapsed / 0.3
-        } else if toast.elapsed < 2.0 {
-            1.0
-        } else if toast.elapsed < 2.5 {
-            1.0 - (toast.elapsed - 2.0) / 0.5
-        } else {
-            0.0
-        };
-        let srgba = sprite.color.to_srgba();
-        sprite.color = Color::srgba(srgba.red, srgba.green, srgba.blue, alpha);
-        for child in children.iter() {
-            if let Ok(mut tc) = texts.get_mut(*child) {
-                let c = tc.0.to_srgba();
-                tc.0 = Color::srgba(c.red, c.green, c.blue, alpha);
-            }
-        }
-        if toast.elapsed >= 2.5 {
-            commands.entity(entity).despawn();
-        }
-    }
+/// Banner momentaneo de zona (fade 0.4s in, até 2.4s, out até 3.2s).
+pub fn spawn_zone_banner(commands: &mut Commands, anchor: Entity, name: &str) {
+    let display = short_zone_name(name);
+    spawn_faded_panel(
+        commands,
+        anchor,
+        (0.4, 2.4, 3.2),
+        ui::PANEL_BORDER,
+        ZoneBannerPanel,
+        &[(&display, 30.0, ui::TEXT)],
+    );
+}
+
+/// Placa de aviso de PvP (fade 0.5s in, até 4s, out até 5s).
+pub fn spawn_pvp_warning(commands: &mut Commands, anchor: Entity) {
+    spawn_faded_panel(
+        commands,
+        anchor,
+        (0.5, 4.0, 5.0),
+        ui::DANGER,
+        PvpWarningPanel,
+        &[
+            ("AGUAS DE RISCO", 24.0, ui::DANGER),
+            (
+                "Seu navio, equipamentos e carga podem ser perdidos.",
+                14.0,
+                ui::TEXT,
+            ),
+        ],
+    );
+}
+
+/// Toast de contexto na pilha da direita (fade 0.3s in, até 2s, out até 2.5s).
+pub fn spawn_context_toast(commands: &mut Commands, stack: Entity, message: &str) {
+    spawn_faded_panel(
+        commands,
+        stack,
+        (0.3, 2.0, 2.5),
+        ui::PANEL_BORDER,
+        ContextToast,
+        &[(message, 13.0, ui::TEXT)],
+    );
 }
 
 #[cfg(test)]
@@ -791,11 +709,23 @@ mod tests {
         }
     }
 
+    fn texts(world: &mut World) -> Vec<String> {
+        let mut q = world.query::<&Text>();
+        q.iter(world).map(|t| t.0.clone()).collect()
+    }
+
     #[test]
     fn cooldown_label_is_human_readable() {
-        assert_eq!(cooldown_label(0.0), "pronto");
+        assert_eq!(cooldown_label(0.0), "PRONTO");
         assert_eq!(cooldown_label(0.4), "1s");
         assert_eq!(cooldown_label(3.6), "4s");
+    }
+
+    #[test]
+    fn reload_bar_fills_as_cooldown_drops() {
+        assert_eq!(reload_fraction(BROADSIDE_RELOAD_SECS), 0.0);
+        assert_eq!(reload_fraction(0.0), 1.0);
+        assert!((reload_fraction(1.0) - 0.75).abs() < 1e-5);
     }
 
     #[test]
@@ -819,15 +749,32 @@ mod tests {
     }
 
     #[test]
+    fn port_of_zone_accepts_accented_server_names() {
+        assert_eq!(
+            port_of_zone("Águas do Porto da Serra"),
+            Some("Porto da Serra")
+        );
+        assert_eq!(
+            port_of_zone("Aguas do Porto da Mina"),
+            Some("Porto da Mina")
+        );
+        assert_eq!(port_of_zone("Rota da Costa"), None);
+    }
+
+    #[test]
     fn context_prompt_is_empty_when_idle() {
-        let prompt = context_prompt(&HudContext::Idle, &KnownCatalog::default());
+        let prompt = context_prompt(&HudContext::Idle, &KnownCatalog::default(), None);
         assert!(prompt.is_empty());
     }
 
     #[test]
     fn context_prompt_uses_port_label_when_near_port() {
-        let prompt = context_prompt(&HudContext::NearPort, &KnownCatalog::default());
-        assert!(prompt.contains("Atracar"));
+        let prompt = context_prompt(
+            &HudContext::NearPort,
+            &KnownCatalog::default(),
+            Some("Porto da Serra"),
+        );
+        assert_eq!(prompt, "[E] Atracar em Porto da Serra");
     }
 
     #[test]
@@ -842,46 +789,76 @@ mod tests {
                 equipment_slot: None,
             },
         )]));
-        let prompt = context_prompt(&HudContext::NearNode(id), &catalog);
-        assert!(prompt.contains("Madeira"), "{prompt}");
+        let prompt = context_prompt(&HudContext::NearNode(id), &catalog, None);
+        assert_eq!(prompt, "[G] Coletar Madeira");
     }
 
     #[test]
-    fn update_cooldown_panel_renders_bom_and_est() {
+    fn update_cooldown_panel_renders_both_broadsides() {
         let mut world = World::new();
         world.insert_resource(MyShip(Some(1)));
-        let parent = world
-            .spawn(ShipVisual {
-                target: ship_state(3.2, 0.0),
-                last_seen: Instant::now(),
-            })
+        world.spawn(ShipVisual {
+            target: ship_state(3.0, 0.0),
+            last_seen: Instant::now(),
+        });
+        world.spawn((
+            Text::default(),
+            TextColor::default(),
+            HudText::Reload(Broadside::Port),
+        ));
+        world.spawn((
+            Text::default(),
+            TextColor::default(),
+            HudText::Reload(Broadside::Starboard),
+        ));
+        let port_fill = world
+            .spawn((
+                Node::default(),
+                BackgroundColor::default(),
+                HudFill::Reload(Broadside::Port),
+            ))
             .id();
-        let panel_ent = world
-            .spawn((CooldownPanel, Transform::default(), Visibility::default()))
-            .id();
-        world.entity_mut(panel_ent).add_child(parent);
-        // First text is BOM line, second is EST line.
-        let t0 = world
-            .spawn((Text2d::new(String::new()), Transform::default()))
-            .id();
-        let t1 = world
-            .spawn((Text2d::new(String::new()), Transform::default()))
-            .id();
-        world.entity_mut(panel_ent).add_child(t0);
-        world.entity_mut(panel_ent).add_child(t1);
 
         let mut sched = Schedule::default();
         sched.add_systems(update_cooldown_panel);
         sched.run(&mut world);
 
-        let mut q = world.query::<&Text2d>();
-        let texts: Vec<String> = q.iter(&world).map(|t| t.0.clone()).collect();
-        assert!(texts.iter().any(|t| t.contains("BOM")), "texts={texts:?}");
-        assert!(texts.iter().any(|t| t.contains("EST")), "texts={texts:?}");
-        assert!(texts.iter().any(|t| t.contains("4s")), "texts={texts:?}");
-        assert!(
-            texts.iter().any(|t| t.contains("pronto")),
-            "texts={texts:?}"
+        let texts = texts(&mut world);
+        assert!(texts.iter().any(|t| t == "3s"), "texts={texts:?}");
+        assert!(texts.iter().any(|t| t == "PRONTO"), "texts={texts:?}");
+        assert_eq!(
+            world.get::<Node>(port_fill).unwrap().width,
+            Val::Percent(25.0)
+        );
+    }
+
+    #[test]
+    fn update_ship_panel_fills_hp_and_cargo() {
+        let mut world = World::new();
+        world.insert_resource(MyShip(Some(1)));
+        world.insert_resource(Wallet(1000));
+        world.spawn(ShipVisual {
+            target: ship_state(0.0, 0.0),
+            last_seen: Instant::now(),
+        });
+        for kind in [HudText::Hp, HudText::Cargo, HudText::Gold] {
+            world.spawn((Text::default(), kind));
+        }
+        let hp_fill = world
+            .spawn((Node::default(), BackgroundColor::default(), HudFill::Hp))
+            .id();
+
+        let mut sched = Schedule::default();
+        sched.add_systems(update_ship_panel);
+        sched.run(&mut world);
+
+        let texts = texts(&mut world);
+        for expected in ["120/150", "8/100", "1000g"] {
+            assert!(texts.iter().any(|t| t == expected), "texts={texts:?}");
+        }
+        assert_eq!(
+            world.get::<Node>(hp_fill).unwrap().width,
+            Val::Percent(80.0)
         );
     }
 
@@ -892,29 +869,24 @@ mod tests {
             tier: RiskTier::Frontier,
             name: String::from("Rota da Costa"),
         })));
-        let panel_ent = world
-            .spawn((ZonePanel, Transform::default(), Visibility::default()))
-            .id();
-        let t0 = world
-            .spawn((Text2d::new(String::new()), Transform::default()))
-            .id();
-        let t1 = world
-            .spawn((Text2d::new(String::new()), Transform::default()))
-            .id();
-        world.entity_mut(panel_ent).add_child(t0);
-        world.entity_mut(panel_ent).add_child(t1);
+        for kind in [HudText::ZoneName, HudText::ZoneTag, HudText::ZoneRisk] {
+            world.spawn((Text::default(), TextColor::default(), kind));
+        }
 
         let mut sched = Schedule::default();
         sched.add_systems(update_zone_panel);
         sched.run(&mut world);
 
-        let mut q = world.query::<&Text2d>();
-        let texts: Vec<String> = q.iter(&world).map(|t| t.0.clone()).collect();
+        let texts = texts(&mut world);
         assert!(
             texts.iter().any(|t| t == "Rota da Costa"),
             "texts={texts:?}"
         );
-        assert!(texts.iter().any(|t| t == "pvp ativo"), "texts={texts:?}");
+        assert!(texts.iter().any(|t| t == "FRONTEIRA"), "texts={texts:?}");
+        assert!(
+            texts.iter().any(|t| t == risk_tag(RiskTier::Frontier)),
+            "texts={texts:?}"
+        );
     }
 
     #[test]
@@ -937,5 +909,18 @@ mod tests {
             *world.get::<Visibility>(hud_ent).unwrap(),
             Visibility::Visible
         );
+    }
+
+    #[test]
+    fn hud_does_not_attach_to_camera() {
+        let mut world = World::new();
+        let camera = world.spawn(Camera2d).id();
+        let mut sched = Schedule::default();
+        sched.add_systems(setup_hud);
+        sched.run(&mut world);
+
+        assert!(world.get::<Children>(camera).is_none());
+        let mut q = world.query_filtered::<Entity, With<SailIndicator>>();
+        assert_eq!(q.iter(&world).count(), 1);
     }
 }
