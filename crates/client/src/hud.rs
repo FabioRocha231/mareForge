@@ -492,13 +492,18 @@ pub fn update_ship_panel(
     }
     for (mut node, mut bg, fill) in &mut fills {
         match fill {
+            // Só escreve quando muda: Node/Text marcados como mudados
+            // forçam relayout e reshaping de texto no frame inteiro.
             HudFill::Hp => {
-                node.width = ui::bar_width(ratio(state.hp, state.max_hp));
-                bg.0 = hp_color(state.hp, state.max_hp);
+                set_width(&mut node, ui::bar_width(ratio(state.hp, state.max_hp)));
+                bg.set_if_neq(BackgroundColor(hp_color(state.hp, state.max_hp)));
             }
             HudFill::Cargo => {
-                node.width = ui::bar_width(ratio(state.cargo_weight, state.cargo_capacity));
-                bg.0 = ui::GOLD.with_alpha(0.85);
+                set_width(
+                    &mut node,
+                    ui::bar_width(ratio(state.cargo_weight, state.cargo_capacity)),
+                );
+                bg.set_if_neq(BackgroundColor(ui::GOLD.with_alpha(0.85)));
             }
             HudFill::Reload(_) => {}
         }
@@ -558,15 +563,25 @@ pub fn update_cooldown_panel(
     for (mut text, mut color, kind) in &mut texts {
         if let HudText::Reload(side) = kind {
             let s = secs(*side);
-            text.0 = cooldown_label(s);
-            color.0 = if s <= 0.0 { ui::OK_GREEN } else { ui::TEXT_DIM };
+            let label = cooldown_label(s);
+            if text.0 != label {
+                text.0 = label;
+            }
+            let tint = if s <= 0.0 { ui::OK_GREEN } else { ui::TEXT_DIM };
+            if color.0 != tint {
+                color.0 = tint;
+            }
         }
     }
     for (mut node, mut bg, fill) in &mut fills {
         if let HudFill::Reload(side) = fill {
             let s = secs(*side);
-            node.width = ui::bar_width(reload_fraction(s));
-            bg.0 = if s <= 0.0 { ui::OK_GREEN } else { ui::AMBER };
+            set_width(&mut node, ui::bar_width(reload_fraction(s)));
+            bg.set_if_neq(BackgroundColor(if s <= 0.0 {
+                ui::OK_GREEN
+            } else {
+                ui::AMBER
+            }));
         }
     }
 }
@@ -616,7 +631,14 @@ pub fn toggle_sea_hud(
         Visibility::Visible
     };
     for mut entity in &mut hud {
-        *entity = visibility;
+        entity.set_if_neq(visibility);
+    }
+}
+
+/// Largura de barra sem marcar o `Node` como mudado à toa.
+pub(crate) fn set_width(node: &mut Mut<Node>, width: Val) {
+    if node.width != width {
+        node.width = width;
     }
 }
 

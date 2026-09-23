@@ -3,6 +3,7 @@
 //! semente — o servidor só injeta `dt`, a área e onde é proibido chover.
 
 use std::f32::consts::TAU;
+use std::f64::consts::TAU as TAU64;
 
 use crate::sailing::Wind;
 
@@ -84,7 +85,8 @@ fn circle_allowed(x: f32, y: f32, radius: f32, allowed: &impl Fn(f32, f32) -> bo
 #[derive(Debug, Clone, PartialEq)]
 pub struct Weather {
     rng: u64,
-    time: f32,
+    // f64: em f32 o `time += dt` para de andar após ~6 dias de uptime.
+    time: f64,
     wind_dir: f32,
     turn_walk: f32,
     strength_phase: (f32, f32),
@@ -129,7 +131,8 @@ impl Weather {
     pub fn base_wind(&self) -> Wind {
         let t = self.time;
         let (p1, p2) = self.strength_phase;
-        let strength = 0.7 + 0.2 * (TAU * t / 420.0 + p1).sin() + 0.1 * (TAU * t / 97.0 + p2).sin();
+        let wave = |period: f64, phase: f32| (TAU64 * t / period + f64::from(phase)).sin() as f32;
+        let strength = 0.7 + 0.2 * wave(420.0, p1) + 0.1 * wave(97.0, p2);
         Wind {
             direction: self.wind_dir,
             strength: strength.clamp(STRENGTH_MIN, STRENGTH_MAX),
@@ -161,9 +164,9 @@ impl Weather {
         else {
             return base;
         };
-        let id = storm.id as f32;
+        let id = f64::from(storm.id);
         let t = self.time;
-        let gust = 0.45 * (t * 0.9 + id * 1.3).sin() + 0.25 * (t * 2.3 + id * 0.7).sin();
+        let gust = (0.45 * (t * 0.9 + id * 1.3).sin() + 0.25 * (t * 2.3 + id * 0.7).sin()) as f32;
         Wind {
             direction: (base.direction + gust * k).rem_euclid(TAU),
             strength: base.strength + (1.0 - base.strength) * k,
@@ -176,12 +179,13 @@ impl Weather {
         if dt <= 0.0 {
             return;
         }
-        self.time += dt;
+        self.time += f64::from(dt);
 
         let noise = self.uniform(-1.0, 1.0);
         self.turn_walk =
             (self.turn_walk + noise * TURN_WALK_ACCEL * dt).clamp(-TURN_WALK_MAX, TURN_WALK_MAX);
-        let wobble = 1.0 + TURN_WOBBLE * (TAU * self.time / TURN_WOBBLE_PERIOD).sin();
+        let wobble =
+            1.0 + TURN_WOBBLE * (TAU64 * self.time / f64::from(TURN_WOBBLE_PERIOD)).sin() as f32;
         self.wind_dir =
             (self.wind_dir + (MEAN_TURN_RATE * wobble + self.turn_walk) * dt).rem_euclid(TAU);
 

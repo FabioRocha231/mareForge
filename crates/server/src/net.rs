@@ -1380,6 +1380,11 @@ fn handle_input(
 ) {
     for event in input_events.read() {
         let client_id = event.from();
+        let message = event.message();
+        // NaN passa pelo clamp e contamina a posição (navio imune a tudo).
+        if !message.throttle.is_finite() || !message.turn.is_finite() {
+            continue;
+        }
         for mut ship in &mut ships {
             if ship.client_id == Some(client_id) {
                 let incoming = *event.message();
@@ -1469,6 +1474,7 @@ fn handle_fire(
             weapon,
             tuning.salvo_balls,
             tuning.salvo_spacing,
+            ammo,
         );
         info!(
             ship_id = ship.ship_id,
@@ -1477,11 +1483,7 @@ fn handle_fire(
             projectile_id,
             "broadside disparada"
         );
-        commands.spawn_batch(
-            salvo
-                .into_iter()
-                .map(move |p| (ServerProjectile(p.with_ammo(ammo)),)),
-        );
+        commands.spawn_batch(salvo.into_iter().map(|p| (ServerProjectile(p),)));
     }
 }
 

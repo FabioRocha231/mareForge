@@ -540,10 +540,11 @@ fn handle_ship_destroyed(
         // O casco não some: afunda (animação em `ship::animate_sinking`).
         for (entity, visual) in &visuals {
             if visual.target.ship_id == ship_id {
+                // try_insert: um soluço > TTL pode ter expirado o visual.
                 commands
                     .entity(entity)
                     .remove::<crate::ship::ShipVisual>()
-                    .insert(crate::ship::Sinking::default());
+                    .try_insert(crate::ship::Sinking::of(ship_id));
             }
         }
     }

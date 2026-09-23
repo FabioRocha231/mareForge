@@ -38,9 +38,9 @@ pub fn run_headless() {
             std::time::Duration::from_secs_f64(1.0 / 60.0),
         )),
     )
-        .add_plugins(TerminalCtrlCHandlerPlugin)
-        .add_plugins(ServerPlugin)
-        .add_plugins(net::ServerNetPlugin);
+    .add_plugins(TerminalCtrlCHandlerPlugin)
+    .add_plugins(ServerPlugin)
+    .add_plugins(net::ServerNetPlugin);
 
     if playtest {
         playtest::install(&mut app);

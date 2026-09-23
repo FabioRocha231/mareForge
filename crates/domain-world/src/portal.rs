@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 
-use crate::map::{WorldMap, FOG_SLOTS, MAELSTROM_POINTS};
+use crate::map::{WorldMap, FOG_RADIUS, FOG_SLOTS, MAELSTROM_POINTS};
 use crate::risk::RiskTier;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,7 +75,8 @@ impl Default for PortalTuning {
     }
 }
 
-/// Arena de cerração ocupada: de onde veio e quando fecha.
+/// Arena de cerração ocupada: onde devolve quem sai (ao lado do portão) e
+/// quando fecha.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FogArena {
     pub origin: (f32, f32),
@@ -157,6 +158,7 @@ impl PortalDirector {
     /// reembaralha Sorvedouro. Devolve as arenas que fecharam agora.
     pub fn tick(&mut self, now: f64, map: &WorldMap) -> Vec<ClosedArena> {
         self.portals.retain(|p| p.expires_at > now);
+        self.cooldowns.retain(|_, until| *until > now);
         let mut closed = Vec::new();
         for (slot, arena) in self.arenas.iter_mut().enumerate() {
             if let Some(open) = *arena {
@@ -202,6 +204,22 @@ impl PortalDirector {
         Some(dest)
     }
 
+    /// (x, y) está numa arena de cerração que não está aberta? Acontece com
+    /// quem desconectou lá dentro e voltou depois do colapso (ou após restart).
+    pub fn stranded(&self, x: f32, y: f32) -> bool {
+        FOG_SLOTS.iter().zip(&self.arenas).any(|(center, arena)| {
+            arena.is_none()
+                && (x - center.0).powi(2) + (y - center.1).powi(2) <= (FOG_RADIUS + 80.0).powi(2)
+        })
+    }
+
+    /// Carência sem travessia — para quem foi devolvido pela arena fechando
+    /// não cair direto num portão novo.
+    pub fn hold(&mut self, ship_id: u32, now: f64) {
+        self.cooldowns
+            .insert(ship_id, now + self.tuning.transit_cooldown);
+    }
+
     fn id(&mut self) -> u32 {
         let id = self.next_id;
         self.next_id += 1;
@@ -225,7 +243,12 @@ impl PortalDirector {
         };
         let center = FOG_SLOTS[slot];
         let closes_at = now + self.tuning.fog_arena_lifetime;
-        self.arenas[slot] = Some(FogArena { origin, closes_at });
+        // Volta ao lado do portão, não em cima dele.
+        let landing = landing_near(map, origin, 90.0);
+        self.arenas[slot] = Some(FogArena {
+            origin: landing,
+            closes_at,
+        });
         let gate = Portal {
             id: self.id(),
             kind: PortalKind::FogGate,
@@ -233,7 +256,8 @@ impl PortalDirector {
             y: origin.1,
             radius: 35.0,
             dest: (center.0, center.1 - 250.0),
-            expires_at: now + self.tuning.fog_gate_lifetime,
+            // Portão nunca sobrevive à arena para onde leva.
+            expires_at: (now + self.tuning.fog_gate_lifetime).min(closes_at),
             uses_left: Some(self.tuning.fog_gate_uses),
         };
         let exit = Portal {
@@ -242,7 +266,7 @@ impl PortalDirector {
             x: center.0,
             y: center.1,
             radius: 35.0,
-            dest: landing_near(map, origin, 90.0),
+            dest: landing,
             expires_at: closes_at,
             uses_left: None,
         };
@@ -386,6 +410,11 @@ mod tests {
         // Lotação esgotada: a cerração se fecha para o terceiro.
         assert_eq!(d.transit(3, gate.x, gate.y, 2.0), None);
         assert!(d.portals().iter().all(|p| p.id != gate.id));
+        // Arena aberta não prende ninguém; carência expirada é esquecida.
+        assert!(!d.stranded(gate.dest.0, gate.dest.1));
+        d.hold(9, 2.0);
+        d.tick(100.0, &map);
+        assert!(d.cooldowns.is_empty());
     }
 
     #[test]
@@ -397,6 +426,14 @@ mod tests {
         assert_eq!(closed.len(), 1);
         assert_eq!(closed[0].origin, open.origin);
         assert_eq!(closed[0].center, FOG_SLOTS[0]);
+        // Quem está numa arena que não está aberta ficou encalhado.
+        let free = d
+            .arenas()
+            .iter()
+            .position(Option::is_none)
+            .expect("slot livre");
+        assert!(d.stranded(FOG_SLOTS[free].0, FOG_SLOTS[free].1 - 250.0));
+        assert!(!d.stranded(0.0, 0.0));
         assert!(d
             .portals()
             .iter()

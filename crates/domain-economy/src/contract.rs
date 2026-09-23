@@ -2,6 +2,8 @@
 //! progresso de um contrato ativo. Recompensa é faucet auditado
 //! (`LedgerKind::ContractReward`); itens entregues são consumidos (sink).
 
+use mareforge_shared::ItemInstanceId;
+
 use crate::guild::{guild_value, GUILD_BASE_VALUES};
 
 pub const OFFERS_PER_PORT: usize = 3;
@@ -124,15 +126,35 @@ pub struct ActiveContract {
     pub deadline_secs: f64,
     /// Abates contados (Caça).
     pub kills: u32,
+    /// Entrega: pilhas do item que estavam no porão no aceite, com a
+    /// quantidade de então. Só elas contam na chegada — comprar ou coletar
+    /// no destino não cumpre o contrato.
+    pub consignment: Vec<(ItemInstanceId, u32)>,
 }
 
 impl ActiveContract {
-    pub fn accept(contract: Contract, now_secs: f64) -> Self {
-        Self {
+    /// `hold` = pilhas do item da entrega no porão agora. Entrega sem a
+    /// carga completa a bordo é recusada (`None`); Caça ignora o porão.
+    pub fn accept(
+        contract: Contract,
+        now_secs: f64,
+        hold: &[(ItemInstanceId, u32)],
+    ) -> Option<Self> {
+        if let ContractKind::Delivery { quantity, .. } = contract.kind {
+            if hold.iter().map(|(_, qty)| qty).sum::<u32>() < quantity {
+                return None;
+            }
+        }
+        let consignment = match contract.kind {
+            ContractKind::Delivery { .. } => hold.to_vec(),
+            ContractKind::Hunt { .. } => Vec::new(),
+        };
+        Some(Self {
             deadline_secs: now_secs + contract.duration_secs,
             contract,
             kills: 0,
-        }
+            consignment,
+        })
     }
 
     pub fn remaining_secs(&self, now_secs: f64) -> f64 {
@@ -154,14 +176,35 @@ impl ActiveContract {
         }
     }
 
-    /// Entrega pronta: atracado no destino com ≥N no PORÃO.
-    pub fn delivery_ready(&self, docked_port: &str, item_in_hold: impl Fn(&str) -> u32) -> bool {
-        match &self.contract.kind {
-            ContractKind::Delivery {
-                item, quantity, to, ..
-            } => docked_port == to && item_in_hold(item) >= *quantity,
-            ContractKind::Hunt { .. } => false,
+    /// Consignação só encolhe: pilha que desceu (depositada, vendida,
+    /// saqueada) não volta a contar se for reabastecida depois — senão dava
+    /// para zarpar com 1 e completar no destino numa pilha de mesmo id.
+    pub fn observe_hold(&mut self, hold: &[(ItemInstanceId, u32)]) {
+        for (id, counted) in &mut self.consignment {
+            let now = hold
+                .iter()
+                .find(|(held, _)| held == id)
+                .map_or(0, |(_, qty)| *qty);
+            *counted = (*counted).min(now);
         }
+    }
+
+    /// Entrega pronta: atracado no destino com ≥N da carga consignada no
+    /// porão. Pilha que cresceu depois do aceite conta só até o que tinha.
+    pub fn delivery_ready(&self, docked_port: &str, hold: &[(ItemInstanceId, u32)]) -> bool {
+        let ContractKind::Delivery { quantity, to, .. } = &self.contract.kind else {
+            return false;
+        };
+        let carried: u32 = self
+            .consignment
+            .iter()
+            .map(|(id, at_accept)| {
+                hold.iter()
+                    .find(|(held, _)| held == id)
+                    .map_or(0, |(_, now)| (*now).min(*at_accept))
+            })
+            .sum();
+        docked_port == to && carried >= *quantity
     }
 
     pub fn progress(&self) -> u32 {
@@ -239,29 +282,41 @@ mod tests {
             reward: 300,
             duration_secs: 60.0,
         };
-        let mut active = ActiveContract::accept(hunt, 100.0);
+        let mut active = ActiveContract::accept(hunt, 100.0, &[]).unwrap();
         assert_eq!(active.remaining_secs(130.0), 30.0);
         assert!(!active.expired(159.0));
         assert!(active.expired(160.0));
         assert!(!active.record_kill());
         assert!(active.record_kill());
 
-        let delivery = ActiveContract::accept(
-            Contract {
-                id: 2,
-                kind: ContractKind::Delivery {
-                    item: String::from("Madeira"),
-                    quantity: 10,
-                    from: String::from("Porto da Serra"),
-                    to: String::from("Porto da Mina"),
-                },
-                reward: 100,
-                duration_secs: 60.0,
-            },
-            0.0,
+        let (a, b, local) = (
+            ItemInstanceId::new(),
+            ItemInstanceId::new(),
+            ItemInstanceId::new(),
         );
-        assert!(delivery.delivery_ready("Porto da Mina", |_| 10));
-        assert!(!delivery.delivery_ready("Porto da Mina", |_| 9));
-        assert!(!delivery.delivery_ready("Porto da Serra", |_| 99));
+        let madeira = Contract {
+            id: 2,
+            kind: ContractKind::Delivery {
+                item: String::from("Madeira"),
+                quantity: 10,
+                from: String::from("Porto da Serra"),
+                to: String::from("Porto da Mina"),
+            },
+            reward: 100,
+            duration_secs: 60.0,
+        };
+        // Sem a carga a bordo não dá para aceitar.
+        assert!(ActiveContract::accept(madeira.clone(), 0.0, &[(a, 9)]).is_none());
+        let delivery = ActiveContract::accept(madeira, 0.0, &[(a, 6), (b, 4)]).unwrap();
+        assert!(delivery.delivery_ready("Porto da Mina", &[(a, 6), (b, 4)]));
+        assert!(!delivery.delivery_ready("Porto da Mina", &[(a, 6), (b, 3)]));
+        assert!(!delivery.delivery_ready("Porto da Serra", &[(a, 6), (b, 4)]));
+        // Comprado/coletado no destino não conta; pilha que cresceu, só até o aceite.
+        assert!(!delivery.delivery_ready("Porto da Mina", &[(a, 6), (local, 50)]));
+        assert!(!delivery.delivery_ready("Porto da Mina", &[(a, 50), (b, 3)]));
+        // Zarpou com a pilha reduzida e reabasteceu no destino: não conta.
+        let mut delivery = delivery;
+        delivery.observe_hold(&[(a, 1), (b, 4)]);
+        assert!(!delivery.delivery_ready("Porto da Mina", &[(a, 6), (b, 4)]));
     }
 }

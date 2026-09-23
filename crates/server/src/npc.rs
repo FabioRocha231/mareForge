@@ -681,6 +681,7 @@ fn spawn_projectile(
         weapon,
         tuning.salvo_balls,
         tuning.salvo_spacing,
+        mareforge_domain_combat::Ammo::Round,
     );
     commands.spawn_batch(salvo.into_iter().map(|p| (ServerProjectile(p),)));
     info!(

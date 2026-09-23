@@ -11,7 +11,7 @@ use mareforge_domain_world::{PortalDirector, PortalKind, PortalTuning};
 use mareforge_protocol::{PortalKindWire, PortalState, PortalsUpdate};
 use tracing::info;
 
-use crate::net::{ReliableChannel, ServerShip, ServerWorldMap};
+use crate::net::{ReliableChannel, ServerShip, ServerWorldMap, DEV_SPAWN};
 use crate::sets::SimulationSet;
 
 #[derive(Resource)]
@@ -60,6 +60,7 @@ fn advance_portals(
                 info!(ship_id = ship.ship_id, "cerração dissipou: navio devolvido");
                 ship.motion.x = arena.origin.0;
                 ship.motion.y = arena.origin.1;
+                portals.0.hold(ship.ship_id, now);
             }
         }
     }
@@ -69,6 +70,14 @@ fn advance_portals(
             continue;
         }
         let (x, y) = (ship.motion.x, ship.motion.y);
+        if portals.0.stranded(x, y) {
+            info!(
+                ship_id = ship.ship_id,
+                "navio preso em cerração fechada: resgatado"
+            );
+            (ship.motion.x, ship.motion.y) = DEV_SPAWN;
+            continue;
+        }
         if let Some((dest_x, dest_y)) = portals.0.transit(ship.ship_id, x, y, now) {
             let zone = map.0.zone_at(dest_x, dest_y).map(|z| z.name).unwrap_or("?");
             info!(ship_id = ship.ship_id, zone, "navio atravessou um portal");

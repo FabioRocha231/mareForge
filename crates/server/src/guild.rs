@@ -12,6 +12,7 @@ use bevy::ecs::prelude::*;
 use bevy::time::Time;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
+use mareforge_domain_economy::contract::OFFERS_PER_PORT;
 use mareforge_domain_economy::guild::GUILD_BASE_VALUES;
 use mareforge_domain_economy::{
     generate_offers, ActiveContract, Contract, ContractKind, GuildBook, LedgerKind, Money, PortSite,
@@ -23,7 +24,7 @@ use mareforge_protocol::{
     AbandonContract, AcceptContract, ContractLine, ContractResult, ContractsSnapshot,
     GuildPriceLine, GuildPrices, PortStorageSnapshot, SellToGuild,
 };
-use mareforge_shared::ids::{CharacterId, ItemDefinitionId, RegionId};
+use mareforge_shared::ids::{CharacterId, ItemDefinitionId, ItemInstanceId, RegionId};
 use tracing::info;
 
 use crate::market::{market_result, region_name, send_wallet, ServerMarket};
@@ -58,6 +59,9 @@ pub struct ServerGuild {
     pub book: GuildBook,
     boards: HashMap<RegionId, Vec<Contract>>,
     active: HashMap<CharacterId, ActiveContract>,
+    /// Quadro de onde saiu o contrato ativo: abandonar devolve a oferta, senão
+    /// aceitar+abandonar em loop esvazia o quadro de todo mundo.
+    accepted_at: HashMap<CharacterId, RegionId>,
     next_refresh_secs: f64,
     seed: u64,
     next_id: u32,
@@ -233,6 +237,7 @@ fn handle_contract_intents(
     mut abandons: EventReader<ServerReceiveMessage<AbandonContract>>,
     mut connection_manager: ResMut<ConnectionManager>,
     mut guild: ResMut<ServerGuild>,
+    dev: Res<DevItems>,
     time: Res<Time>,
     ships: Query<&ServerShip>,
 ) {
@@ -261,11 +266,11 @@ fn handle_contract_intents(
             continue;
         }
         let id = event.message().id;
-        let taken = guild.boards.get_mut(&region).and_then(|board| {
-            let index = board.iter().position(|contract| contract.id == id)?;
-            Some(board.remove(index))
-        });
-        let Some(contract) = taken else {
+        let offer = guild
+            .boards
+            .get(&region)
+            .and_then(|board| board.iter().position(|contract| contract.id == id));
+        let Some(index) = offer else {
             send_contract_result(
                 &mut connection_manager,
                 client_id,
@@ -274,10 +279,26 @@ fn handle_contract_intents(
             );
             continue;
         };
-        let reason = format!("aceito: {}", contract.title());
-        guild
-            .active
-            .insert(ship.character, ActiveContract::accept(contract, now));
+        let contract = guild.boards[&region][index].clone();
+        let hold = match &contract.kind {
+            ContractKind::Delivery { item, .. } => hold_stacks(ship, &dev.catalog, item),
+            ContractKind::Hunt { .. } => Vec::new(),
+        };
+        let Some(active) = ActiveContract::accept(contract, now, &hold) else {
+            send_contract_result(
+                &mut connection_manager,
+                client_id,
+                false,
+                "carregue a carga no porao antes de aceitar".into(),
+            );
+            continue;
+        };
+        if let Some(board) = guild.boards.get_mut(&region) {
+            board.remove(index);
+        }
+        let reason = format!("aceito: {}", active.contract.title());
+        guild.active.insert(ship.character, active);
+        guild.accepted_at.insert(ship.character, region);
         send_contract_result(&mut connection_manager, client_id, true, reason);
     }
     for event in abandons.read() {
@@ -285,7 +306,17 @@ fn handle_contract_intents(
         let Some(ship) = ships.iter().find(|ship| ship.client_id == client_id) else {
             continue;
         };
-        let abandoned = guild.active.remove(&ship.character).is_some();
+        let abandoned = guild.active.remove(&ship.character);
+        let origin = guild.accepted_at.remove(&ship.character);
+        if let (Some(active), Some(region)) = (&abandoned, origin) {
+            // Oferta volta ao quadro, sem passar do tamanho de um quadro novo.
+            if let Some(board) = guild.boards.get_mut(&region) {
+                if board.len() < OFFERS_PER_PORT {
+                    board.push(active.contract.clone());
+                }
+            }
+        }
+        let abandoned = abandoned.is_some();
         let reason = if abandoned {
             "contrato abandonado"
         } else {
@@ -293,6 +324,19 @@ fn handle_contract_intents(
         };
         send_contract_result(&mut connection_manager, client_id, abandoned, reason.into());
     }
+}
+
+/// Pilhas de `item` no porão do navio: (instância, quantidade).
+fn hold_stacks(ship: &ServerShip, catalog: &ItemCatalog, item: &str) -> Vec<(ItemInstanceId, u32)> {
+    let Some(item_id) = catalog_id(catalog, item) else {
+        return Vec::new();
+    };
+    ship.hold
+        .items()
+        .iter()
+        .filter(|custody| custody.instance.definition == item_id)
+        .map(|custody| (custody.instance.id, custody.instance.quantity))
+        .collect()
 }
 
 /// Paga a recompensa (faucet auditado, mesma carteira/ledger do mercado).
@@ -338,6 +382,7 @@ fn tick_contracts(
         if let Some(active) = guild.active.get_mut(&killer) {
             if !active.expired(now) && active.record_kill() {
                 let active = guild.active.remove(&killer).expect("checado acima");
+                guild.accepted_at.remove(&killer);
                 completed.push((killer, active.contract));
             }
         }
@@ -351,6 +396,7 @@ fn tick_contracts(
         .collect();
     for character in expired {
         guild.active.remove(&character);
+        guild.accepted_at.remove(&character);
         send_contract_result(
             &mut connection_manager,
             client_of(character),
@@ -360,6 +406,13 @@ fn tick_contracts(
     }
 
     for mut ship in &mut ships {
+        // Todo tick, em qualquer lugar: a consignação só pode encolher.
+        if let Some(active) = guild.active.get_mut(&ship.character) {
+            if let ContractKind::Delivery { item, .. } = &active.contract.kind {
+                let hold = hold_stacks(&ship, &dev.catalog, item);
+                active.observe_hold(&hold);
+            }
+        }
         let VesselPresence::Docked(region) = ship.presence else {
             continue;
         };
@@ -372,21 +425,15 @@ fn tick_contracts(
         let Some(item_id) = catalog_id(&dev.catalog, item) else {
             continue;
         };
-        let in_hold = |_: &str| -> u32 {
-            ship.hold
-                .items()
-                .iter()
-                .filter(|custody| custody.instance.definition == item_id)
-                .map(|custody| custody.instance.quantity)
-                .sum()
-        };
-        if !active.delivery_ready(region_name(&map.0, region), in_hold) {
+        let hold = hold_stacks(&ship, &dev.catalog, item);
+        if !active.delivery_ready(region_name(&map.0, region), &hold) {
             continue;
         }
         let quantity = *quantity;
         // Entregue: a carga some do porão (sink) e o contrato paga.
         if ship.hold.remove(item_id, quantity).is_ok() {
             let active = guild.active.remove(&ship.character).expect("checado acima");
+            guild.accepted_at.remove(&ship.character);
             completed.push((ship.character, active.contract));
         }
     }

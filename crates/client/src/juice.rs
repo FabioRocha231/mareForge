@@ -129,13 +129,13 @@ fn detect_sea_events(
 
 fn detect_sinking(
     my_ship: Res<MyShip>,
-    sinking: Query<(&ShipVisual, &Transform), Added<Sinking>>,
+    sinking: Query<(&Sinking, &Transform), Added<Sinking>>,
     mut out: EventWriter<SeaEvent>,
 ) {
-    for (visual, transform) in &sinking {
+    for (sinking, transform) in &sinking {
         out.send(SeaEvent::Sunk {
             at: transform.translation.truncate(),
-            own: Some(visual.target.ship_id) == my_ship.0,
+            own: Some(sinking.ship_id) == my_ship.0,
         });
     }
 }
@@ -185,7 +185,7 @@ fn start_hit_flash(
             continue;
         };
         if let Some((entity, _)) = ships.iter().find(|(_, v)| v.target.ship_id == ship_id) {
-            commands.entity(entity).insert(HitFlash(0.0));
+            commands.entity(entity).try_insert(HitFlash(0.0));
         }
     }
 }

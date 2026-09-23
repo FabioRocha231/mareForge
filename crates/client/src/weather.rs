@@ -297,18 +297,20 @@ fn update_weather_hud(
         if text.0 != value {
             text.0 = value;
         }
-        color.0 = tint;
+        if color.0 != tint {
+            color.0 = tint;
+        }
     }
     let sail = state.map_or(1.0, |s| s.sail_hp / SAIL_HP_MAX);
     for (mut node, mut bg) in &mut fill {
-        node.width = ui::bar_width(sail);
-        bg.0 = if sail > 0.6 {
+        crate::hud::set_width(&mut node, ui::bar_width(sail));
+        bg.set_if_neq(BackgroundColor(if sail > 0.6 {
             ui::OK_GREEN
         } else if sail > 0.3 {
             ui::AMBER
         } else {
             ui::DANGER
-        };
+        }));
     }
 }
 
@@ -500,14 +502,28 @@ fn animate_storms(
             continue;
         }
         let k = storm.shown;
-        if let Some(sea) = materials.get_mut(&storm.sea) {
-            sea.color.set_alpha(STORM_SEA_ALPHA * k);
+        // get_mut marca o material como modificado e o Bevy refaz o bind
+        // group: só escreve quando a cor muda de fato.
+        let sea_alpha = STORM_SEA_ALPHA * k;
+        if materials
+            .get(&storm.sea)
+            .is_some_and(|m| m.color.alpha() != sea_alpha)
+        {
+            if let Some(sea) = materials.get_mut(&storm.sea) {
+                sea.color.set_alpha(sea_alpha);
+            }
         }
         // Relâmpago: um clarão raro e curto nas nuvens.
         let flash = ((t * 0.37 + storm.id as f32 * 1.9).sin() > 0.995) as u8 as f32;
-        if let Some(cloud) = materials.get_mut(&storm.clouds) {
-            let base = Color::srgb(0.16, 0.18, 0.22).mix(&Color::srgb(0.85, 0.88, 0.95), flash);
-            cloud.color = base.with_alpha(STORM_CLOUD_ALPHA * k);
+        let base = Color::srgb(0.16, 0.18, 0.22).mix(&Color::srgb(0.85, 0.88, 0.95), flash);
+        let cloud_color = base.with_alpha(STORM_CLOUD_ALPHA * k);
+        if materials
+            .get(&storm.clouds)
+            .is_some_and(|m| m.color != cloud_color)
+        {
+            if let Some(cloud) = materials.get_mut(&storm.clouds) {
+                cloud.color = cloud_color;
+            }
         }
         for child in children.iter() {
             if let Ok((cloud, mut ct)) = clouds.get_mut(*child) {

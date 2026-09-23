@@ -73,7 +73,9 @@ impl Projectile {
     /// `spacing` metros entre si, herdando a velocidade do navio — atirar
     /// andando não deixa a bala para trás. O dano total da arma é repartido
     /// (sobra vai para a bala central), então a salva não muda o balanço
-    /// de dano, só a chance de acerto. IDs são `first_id..first_id+balls`.
+    /// de dano, só a chance de acerto. Casco/vela e munição são calculados
+    /// sobre o total da salva e só então repartidos, para o arredondamento
+    /// por bala não criar nem sumir dano. IDs são `first_id..first_id+balls`.
     #[allow(clippy::too_many_arguments)]
     pub fn broadside_salvo(
         first_id: u32,
@@ -86,10 +88,14 @@ impl Projectile {
         weapon: WeaponParams,
         balls: u32,
         spacing: f32,
+        ammo: Ammo,
     ) -> Vec<Self> {
         let balls = balls.max(1);
-        let base_damage = weapon.damage / balls;
-        let remainder = weapon.damage % balls;
+        let (hull, sail) = split_round(weapon.damage);
+        let hull = (hull as f32 * ammo.hull_factor()).round() as u32;
+        let sail_per_ball = sail * ammo.sail_factor() / balls as f32;
+        let base_damage = hull / balls;
+        let remainder = hull % balls;
         let (hx, hy) = (ship_heading.cos(), ship_heading.sin());
         (0..balls)
             .map(|i| {
@@ -103,23 +109,17 @@ impl Projectile {
                     ship_heading,
                     weapon,
                 );
-                (p.damage, p.sail_damage) =
-                    split_round(base_damage + if i == balls / 2 { remainder } else { 0 });
+                p.damage = base_damage + if i == balls / 2 { remainder } else { 0 };
+                p.sail_damage = sail_per_ball;
                 let vx = p.heading.cos() * p.speed + hx * ship_speed;
                 let vy = p.heading.sin() * p.speed + hy * ship_speed;
                 p.heading = normalize(vy.atan2(vx));
                 p.speed = (vx * vx + vy * vy).sqrt();
+                // Alcance é da arma, não da arma + velocidade do navio.
+                p.remaining_lifetime = weapon.range / p.speed;
                 p
             })
             .collect()
-    }
-
-    /// Troca a munição (MF-059): fatores relativos à bala redonda. Alcance e
-    /// velocidade vêm de [`Ammo::load`] aplicado à arma antes do disparo.
-    pub fn with_ammo(mut self, ammo: Ammo) -> Self {
-        self.damage = (self.damage as f32 * ammo.hull_factor()).round() as u32;
-        self.sail_damage *= ammo.sail_factor();
-        self
     }
 
     /// Movimento retilíneo por um passo de simulação.
@@ -231,6 +231,7 @@ mod tests {
             weapon(),
             3,
             8.0,
+            Ammo::Round,
         );
         assert_eq!(salvo.len(), 3);
         // 6/8/6 brutos → casco 5/6/5 (80% arredondado), pano 20%.
@@ -256,10 +257,36 @@ mod tests {
             weapon(),
             1,
             0.0,
+            Ammo::Round,
         );
         let p = salvo[0];
         // Bala lateral (+Y a 40) somada ao navio (+X a 30): 50 m/s na diagonal.
         assert!((p.speed - 50.0).abs() < 1e-3);
         assert!((p.heading.cos() * p.speed - 30.0).abs() < 1e-3);
+        // Alcance continua o da arma no referencial do mundo.
+        assert!((p.speed * p.remaining_lifetime - weapon().range).abs() < 1e-3);
+    }
+
+    #[test]
+    fn salvo_rounds_hull_once_for_the_whole_salvo() {
+        let weapon = WeaponParams {
+            damage: 10,
+            ..weapon()
+        };
+        let salvo = Projectile::broadside_salvo(
+            1,
+            10,
+            BroadsideSide::Port,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            weapon,
+            3,
+            8.0,
+            Ammo::Round,
+        );
+        // 10 × 0.8 = 8 (por bala 3/4/3 → 2/3/2 perderia 1).
+        assert_eq!(salvo.iter().map(|p| p.damage).sum::<u32>(), 8);
     }
 }

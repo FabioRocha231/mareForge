@@ -98,10 +98,8 @@ mod tests {
             ammo.load(weapon()),
             3,
             8.0,
+            ammo,
         )
-        .into_iter()
-        .map(|p| p.with_ammo(ammo))
-        .collect()
     }
 
     fn totals(balls: &[Projectile]) -> (u32, f32) {
@@ -124,8 +122,8 @@ mod tests {
         let (round_hull, round_sail) = totals(&salvo(Ammo::Round));
         let (chain_hull, chain_sail) = totals(&salvo(Ammo::Chain));
         assert!((chain_sail - round_sail * 4.0).abs() < 1e-4);
-        // 5/6/5 × 0.3 = 1.5/1.8/1.5 → 2/2/2.
-        assert_eq!(chain_hull, 6);
+        // Casco 16 × 0.3 = 4.8 → 5, arredondado uma vez na salva inteira.
+        assert_eq!(chain_hull, 5);
         assert!(chain_hull * 2 < round_hull);
     }
 

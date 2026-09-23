@@ -190,7 +190,10 @@ fn sync_portal_visuals(
         drawn.push(visual.0);
         for child in children.iter() {
             if let Ok(mut text) = labels.get_mut(*child) {
-                text.0 = portal_label(portal, remaining(&known, portal, now));
+                let label = portal_label(portal, remaining(&known, portal, now));
+                if text.0 != label {
+                    text.0 = label;
+                }
             }
         }
     }
@@ -271,11 +274,16 @@ fn update_edge_markers(
     for (entity, marker, mut node, children) in &mut markers {
         match wanted.remove(&marker.0) {
             Some((pos, label)) => {
-                node.left = Val::Px(pos.x - 40.0);
-                node.top = Val::Px(pos.y - 10.0);
+                let (left, top) = (Val::Px(pos.x - 40.0), Val::Px(pos.y - 10.0));
+                if node.left != left || node.top != top {
+                    node.left = left;
+                    node.top = top;
+                }
                 for child in children.iter() {
                     if let Ok(mut text) = texts.get_mut(*child) {
-                        text.0 = label.clone();
+                        if text.0 != label {
+                            text.0 = label.clone();
+                        }
                     }
                 }
             }
@@ -402,6 +410,13 @@ fn update_fog_and_timer(
     for mut image in &mut fog {
         let current = image.color.to_srgba();
         let target = goal.to_srgba();
+        // Chegou (a olho): para de escrever, senão o UI refaz tudo a cada frame.
+        if (current.alpha - target.alpha).abs() < 0.002
+            && (current.red - target.red).abs() < 0.002
+            && (current.blue - target.blue).abs() < 0.002
+        {
+            continue;
+        }
         image.color = Color::srgba(
             current.red + (target.red - current.red) * k,
             current.green + (target.green - current.green) * k,
@@ -427,16 +442,19 @@ fn update_fog_and_timer(
         })
         .flatten();
     for (mut visibility, children) in &mut timer {
-        *visibility = if exit.is_some() {
+        visibility.set_if_neq(if exit.is_some() {
             Visibility::Inherited
         } else {
             Visibility::Hidden
-        };
+        });
         if let Some(exit) = exit {
             let left = remaining(&known, exit, time.elapsed_secs());
             for child in children.iter() {
                 if let Ok(mut text) = texts.get_mut(*child) {
-                    text.0 = format!("A CERRACAO SE DISSIPA EM {}", clock(left));
+                    let label = format!("A CERRACAO SE DISSIPA EM {}", clock(left));
+                    if text.0 != label {
+                        text.0 = label;
+                    }
                 }
             }
         }

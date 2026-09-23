@@ -66,6 +66,14 @@ pub struct BowWave;
 #[derive(Component, Default)]
 pub struct Sinking {
     age: f32,
+    /// O `ShipVisual` sai no mesmo comando; o id fica para o juice.
+    pub ship_id: u32,
+}
+
+impl Sinking {
+    pub fn of(ship_id: u32) -> Self {
+        Self { age: 0.0, ship_id }
+    }
 }
 
 /// Acumulador de espuma de popa por navio.
