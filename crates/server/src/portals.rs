@@ -22,15 +22,18 @@ pub struct PortalPlugin;
 impl Plugin for PortalPlugin {
     fn build(&self, app: &mut App) {
         // Semente pelo relógio: cada servidor sorteia um mar diferente.
-        let seed = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(1);
-        app.insert_resource(ServerPortals(PortalDirector::new(
-            seed,
-            PortalTuning::default(),
-        )))
-        .add_systems(
+        // Teste pode inserir um `ServerPortals` próprio antes (determinístico).
+        if !app.world().contains_resource::<ServerPortals>() {
+            let seed = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos() as u64)
+                .unwrap_or(1);
+            app.insert_resource(ServerPortals(PortalDirector::new(
+                seed,
+                PortalTuning::default(),
+            )));
+        }
+        app.add_systems(
             FixedUpdate,
             (advance_portals, broadcast_portals)
                 .chain()
