@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
-use mareforge_server::plugin::{TickCounter, TickLimit};
-use mareforge_server::ServerPlugin;
+use marvyr_server::plugin::{TickCounter, TickLimit};
+use marvyr_server::ServerPlugin;
 use std::time::Duration;
 
 /// Passo de relógio manual igual ao período de tick de 30 Hz (ADR-0008),

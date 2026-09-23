@@ -16,7 +16,7 @@ use bevy::input::ButtonState;
 use bevy::prelude::*;
 use lightyear::prelude::client::*;
 use lightyear::prelude::*;
-use mareforge_protocol::{
+use marvyr_protocol::{
     BuySellOrder, CancelSellOrder, CatalogSnapshot, CreateSellOrder, ItemLine, MarketResult,
     OrderLine, OrdersSnapshot, StorageDepositAll, StorageWithdrawAll, WalletUpdated,
 };
@@ -31,7 +31,7 @@ pub struct Wallet(pub u64);
 
 /// Quadro de orders conhecido (último snapshot do servidor).
 #[derive(Resource, Debug, Default)]
-pub struct KnownOrders(pub Vec<mareforge_protocol::OrderLine>);
+pub struct KnownOrders(pub Vec<marvyr_protocol::OrderLine>);
 
 /// Estado local do formulário de venda e da seleção de orders.
 #[derive(Resource, Debug, Default, Clone, PartialEq, Eq)]
@@ -589,7 +589,7 @@ pub fn handle_market_clicks(
 }
 
 /// Z/X/V/N/B — a interface de mercado do slice (§45: você opera no porto
-/// onde está; o servidor recusa o resto). MAREFORGE_AUTOMARKET=1 faz o
+/// onde está; o servidor recusa o resto). MARVYR_AUTOMARKET=1 faz o
 /// ciclo depositar → vender → comprar → retirar sozinho (§39).
 // System Bevy: params são injeção de dependência, não assinatura.
 #[allow(clippy::too_many_arguments)]
@@ -679,14 +679,14 @@ enum AutoStep {
 }
 
 fn automarket_enabled() -> bool {
-    std::env::var_os("MAREFORGE_AUTOMARKET").is_some()
+    std::env::var_os("MARVYR_AUTOMARKET").is_some()
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
-    use mareforge_shared::ids::ItemDefinitionId;
+    use marvyr_shared::ids::ItemDefinitionId;
 
     use super::*;
 

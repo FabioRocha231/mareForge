@@ -7,8 +7,8 @@
 
 use std::collections::HashMap;
 
-use mareforge_domain_ships::ShipKind;
-use mareforge_shared::ids::{ItemDefinitionId, RecipeId};
+use marvyr_domain_ships::ShipKind;
+use marvyr_shared::ids::{ItemDefinitionId, RecipeId};
 
 use crate::recipe::{Ingredient, StationKind};
 use crate::validate::CraftError;
@@ -53,7 +53,7 @@ pub fn can_construct(
 mod tests {
     use std::collections::HashMap;
 
-    use mareforge_shared::ids::{ItemDefinitionId, RecipeId};
+    use marvyr_shared::ids::{ItemDefinitionId, RecipeId};
 
     use super::{can_construct, ShipConstructionJob};
     use crate::recipe::{Ingredient, StationKind};
@@ -63,7 +63,7 @@ mod tests {
         ShipConstructionJob {
             id: RecipeId::new(),
             display_name: String::from("Patrol"),
-            kind: mareforge_domain_ships::ShipKind::Patrol,
+            kind: marvyr_domain_ships::ShipKind::Patrol,
             ingredients: vec![Ingredient {
                 item: ItemDefinitionId::new(),
                 quantity: 30,

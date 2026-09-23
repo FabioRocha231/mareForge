@@ -1,5 +1,5 @@
 [package]
-name = "mareforge-shared"
+name = "marvyr-shared"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

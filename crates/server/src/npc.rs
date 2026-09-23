@@ -10,18 +10,18 @@ use bevy::ecs::prelude::*;
 use bevy::prelude::*;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
-use mareforge_domain_combat::{
+use marvyr_domain_combat::{
     apply_damage, BroadsideBattery, BroadsideSide, DamageOutcome, Projectile, WeaponParams,
 };
-use mareforge_domain_economy::{LedgerKind, Money};
-use mareforge_domain_items::{CargoHold, ItemCatalog};
-use mareforge_domain_ships::{
+use marvyr_domain_economy::{LedgerKind, Money};
+use marvyr_domain_items::{CargoHold, ItemCatalog};
+use marvyr_domain_ships::{
     compute_ship_stats, step_motion, EquippedComponents, MotionInput, MotionTuning, ShipKind,
     ShipMotion, ShipStats, VesselPresence,
 };
-use mareforge_domain_world::{RiskTier, WorldMap};
-use mareforge_protocol::{Faction, ShipState, WalletUpdated, WorldEventKind};
-use mareforge_shared::ids::{CharacterId, ShipInstanceId, ZoneId};
+use marvyr_domain_world::{RiskTier, WorldMap};
+use marvyr_protocol::{Faction, ShipState, WalletUpdated, WorldEventKind};
+use marvyr_shared::ids::{CharacterId, ShipInstanceId, ZoneId};
 use tracing::info;
 
 use crate::crafting::DevShips;
@@ -1093,7 +1093,7 @@ fn spawn_projectile(
         weapon,
         tuning.salvo_balls,
         tuning.salvo_spacing,
-        mareforge_domain_combat::Ammo::Round,
+        marvyr_domain_combat::Ammo::Round,
     );
     commands.spawn_batch(salvo.into_iter().map(|p| (ServerProjectile(p),)));
     info!(
@@ -1107,7 +1107,7 @@ mod tests {
     use super::*;
 
     /// Vento de través para quem aponta +X (MF-059).
-    const WIND: mareforge_domain_ships::Wind = mareforge_domain_ships::Wind {
+    const WIND: marvyr_domain_ships::Wind = marvyr_domain_ships::Wind {
         direction: std::f32::consts::FRAC_PI_2,
         strength: 0.7,
     };

@@ -17,7 +17,7 @@ while IFS= read -r -d '' file; do
     echo "unregistered asset: $file" >&2
     unregistered=1
   fi
-done < <(find "$root/assets/external" "$root/assets/mareforge" -type f ! -name .gitkeep -print0)
+done < <(find "$root/assets/external" "$root/assets/marvyr" -type f ! -name .gitkeep -print0)
 
 if [ "$unregistered" -ne 0 ]; then
   exit 1

@@ -11,13 +11,13 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
-use mareforge_domain_economy::{LedgerKind, Money};
-use mareforge_domain_ships::VesselPresence;
-use mareforge_domain_world::RiskTier;
-use mareforge_protocol::{
+use marvyr_domain_economy::{LedgerKind, Money};
+use marvyr_domain_ships::VesselPresence;
+use marvyr_domain_world::RiskTier;
+use marvyr_protocol::{
     ReputationUpdate, WorldEvent, WorldEventKind, TIER_HONRADO, TIER_PROCURADO, TIER_SUSPEITO,
 };
-use mareforge_shared::ids::CharacterId;
+use marvyr_shared::ids::CharacterId;
 use tracing::info;
 
 use crate::net::{
@@ -475,7 +475,7 @@ pub fn decay_notoriety(
 }
 
 /// Navio novo (hello, respawn, reconnect): o dono recebe a ficha atual.
-/// Dev tooling (PRD §39): `MAREFORGE_DEV_NOTORIETY=N` faz todo capitão
+/// Dev tooling (PRD §39): `MARVYR_DEV_NOTORIETY=N` faz todo capitão
 /// novo nascer com N de notoriedade — revisar selo, marca e marinha sem
 /// afundar caravana. Não é mecânica de jogo.
 pub fn announce_reputation_on_spawn(
@@ -486,7 +486,7 @@ pub fn announce_reputation_on_spawn(
 ) {
     // Lido uma vez (o sistema roda a 60 Hz).
     let dev_notoriety = *dev_notoriety.get_or_insert_with(|| {
-        std::env::var("MAREFORGE_DEV_NOTORIETY")
+        std::env::var("MARVYR_DEV_NOTORIETY")
             .ok()
             .and_then(|value| value.parse().ok())
     });

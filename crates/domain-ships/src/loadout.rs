@@ -5,8 +5,8 @@
 
 use std::collections::HashMap;
 
-use mareforge_domain_items::{Custody, ItemDefinition, ItemLocation};
-use mareforge_shared::ids::{ItemDefinitionId, ShipInstanceId};
+use marvyr_domain_items::{Custody, ItemDefinition, ItemLocation};
+use marvyr_shared::ids::{ItemDefinitionId, ShipInstanceId};
 use thiserror::Error;
 
 use crate::components::{EquippedComponent, EquippedComponents};
@@ -105,11 +105,11 @@ pub fn can_equip(
 
 #[cfg(test)]
 mod tests {
-    use mareforge_domain_items::{
+    use marvyr_domain_items::{
         Custody, EquipmentDefinition, EquipmentSlot, EquipmentStats, ItemDefinition, ItemInstance,
         ItemKind, ItemLocation,
     };
-    use mareforge_shared::ids::{
+    use marvyr_shared::ids::{
         ItemDefinitionId, ItemInstanceId, RegionId, ShipDefinitionId, ShipInstanceId,
     };
 

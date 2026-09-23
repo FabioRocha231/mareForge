@@ -1,13 +1,13 @@
 [package]
-name = "mareforge-domain-combat"
+name = "marvyr-domain-combat"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-mareforge-domain-items = { path = "../domain-items" }
-mareforge-shared = { path = "../shared" }
+marvyr-domain-items = { path = "../domain-items" }
+marvyr-shared = { path = "../shared" }
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]

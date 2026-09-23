@@ -3,10 +3,10 @@
 //! Roda contra um PostgreSQL real (Docker serve):
 //!
 //! ```text
-//! docker run --rm -d --name mareforge-pg -p 54329:5432 \
-//!   -e POSTGRES_PASSWORD=mareforge postgres:16-alpine
-//! MAREFORGE_TEST_DATABASE_URL=postgres://postgres:mareforge@localhost:54329/postgres \
-//!   cargo test -p mareforge-server --test postgres
+//! docker run --rm -d --name marvyr-pg -p 54329:5432 \
+//!   -e POSTGRES_PASSWORD=marvyr postgres:16-alpine
+//! MARVYR_TEST_DATABASE_URL=postgres://postgres:marvyr@localhost:54329/postgres \
+//!   cargo test -p marvyr-server --test postgres
 //! ```
 //!
 //! Sem a variável, o teste pula com aviso — CI sem banco não quebra, mas a
@@ -16,14 +16,14 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use chrono::Utc;
-use mareforge_domain_economy::{Ledger, LedgerKind, MarketOrder, Money, OrderStatus};
-use mareforge_domain_items::{
+use marvyr_domain_economy::{Ledger, LedgerKind, MarketOrder, Money, OrderStatus};
+use marvyr_domain_items::{
     CargoHold, Custody, ItemCatalog, ItemDefinition, ItemInstance, ItemKind, ItemLocation,
 };
-use mareforge_domain_ships::ShipKind;
-use mareforge_server::market::{MarketSnapshot, ServerMarket};
-use mareforge_server::persist::{PostgresStateStore, ShipRecord, StateStore};
-use mareforge_shared::ids::{
+use marvyr_domain_ships::ShipKind;
+use marvyr_server::market::{MarketSnapshot, ServerMarket};
+use marvyr_server::persist::{PostgresStateStore, ShipRecord, StateStore};
+use marvyr_shared::ids::{
     CharacterId, ItemDefinitionId, ItemInstanceId, MarketOrderId, RegionId, ShipInstanceId,
 };
 
@@ -57,7 +57,7 @@ fn reset_database(url: &str) {
 }
 
 fn store_or_skip() -> Option<(Arc<PostgresStateStore>, String)> {
-    match std::env::var("MAREFORGE_TEST_DATABASE_URL") {
+    match std::env::var("MARVYR_TEST_DATABASE_URL") {
         Ok(url) => {
             // Conectar PRIMEIRO (roda as migrations), resetar DEPOIS.
             let store = match PostgresStateStore::connect(&url) {
@@ -68,9 +68,7 @@ fn store_or_skip() -> Option<(Arc<PostgresStateStore>, String)> {
             Some((Arc::new(store), url))
         }
         Err(_) => {
-            eprintln!(
-                "PULANDO: defina MAREFORGE_TEST_DATABASE_URL para testar o PostgresStateStore"
-            );
+            eprintln!("PULANDO: defina MARVYR_TEST_DATABASE_URL para testar o PostgresStateStore");
             None
         }
     }
@@ -104,12 +102,12 @@ fn sample_snapshot() -> (MarketSnapshot, CharacterId) {
     let snapshot = MarketSnapshot {
         identities,
         balances,
-        storage: vec![mareforge_server::market::StorageEntry {
+        storage: vec![marvyr_server::market::StorageEntry {
             character,
             region,
             stacks: vec![stack],
         }],
-        escrow: vec![mareforge_server::market::EscrowEntry {
+        escrow: vec![marvyr_server::market::EscrowEntry {
             order_num,
             stacks: vec![escrowed],
         }],
@@ -239,12 +237,12 @@ fn ship_record_roundtrips_through_postgres() {
             instance: ItemInstance::new_equipment(ItemInstanceId::new(), sail_item, 100),
             location: ItemLocation::Equipped {
                 ship: ship_instance,
-                slot: mareforge_domain_items::EquipmentSlot::Sail,
+                slot: marvyr_domain_items::EquipmentSlot::Sail,
             },
         }],
         // MF-049: testa o roundtrip da presença. Navio do teste estava
         // fora do porto no momento da persistência — restaura igual.
-        presence: mareforge_domain_ships::VesselPresence::AtSea,
+        presence: marvyr_domain_ships::VesselPresence::AtSea,
     };
 
     store.save_ship(&record).expect("save_ship");
@@ -259,7 +257,7 @@ fn ship_record_roundtrips_through_postgres() {
     assert_eq!(restored.hp, 55);
     assert_eq!(
         restored.presence,
-        mareforge_domain_ships::VesselPresence::AtSea
+        marvyr_domain_ships::VesselPresence::AtSea
     );
     assert_eq!(restored.cargo.len(), 1);
     assert_eq!(restored.cargo[0].instance.quantity, 12);
@@ -268,7 +266,7 @@ fn ship_record_roundtrips_through_postgres() {
         restored.equipped[0].location,
         ItemLocation::Equipped {
             ship: ship_instance,
-            slot: mareforge_domain_items::EquipmentSlot::Sail,
+            slot: marvyr_domain_items::EquipmentSlot::Sail,
         }
     );
     assert_eq!(
@@ -349,17 +347,17 @@ fn wreck_snapshot_roundtrips_through_postgres() {
 
     let killer = CharacterId::new();
     let records = vec![
-        mareforge_server::persist::WreckRecord {
+        marvyr_server::persist::WreckRecord {
             wreck_num: 0,
-            wreck_id: mareforge_shared::ids::WreckId::new(),
+            wreck_id: marvyr_shared::ids::WreckId::new(),
             x: 120.0,
             y: -45.0,
             exclusive_looter: Some(killer),
             spawned_at_secs: 12.5,
         },
-        mareforge_server::persist::WreckRecord {
+        marvyr_server::persist::WreckRecord {
             wreck_num: 1,
-            wreck_id: mareforge_shared::ids::WreckId::new(),
+            wreck_id: marvyr_shared::ids::WreckId::new(),
             x: -300.0,
             y: 80.0,
             exclusive_looter: None,

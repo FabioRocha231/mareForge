@@ -8,9 +8,9 @@ use bevy::ecs::prelude::*;
 use bevy::prelude::*;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
-use mareforge_domain_items::{EquipmentSlot, ItemCatalog};
-use mareforge_domain_ships::{can_equip, compute_ship_stats, ShipDefinition};
-use mareforge_protocol::{EquipItem, LoadoutLine, LoadoutResult, LoadoutSnapshot, UnequipItem};
+use marvyr_domain_items::{EquipmentSlot, ItemCatalog};
+use marvyr_domain_ships::{can_equip, compute_ship_stats, ShipDefinition};
+use marvyr_protocol::{EquipItem, LoadoutLine, LoadoutResult, LoadoutSnapshot, UnequipItem};
 use tracing::info;
 
 use crate::net::{DevItems, ReliableChannel, ServerShip};
@@ -23,7 +23,7 @@ pub(crate) fn send_loadout_snapshot(
     client_id: ClientId,
     ship_definition: &ShipDefinition,
     catalog: &ItemCatalog,
-    equipped: &[mareforge_domain_items::Custody],
+    equipped: &[marvyr_domain_items::Custody],
 ) {
     let _ = connection_manager.send_message::<ReliableChannel, _>(
         client_id,
@@ -47,7 +47,7 @@ impl Plugin for LoadoutPlugin {
 pub(crate) fn loadout_snapshot_for(
     ship_definition: &ShipDefinition,
     catalog: &ItemCatalog,
-    equipped: &[mareforge_domain_items::Custody],
+    equipped: &[marvyr_domain_items::Custody],
 ) -> LoadoutSnapshot {
     LoadoutSnapshot {
         slots: ship_definition
@@ -57,7 +57,7 @@ pub(crate) fn loadout_snapshot_for(
                 let installed = equipped.iter().find(|custody| {
                     matches!(
                         custody.location,
-                        mareforge_domain_items::ItemLocation::Equipped { slot, .. } if slot == spec.kind
+                        marvyr_domain_items::ItemLocation::Equipped { slot, .. } if slot == spec.kind
                     )
                 });
                 match installed {
@@ -145,7 +145,7 @@ pub fn handle_equip(
         else {
             continue;
         };
-        let mareforge_domain_ships::VesselPresence::Docked(region) = ship.presence else {
+        let marvyr_domain_ships::VesselPresence::Docked(region) = ship.presence else {
             loadout_result(
                 &mut connection_manager,
                 client_id,
@@ -235,7 +235,7 @@ pub fn handle_unequip(
         else {
             continue;
         };
-        let mareforge_domain_ships::VesselPresence::Docked(region) = ship.presence else {
+        let marvyr_domain_ships::VesselPresence::Docked(region) = ship.presence else {
             loadout_result(
                 &mut connection_manager,
                 client_id,

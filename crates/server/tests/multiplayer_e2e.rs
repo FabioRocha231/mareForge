@@ -17,16 +17,16 @@ use lightyear::prelude::client::{
 use lightyear::prelude::server::ServerTransport;
 use lightyear::prelude::{ClientReceiveMessage, Key};
 use lightyear::transport::LOCAL_SOCKET;
-use mareforge_client::net::{
+use marvyr_client::net::{
     ClientIdentity, ClientNetOverride, ClientNetPlugin, ReliableChannel, ShipInputOverride,
 };
-use mareforge_domain_combat::{BroadsideBattery, BroadsideSide};
-use mareforge_protocol::{
+use marvyr_domain_combat::{BroadsideBattery, BroadsideSide};
+use marvyr_protocol::{
     AssignShip, FireBroadside, ServerWelcome, ShipDestroyed, ShipInput, ShipState, WalletUpdated,
     WorldSnapshot,
 };
-use mareforge_server::net::{ServerNetPlugin, ServerShip, ServerTransportOverride};
-use mareforge_server::plugin::ServerPlugin;
+use marvyr_server::net::{ServerNetPlugin, ServerShip, ServerTransportOverride};
+use marvyr_server::plugin::ServerPlugin;
 
 const CLIENT_A_ID: u64 = 101;
 const CLIENT_B_ID: u64 = 102;
@@ -159,7 +159,7 @@ impl Harness {
         // MF-060: piratas e marinha nascem na Rota da Costa, bem onde o duelo
         // acontece — entram na briga e tornam o teste aleatório. Sem NPCs:
         // o teste mede AOI e dano entre jogadores.
-        server_app.insert_resource(mareforge_server::npc::NpcSpawnConfig {
+        server_app.insert_resource(marvyr_server::npc::NpcSpawnConfig {
             count: 0,
             raider_positions: Vec::new(),
             navy_positions: Vec::new(),
@@ -168,15 +168,14 @@ impl Harness {
         });
         // Portais com semente fixa: sorteio pelo relógio punha um redemoinho
         // no caminho de A de vez em quando.
-        server_app.insert_resource(mareforge_server::portals::ServerPortals(
-            mareforge_domain_world::PortalDirector::new(7, Default::default()),
+        server_app.insert_resource(marvyr_server::portals::ServerPortals(
+            marvyr_domain_world::PortalDirector::new(7, Default::default()),
         ));
         server_app.add_plugins(ServerNetPlugin);
         // MF-059: vento soprando para o norte — leste e oeste são través, o
         // teste mede AOI, não navegação.
-        server_app.insert_resource(mareforge_server::weather::ServerWeather(
-            mareforge_domain_ships::Weather::new(1)
-                .with_wind_direction(std::f32::consts::FRAC_PI_2),
+        server_app.insert_resource(marvyr_server::weather::ServerWeather(
+            marvyr_domain_ships::Weather::new(1).with_wind_direction(std::f32::consts::FRAC_PI_2),
         ));
 
         let mut client_a = build_client(client_a_config, "multiplayer-token-a");
@@ -246,7 +245,7 @@ impl Harness {
         assert_eq!(
             self.recorded_a().welcome,
             Some(ServerWelcome {
-                protocol_version: mareforge_protocol::PROTOCOL_VERSION,
+                protocol_version: marvyr_protocol::PROTOCOL_VERSION,
                 accepted: true,
             })
         );

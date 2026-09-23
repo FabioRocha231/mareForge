@@ -1,5 +1,5 @@
 [package]
-name = "mareforge-client"
+name = "marvyr-client"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,11 +8,11 @@ license.workspace = true
 [dependencies]
 bevy = "0.15"
 lightyear = "0.19"
-mareforge-domain-combat = { path = "../domain-combat" }
-mareforge-domain-crafting = { path = "../domain-crafting" }
-mareforge-domain-items = { path = "../domain-items" }
-mareforge-domain-ships = { path = "../domain-ships" }
-mareforge-domain-world = { path = "../domain-world" }
-mareforge-protocol = { path = "../protocol" }
-mareforge-shared = { path = "../shared" }
+marvyr-domain-combat = { path = "../domain-combat" }
+marvyr-domain-crafting = { path = "../domain-crafting" }
+marvyr-domain-items = { path = "../domain-items" }
+marvyr-domain-ships = { path = "../domain-ships" }
+marvyr-domain-world = { path = "../domain-world" }
+marvyr-protocol = { path = "../protocol" }
+marvyr-shared = { path = "../shared" }
 uuid = { version = "1", features = ["v4"] }

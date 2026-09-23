@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use mareforge_shared::ids::{ItemDefinitionId, RegionId};
+use marvyr_shared::ids::{ItemDefinitionId, RegionId};
 
 use crate::currency::Money;
 

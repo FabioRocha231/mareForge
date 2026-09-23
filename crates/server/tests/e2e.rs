@@ -9,18 +9,18 @@
 //! O teste dirige os módulos puros de domínio e o ServerMarket na mesma
 //! sequência do jogo — a mesma fronteira que os handlers Bevy chamam.
 
-use mareforge_domain_combat::{
+use marvyr_domain_combat::{
     apply_damage, resolve_ship_destruction, DamageOutcome, LootPolicy, WreckChest,
 };
-use mareforge_domain_crafting::{Ingredient, Recipe, StationKind};
-use mareforge_domain_economy::{LedgerKind, Money};
-use mareforge_domain_items::{
+use marvyr_domain_crafting::{Ingredient, Recipe, StationKind};
+use marvyr_domain_economy::{LedgerKind, Money};
+use marvyr_domain_items::{
     CargoHold, Custody, ItemCatalog, ItemDefinition, ItemInstance, ItemKind,
 };
-use mareforge_domain_ships::{step_motion, MotionInput, MotionTuning, ShipMotion};
-use mareforge_domain_world::{ResourceNode, WorldMap};
-use mareforge_server::market::{port_region, ServerMarket};
-use mareforge_shared::ids::{
+use marvyr_domain_ships::{step_motion, MotionInput, MotionTuning, ShipMotion};
+use marvyr_domain_world::{ResourceNode, WorldMap};
+use marvyr_server::market::{port_region, ServerMarket};
+use marvyr_shared::ids::{
     CharacterId, DestructionEventId, ItemDefinitionId, ItemInstanceId, RecipeId, ShipInstanceId,
     WreckId,
 };
@@ -44,9 +44,9 @@ fn catalog_with_goods() -> (ItemCatalog, ItemDefinitionId, ItemDefinitionId) {
     register(ItemDefinition {
         id: hull,
         kind: ItemKind::Equipment,
-        equipment: Some(mareforge_domain_items::EquipmentDefinition {
-            slot: mareforge_domain_items::EquipmentSlot::Hull,
-            stats: mareforge_domain_items::EquipmentStats {
+        equipment: Some(marvyr_domain_items::EquipmentDefinition {
+            slot: marvyr_domain_items::EquipmentSlot::Hull,
+            stats: marvyr_domain_items::EquipmentStats {
                 damage: 0,
                 speed: 0,
                 cargo: 0,
@@ -102,7 +102,7 @@ fn vertical_slice_loop_gather_craft_transport_fight_loot_sell() {
 
     // ===== 1. A coleta (node → ShipCargo) =====
     let mut node = ResourceNode {
-        id: mareforge_shared::ids::ResourceNodeId::new(),
+        id: marvyr_shared::ids::ResourceNodeId::new(),
         name: "Bosque da Serra",
         x: -700.0,
         y: 90.0,
@@ -157,17 +157,17 @@ fn vertical_slice_loop_gather_craft_transport_fight_loot_sell() {
     // ===== 2.5 A EQUIPA o casco no slot Hull (MF-039) =====
     // PortStorage → Equipped(ship, slot), com stats recalculados na hora —
     // e ANTES de embarcar: o porão só leva madeira, o casco vai instalado.
-    let definition_small_merchant = mareforge_domain_ships::ShipDefinition::small_merchant();
-    let mut a_loadout = mareforge_domain_ships::ShipLoadout::new();
+    let definition_small_merchant = marvyr_domain_ships::ShipDefinition::small_merchant();
+    let mut a_loadout = marvyr_domain_ships::ShipLoadout::new();
     let ship_instance = ShipInstanceId::new();
     let installed = market
         .take_one_from_storage(a.character, region_serra, hull)
         .expect("casco está no storage da Serra");
     let slot =
-        mareforge_domain_ships::can_equip(&definition_small_merchant, catalog.get(hull).unwrap())
+        marvyr_domain_ships::can_equip(&definition_small_merchant, catalog.get(hull).unwrap())
             .expect("merchant tem slot Hull");
     a_loadout.equip(ship_instance, installed, slot);
-    let equipped_stats = mareforge_domain_ships::compute_ship_stats(
+    let equipped_stats = marvyr_domain_ships::compute_ship_stats(
         &definition_small_merchant,
         &a_loadout.components(),
         &catalog,
@@ -203,10 +203,10 @@ fn vertical_slice_loop_gather_craft_transport_fight_loot_sell() {
     );
 
     // ===== 3. A transporta (modelo puro de movimento, rota leste) =====
-    let definition = mareforge_domain_ships::ShipDefinition::small_merchant();
-    let stats = mareforge_domain_ships::compute_ship_stats(
+    let definition = marvyr_domain_ships::ShipDefinition::small_merchant();
+    let stats = marvyr_domain_ships::compute_ship_stats(
         &definition,
-        &mareforge_domain_ships::EquippedComponents::default(),
+        &marvyr_domain_ships::EquippedComponents::default(),
         &catalog,
     )
     .expect("navio sem equipamento: stats não falham");
@@ -225,7 +225,7 @@ fn vertical_slice_loop_gather_craft_transport_fight_loot_sell() {
                 turn: 0.0,
             },
             // MF-059: vento de través (soprando para o norte).
-            mareforge_domain_ships::Wind {
+            marvyr_domain_ships::Wind {
                 direction: std::f32::consts::FRAC_PI_2,
                 strength: 0.7,
             },
@@ -240,7 +240,7 @@ fn vertical_slice_loop_gather_craft_transport_fight_loot_sell() {
     // A rota é fronteira: PvP legal — é aqui que B pode atacar (§8/§9).
     assert_eq!(
         map.zone_at(motion.x, motion.y).unwrap().tier,
-        mareforge_domain_world::RiskTier::Frontier
+        marvyr_domain_world::RiskTier::Frontier
     );
 
     // ===== 4. A deposita no porto e lista o Casco (storage → escrow) =====
@@ -387,7 +387,7 @@ fn vertical_slice_loop_gather_craft_transport_fight_loot_sell() {
     }
     // O snapshot é persistível (MF-027) e fecha redondo: roundtrip idêntico.
     let bytes = serde_json::to_vec(&snapshot).expect("snapshot serializa");
-    let restored: mareforge_server::market::MarketSnapshot =
+    let restored: marvyr_server::market::MarketSnapshot =
         serde_json::from_slice(&bytes).expect("snapshot desserializa");
     assert_eq!(restored.balances.len(), snapshot.balances.len());
 }

@@ -6,7 +6,7 @@
 
 use bevy::audio::{SpatialScale, Volume};
 use bevy::prelude::*;
-use mareforge_domain_world::RiskTier;
+use marvyr_domain_world::RiskTier;
 
 use crate::juice::SeaEvent;
 use crate::market::Wallet;

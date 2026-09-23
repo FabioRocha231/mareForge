@@ -1,13 +1,13 @@
 //! Loadout no servidor (MF-039): a ponte storage ↔ slots pelos métodos do
 //! ServerMarket, com as garantias de swap (nada destruído) e fail-closed.
 
-use mareforge_domain_items::{
+use marvyr_domain_items::{
     EquipmentDefinition, EquipmentSlot, EquipmentStats, ItemCatalog, ItemDefinition, ItemInstance,
     ItemKind, ItemLocation,
 };
-use mareforge_domain_ships::{can_equip, compute_ship_stats, ShipLoadout};
-use mareforge_server::market::ServerMarket;
-use mareforge_shared::ids::{
+use marvyr_domain_ships::{can_equip, compute_ship_stats, ShipLoadout};
+use marvyr_server::market::ServerMarket;
+use marvyr_shared::ids::{
     ItemDefinitionId, ItemInstanceId, RegionId, ShipDefinitionId, ShipInstanceId,
 };
 use smallvec::SmallVec;
@@ -35,8 +35,8 @@ fn catalog_with_hull() -> (ItemCatalog, ItemDefinitionId) {
     (catalog, hull)
 }
 
-fn merchant() -> mareforge_domain_ships::ShipDefinition {
-    mareforge_domain_ships::ShipDefinition::small_merchant()
+fn merchant() -> marvyr_domain_ships::ShipDefinition {
+    marvyr_domain_ships::ShipDefinition::small_merchant()
 }
 
 #[test]
@@ -50,7 +50,7 @@ fn equip_moves_the_instance_storage_to_slot_and_back() {
     market.return_to_storage(
         character,
         region,
-        mareforge_domain_items::Custody {
+        marvyr_domain_items::Custody {
             instance: ItemInstance::new_equipment(ItemInstanceId::new(), hull, 100),
             location: ItemLocation::PortStorage(region),
         },
@@ -75,7 +75,7 @@ fn equip_moves_the_instance_storage_to_slot_and_back() {
     market.return_to_storage(
         character,
         region,
-        mareforge_domain_items::Custody {
+        marvyr_domain_items::Custody {
             instance: {
                 let mut instance = ItemInstance::new_equipment(equipped_id, hull, 100);
                 instance.id = equipped_id;
@@ -119,7 +119,7 @@ fn hull_slot_is_required_by_the_definition() {
     let error = can_equip(&no_hull, catalog.get(hull).unwrap()).unwrap_err();
     assert!(matches!(
         error,
-        mareforge_domain_ships::LoadoutError::SlotNotAccepted {
+        marvyr_domain_ships::LoadoutError::SlotNotAccepted {
             slot: EquipmentSlot::Hull
         }
     ));

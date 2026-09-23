@@ -1,7 +1,7 @@
-use mareforge_shared::ids::ItemDefinitionId;
+use marvyr_shared::ids::ItemDefinitionId;
 use serde::{Deserialize, Serialize};
 
-use mareforge_domain_items::EquipmentSlot;
+use marvyr_domain_items::EquipmentSlot;
 
 /// Componente equipado em um slot. Aponta para a definição rica no catálogo
 /// de itens (`domain-items`), fonte única dos modificadores de stats.

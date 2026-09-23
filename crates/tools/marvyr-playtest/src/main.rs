@@ -1,13 +1,13 @@
 use std::process::{Child, Command};
 use std::time::Duration;
 
-use mareforge_client::playtest::{disable_dev_automation, PLAYTEST_BANNER};
+use marvyr_client::playtest::{disable_dev_automation, PLAYTEST_BANNER};
 
 const SERVER_ARG: &str = "--server";
 
 fn main() {
     if std::env::args().any(|arg| arg == SERVER_ARG) {
-        mareforge_server::run_headless();
+        marvyr_server::run_headless();
         return;
     }
 
@@ -16,7 +16,7 @@ fn main() {
     let _server = ServerProcess::spawn();
     // ponytail: fixed 250ms wait; poll server readiness if slow machines appear.
     std::thread::sleep(Duration::from_millis(250));
-    mareforge_client::windowed_app().run();
+    marvyr_client::windowed_app().run();
 }
 
 struct ServerProcess(Child);

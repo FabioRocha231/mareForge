@@ -1,12 +1,12 @@
 //! Human playtest entrypoint helpers (MF-048).
 //!
 //! The banner is shared by the one-shot playtest binary and
-//! `mareforge_client --playtest`. Dev automation defaults to off, and this
-//! module removes any `MAREFORGE_AUTO*` vars inherited from the shell before
+//! `marvyr_client --playtest`. Dev automation defaults to off, and this
+//! module removes any `MARVYR_AUTO*` vars inherited from the shell before
 //! the client starts.
 
 pub const PLAYTEST_BANNER: &str = r#"╔════════════════════════════════════════════════════════════╗
-║  mareForge — Playable Alpha 0.1 · HUMAN PLAYTEST           ║
+║  Marvyr — Playable Alpha 0.1 · HUMAN PLAYTEST           ║
 ╠════════════════════════════════════════════════════════════╣
 ║  1. spawn → 2. dock (E) → 3. storage → 4. undock           ║
 ║  5. gather (G) → 6. dock → 7. craft (Port Screen)          ║
@@ -26,21 +26,21 @@ pub fn prepare_playtest() {
 pub fn disable_dev_automation() {
     let automation_keys: Vec<_> = std::env::vars_os()
         .map(|(key, _)| key)
-        .filter(|key| key.to_string_lossy().starts_with("MAREFORGE_AUTO"))
+        .filter(|key| key.to_string_lossy().starts_with("MARVYR_AUTO"))
         .collect();
     for key in automation_keys {
         std::env::remove_var(key);
     }
 }
 
-/// Dev tooling (MF-058): `MAREFORGE_SHOT=/caminho/prefixo` salva capturas da
+/// Dev tooling (MF-058): `MARVYR_SHOT=/caminho/prefixo` salva capturas da
 /// própria janela do jogo (`prefixo-1.png`, `-2`, ...) a cada
-/// `MAREFORGE_SHOT_EVERY` segundos (padrão 6) e fecha após
-/// `MAREFORGE_SHOT_COUNT` capturas (padrão 3). Serve para revisar visual
+/// `MARVYR_SHOT_EVERY` segundos (padrão 6) e fecha após
+/// `MARVYR_SHOT_COUNT` capturas (padrão 3). Serve para revisar visual
 /// sem capturar a tela inteira de quem está rodando.
 pub struct DevScreenshotPlugin {
     pub prefix: String,
-    /// `MAREFORGE_SHOT_ZOOM`: zoom inicial da câmera (m por pixel).
+    /// `MARVYR_SHOT_ZOOM`: zoom inicial da câmera (m por pixel).
     pub zoom: Option<f32>,
     pub every_secs: f32,
     pub count: u32,
@@ -48,7 +48,7 @@ pub struct DevScreenshotPlugin {
 
 impl DevScreenshotPlugin {
     pub fn from_env() -> Option<Self> {
-        let prefix = std::env::var("MAREFORGE_SHOT").ok()?;
+        let prefix = std::env::var("MARVYR_SHOT").ok()?;
         let number = |key: &str, default: f32| {
             std::env::var(key)
                 .ok()
@@ -57,11 +57,11 @@ impl DevScreenshotPlugin {
         };
         Some(Self {
             prefix,
-            zoom: std::env::var("MAREFORGE_SHOT_ZOOM")
+            zoom: std::env::var("MARVYR_SHOT_ZOOM")
                 .ok()
                 .and_then(|value| value.parse().ok()),
-            every_secs: number("MAREFORGE_SHOT_EVERY", 6.0),
-            count: number("MAREFORGE_SHOT_COUNT", 3.0) as u32,
+            every_secs: number("MARVYR_SHOT_EVERY", 6.0),
+            count: number("MARVYR_SHOT_COUNT", 3.0) as u32,
         })
     }
 }

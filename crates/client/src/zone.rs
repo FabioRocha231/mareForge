@@ -7,8 +7,8 @@
 use bevy::ecs::prelude::*;
 use bevy::prelude::*;
 use lightyear::prelude::*;
-use mareforge_domain_world::RiskTier;
-use mareforge_protocol::ZoneChanged;
+use marvyr_domain_world::RiskTier;
+use marvyr_protocol::ZoneChanged;
 
 use crate::hud::{spawn_pvp_warning, spawn_zone_banner, PvpWarningAnchor, ZoneBannerAnchor};
 

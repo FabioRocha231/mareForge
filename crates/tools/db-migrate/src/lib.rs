@@ -1,4 +1,4 @@
-//! PostgreSQL migration CLI used by the MareForge workspace.
+//! PostgreSQL migration CLI used by the Marvyr workspace.
 
 use std::collections::HashSet;
 
@@ -14,8 +14,8 @@ static MIGRATOR: Migrator = sqlx::migrate!("../../../migrations");
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "mareforge-db-migrate",
-    about = "Apply or inspect MareForge database migrations"
+    name = "marvyr-db-migrate",
+    about = "Apply or inspect Marvyr database migrations"
 )]
 pub struct Cli {
     /// PostgreSQL connection URL. Defaults to the DATABASE_URL environment variable.

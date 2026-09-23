@@ -1,5 +1,5 @@
 //! MF-046: asset guard runs from `cargo test --workspace` so CI cannot
-//! silently accept unregistered files under assets/external or assets/mareforge.
+//! silently accept unregistered files under assets/external or assets/marvyr.
 
 use std::path::Path;
 use std::process::Command;

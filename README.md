@@ -1,8 +1,8 @@
-# mareForge
+# Marvyr
 
 **Playable Alpha** of an open-source Rust naval multiplayer sandbox.
 
-mareForge is built around a simple pressure test: player-made value must be
+Marvyr is built around a simple pressure test: player-made value must be
 physically moved through a dangerous world. Ships carry the economy, regional
 cargo creates reasons to sail, and combat can make cargo and ships change hands.
 This is a small playable slice, not a production MMO.
@@ -39,13 +39,13 @@ crafting, loadout, market selling, naval combat, and wreck looting.
 Requirements: Rust 1.80 or newer.
 
 ```sh
-cargo run --bin mareforge_playtest --release
+cargo run --bin marvyr_playtest --release
 ```
 
 The client and server use `127.0.0.1:5000` by default. To use another port:
 
 ```sh
-MAREFORGE_PORT=5001 cargo run --bin mareforge_playtest --release
+MARVYR_PORT=5001 cargo run --bin marvyr_playtest --release
 ```
 
 For the complete 14-step checklist and bug-reporting guidance, see
@@ -77,7 +77,7 @@ cargo test --workspace
 
 ## Architecture
 
-mareForge is a modular Rust workspace built with Rust, Bevy, Lightyear, and
+Marvyr is a modular Rust workspace built with Rust, Bevy, Lightyear, and
 PostgreSQL/sqlx. Domain rules live in focused crates such as
 `domain-items`, `domain-crafting`, `domain-economy`, `domain-ships`,
 `domain-combat`, and `domain-world`; `protocol` defines replicated state and
@@ -132,7 +132,7 @@ repository's issue and pull-request workflows.
 ## Inspirations
 
 The project takes design inspiration from **Albion Online** and **Son Korsan**.
-mareForge is independent and is not affiliated with either project.
+Marvyr is independent and is not affiliated with either project.
 
 ## License
 

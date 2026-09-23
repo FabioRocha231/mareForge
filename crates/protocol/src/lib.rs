@@ -1,16 +1,16 @@
-//! protocol: tipos de wire do mareForge (PRD §63/§64).
+//! protocol: tipos de wire do Marvyr (PRD §63/§64).
 //!
 //! Tipos puros com serde — o transporte (lightyear, ADR-0002) escolhe o
 //! formato na camada dele; este crate define apenas o **contrato** entre
 //! client e servidor. Versionamento no handshake conforme ADR-0011.
 
-use mareforge_domain_combat::weapon::BroadsideSide;
-use mareforge_domain_combat::Ammo;
-use mareforge_domain_crafting::recipe::StationKind;
-use mareforge_domain_items::EquipmentSlot;
-use mareforge_domain_ships::ShipKind;
-use mareforge_domain_world::RiskTier;
-use mareforge_shared::ids::ItemDefinitionId;
+use marvyr_domain_combat::weapon::BroadsideSide;
+use marvyr_domain_combat::Ammo;
+use marvyr_domain_crafting::recipe::StationKind;
+use marvyr_domain_items::EquipmentSlot;
+use marvyr_domain_ships::ShipKind;
+use marvyr_domain_world::RiskTier;
+use marvyr_shared::ids::ItemDefinitionId;
 use serde::{Deserialize, Serialize};
 
 /// Versão atual do protocolo. Qualquer mudança incompatível deve incrementar
@@ -107,7 +107,7 @@ pub struct ShipInput {
 pub struct ShipState {
     pub ship_id: u32,
     /// Tipo autoritativo para apresentação. Nunca participa de regras no client.
-    pub kind: mareforge_domain_ships::ShipKind,
+    pub kind: marvyr_domain_ships::ShipKind,
     pub x: f32,
     pub y: f32,
     /// Radianos, 0 = +X, anti-horário (convenção de `domain-ships`).
@@ -647,7 +647,7 @@ mod tests {
     fn ship_state_carries_authoritative_stats() {
         let state = ShipState {
             ship_id: 1,
-            kind: mareforge_domain_ships::ShipKind::SmallMerchant,
+            kind: marvyr_domain_ships::ShipKind::SmallMerchant,
             x: 0.0,
             y: 0.0,
             heading: 0.0,
@@ -680,7 +680,7 @@ mod tests {
         for is_npc in [false, true] {
             let state = ShipState {
                 ship_id: 3,
-                kind: mareforge_domain_ships::ShipKind::Patrol,
+                kind: marvyr_domain_ships::ShipKind::Patrol,
                 x: 1.0,
                 y: 2.0,
                 heading: 0.5,
@@ -821,7 +821,7 @@ mod tests {
     fn ship_state_truncated_bytes_fail_cleanly_not_silently() {
         let full = ShipState {
             ship_id: 1,
-            kind: mareforge_domain_ships::ShipKind::SmallMerchant,
+            kind: marvyr_domain_ships::ShipKind::SmallMerchant,
             x: 0.0,
             y: 0.0,
             heading: 0.0,
@@ -890,7 +890,7 @@ mod tests {
             ships: vec![
                 ShipState {
                     ship_id: 1,
-                    kind: mareforge_domain_ships::ShipKind::SmallMerchant,
+                    kind: marvyr_domain_ships::ShipKind::SmallMerchant,
                     x: 12.5,
                     y: -3.25,
                     heading: 0.1,
@@ -912,7 +912,7 @@ mod tests {
                 },
                 ShipState {
                     ship_id: 2,
-                    kind: mareforge_domain_ships::ShipKind::Corsair,
+                    kind: marvyr_domain_ships::ShipKind::Corsair,
                     x: 0.0,
                     y: 0.0,
                     heading: 3.0,
@@ -969,8 +969,8 @@ mod tests {
     #[test]
     fn fire_broadside_roundtrips_both_sides() {
         for side in [
-            mareforge_domain_combat::weapon::BroadsideSide::Port,
-            mareforge_domain_combat::weapon::BroadsideSide::Starboard,
+            marvyr_domain_combat::weapon::BroadsideSide::Port,
+            marvyr_domain_combat::weapon::BroadsideSide::Starboard,
         ] {
             let message = FireBroadside { side };
             let bytes = bincode::serialize(&message).unwrap();
@@ -990,9 +990,9 @@ mod tests {
     #[test]
     fn zone_changed_roundtrips_with_tier_and_name() {
         for tier in [
-            mareforge_domain_world::RiskTier::Protected,
-            mareforge_domain_world::RiskTier::Frontier,
-            mareforge_domain_world::RiskTier::Lawless,
+            marvyr_domain_world::RiskTier::Protected,
+            marvyr_domain_world::RiskTier::Frontier,
+            marvyr_domain_world::RiskTier::Lawless,
         ] {
             let message = ZoneChanged {
                 ship_id: 7,
@@ -1061,7 +1061,7 @@ mod tests {
         let entry = RecipeEntry {
             recipe_id: 3,
             display_name: String::from("Corsair"),
-            station: mareforge_domain_crafting::recipe::StationKind::Dock,
+            station: marvyr_domain_crafting::recipe::StationKind::Dock,
             ship_build: true,
             output_name: String::from("Corsair"),
             output_quantity: 1,
@@ -1084,7 +1084,7 @@ mod tests {
         assert_eq!(decoded, snapshot);
         assert_eq!(
             decoded.recipes[0].station,
-            mareforge_domain_crafting::recipe::StationKind::Dock
+            marvyr_domain_crafting::recipe::StationKind::Dock
         );
 
         let intent = CraftItem { recipe_id: 3 };

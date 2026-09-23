@@ -1,4 +1,4 @@
-# mareForge — PRD do Vertical Slice
+# Marvyr — PRD do Vertical Slice
 
 **Versão:** 0.1
 **Data:** 2026-08-30
@@ -10,9 +10,9 @@
 
 # 1. Resumo executivo
 
-O objetivo do primeiro Vertical Slice do mareForge não é provar que conseguimos construir um MMORPG.
+O objetivo do primeiro Vertical Slice do Marvyr não é provar que conseguimos construir um MMORPG.
 
-O objetivo é provar que a tese econômica central do mareForge gera gameplay.
+O objetivo é provar que a tese econômica central do Marvyr gera gameplay.
 
 Essa tese é:
 
@@ -105,7 +105,7 @@ Devemos conseguir colocar entre 2 e 10 jogadores em um pequeno mundo persistente
 * crafting volta a ser necessário;
 * preços entre portos divergem.
 
-Quando o próprio sistema começa a gerar essas histórias, o mareForge está funcionando.
+Quando o próprio sistema começa a gerar essas histórias, o Marvyr está funcionando.
 
 ---
 
@@ -613,7 +613,7 @@ O jogador derrotado perde:
 
 Nada embarcado permanece com o personagem.
 
-Isso é a definição de full loot do mareForge.
+Isso é a definição de full loot do Marvyr.
 
 ### Pilar
 
@@ -2415,7 +2415,7 @@ Nome:
 
 **M3 — Risk Has Value.**
 
-Aqui nasce o mareForge de verdade.
+Aqui nasce o Marvyr de verdade.
 
 ---
 
@@ -2487,7 +2487,7 @@ Sempre que alguém sugerir uma feature, perguntar:
 
 Se a resposta for "nenhuma":
 
-provavelmente não pertence às prioridades atuais do mareForge.
+provavelmente não pertence às prioridades atuais do Marvyr.
 
 O objetivo não é construir muito conteúdo.
 

@@ -5,10 +5,10 @@
 use bevy::prelude::*;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
-use mareforge_domain_ships::sailing::{SAIL_REPAIR_PER_SEC, STORM_SAIL_DAMAGE_PER_SEC};
-use mareforge_domain_ships::{VesselPresence, Weather, WeatherBounds, SAIL_HP_MAX};
-use mareforge_domain_world::{RiskTier, WorldMap};
-use mareforge_protocol::{SelectAmmo, StormState, WeatherUpdate};
+use marvyr_domain_ships::sailing::{SAIL_REPAIR_PER_SEC, STORM_SAIL_DAMAGE_PER_SEC};
+use marvyr_domain_ships::{VesselPresence, Weather, WeatherBounds, SAIL_HP_MAX};
+use marvyr_domain_world::{RiskTier, WorldMap};
+use marvyr_protocol::{SelectAmmo, StormState, WeatherUpdate};
 use tracing::info;
 
 use crate::net::{ReliableChannel, ServerShip, ServerWorldMap};
@@ -42,10 +42,10 @@ pub fn install(app: &mut App) {
     );
 }
 
-/// Semente: `MAREFORGE_WEATHER_SEED` (reprodutível) ou o relógio. Dev:
-/// `MAREFORGE_STORM_AT=x,y` força uma tempestade de 5 min ali.
+/// Semente: `MARVYR_WEATHER_SEED` (reprodutível) ou o relógio. Dev:
+/// `MARVYR_STORM_AT=x,y` força uma tempestade de 5 min ali.
 fn initial_weather() -> Weather {
-    let seed = std::env::var("MAREFORGE_WEATHER_SEED")
+    let seed = std::env::var("MARVYR_WEATHER_SEED")
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or_else(|| {
@@ -55,7 +55,7 @@ fn initial_weather() -> Weather {
                 .unwrap_or(0)
         });
     let mut weather = Weather::new(seed);
-    if let Some((x, y)) = std::env::var("MAREFORGE_STORM_AT")
+    if let Some((x, y)) = std::env::var("MARVYR_STORM_AT")
         .ok()
         .and_then(|value| parse_point(&value))
     {

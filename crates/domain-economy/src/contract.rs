@@ -2,7 +2,7 @@
 //! progresso de um contrato ativo. Recompensa é faucet auditado
 //! (`LedgerKind::ContractReward`); itens entregues são consumidos (sink).
 
-use mareforge_shared::ItemInstanceId;
+use marvyr_shared::ItemInstanceId;
 
 use crate::guild::{guild_value, GUILD_BASE_VALUES};
 

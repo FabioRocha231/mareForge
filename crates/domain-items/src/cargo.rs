@@ -6,7 +6,7 @@
 use crate::catalog::ItemCatalog;
 use crate::instance::ItemInstance;
 use crate::location::{Custody, ItemLocation};
-use mareforge_shared::ids::ShipInstanceId;
+use marvyr_shared::ids::ShipInstanceId;
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -14,7 +14,7 @@ pub enum CargoError {
     #[error("cargo capacity exceeded: needs {needed} but hold allows {available}")]
     CargoCapacityExceeded { needed: u32, available: u32 },
     #[error("item {0:?} is not in the catalog")]
-    UnknownItem(mareforge_shared::ids::ItemDefinitionId),
+    UnknownItem(marvyr_shared::ids::ItemDefinitionId),
     #[error("quantity {requested} not available in cargo")]
     NotEnoughItems { requested: u32 },
 }
@@ -71,7 +71,7 @@ impl CargoHold {
     pub fn can_accept(
         &self,
         catalog: &ItemCatalog,
-        definition: mareforge_shared::ids::ItemDefinitionId,
+        definition: marvyr_shared::ids::ItemDefinitionId,
         quantity: u32,
     ) -> Result<(), CargoError> {
         let def = catalog
@@ -148,7 +148,7 @@ impl CargoHold {
     /// quando necessário (coleta fracionada tem que permitir craft inteiro).
     pub fn remove(
         &mut self,
-        definition: mareforge_shared::ids::ItemDefinitionId,
+        definition: marvyr_shared::ids::ItemDefinitionId,
         quantity: u32,
     ) -> Result<ItemInstance, CargoError> {
         let available: u32 = self
@@ -198,7 +198,7 @@ impl CargoHold {
 mod tests {
     use smallvec::SmallVec;
 
-    use mareforge_shared::ids::{ItemDefinitionId, ItemInstanceId, ShipInstanceId, WreckId};
+    use marvyr_shared::ids::{ItemDefinitionId, ItemInstanceId, ShipInstanceId, WreckId};
 
     use super::*;
     use crate::catalog::ItemCatalog;

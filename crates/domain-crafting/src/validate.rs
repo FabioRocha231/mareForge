@@ -1,4 +1,4 @@
-use mareforge_domain_items::ItemDefinition;
+use marvyr_domain_items::ItemDefinition;
 use std::collections::HashMap;
 
 use crate::recipe::{Recipe, StationKind};
@@ -7,7 +7,7 @@ use crate::recipe::{Recipe, StationKind};
 pub enum CraftError {
     #[error("missing ingredient: item {item:?} needs {needed} but inventory has {available}")]
     MissingIngredient {
-        item: mareforge_shared::ids::ItemDefinitionId,
+        item: marvyr_shared::ids::ItemDefinitionId,
         needed: u32,
         available: u32,
     },
@@ -20,10 +20,10 @@ pub enum CraftError {
     NoRoomForOutput,
     #[error("recipe output {item:?} is not in the item catalog")]
     UnknownOutputItem {
-        item: mareforge_shared::ids::ItemDefinitionId,
+        item: marvyr_shared::ids::ItemDefinitionId,
     },
     #[error("cargo rejected the craft: {0}")]
-    Cargo(#[from] mareforge_domain_items::CargoError),
+    Cargo(#[from] marvyr_domain_items::CargoError),
     /// MF-037: a oficina trabalha sobre o storage regional do porto — sem
     /// gaveta de storage para o personagem naquela região, não há oficina.
     #[error("o storage do porto está vazio: deposite materiais primeiro")]
@@ -33,12 +33,12 @@ pub enum CraftError {
 #[derive(Debug)]
 pub struct InventoryView<'a> {
     /// Quantidade disponível por definição de item.
-    pub quantities: HashMap<mareforge_shared::ids::ItemDefinitionId, u32>,
+    pub quantities: HashMap<marvyr_shared::ids::ItemDefinitionId, u32>,
     /// Número de slots livres (para outputs não-fungíveis).
     pub free_slots: u32,
     /// Definições conhecidas (para checar stackability). Saída sem definição
     /// conhecida é rejeitada com `CraftError::UnknownOutputItem`.
-    pub definitions: HashMap<mareforge_shared::ids::ItemDefinitionId, &'a ItemDefinition>,
+    pub definitions: HashMap<marvyr_shared::ids::ItemDefinitionId, &'a ItemDefinition>,
     /// Station atualmente disponível (None se não há).
     pub station: StationKind,
 }
@@ -98,8 +98,8 @@ pub fn can_craft<'a>(recipe: &Recipe, inventory: &InventoryView<'a>) -> Result<(
 mod tests {
     use std::collections::HashMap;
 
-    use mareforge_domain_items::{ItemDefinition, ItemKind};
-    use mareforge_shared::ids::{ItemDefinitionId, RecipeId};
+    use marvyr_domain_items::{ItemDefinition, ItemKind};
+    use marvyr_shared::ids::{ItemDefinitionId, RecipeId};
 
     use super::{can_craft, InventoryView};
     use crate::recipe::{Recipe, StationKind};

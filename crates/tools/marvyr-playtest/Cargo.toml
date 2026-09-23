@@ -1,15 +1,15 @@
 [package]
-name = "mareforge-playtest"
+name = "marvyr-playtest"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "mareforge_playtest"
+name = "marvyr_playtest"
 path = "src/main.rs"
 
 [dependencies]
 libc = "0.2"
-mareforge-client = { path = "../../client" }
-mareforge-server = { path = "../../server" }
+marvyr-client = { path = "../../client" }
+marvyr-server = { path = "../../server" }

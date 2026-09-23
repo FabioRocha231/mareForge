@@ -20,12 +20,12 @@ use bevy::app::TerminalCtrlCHandlerPlugin;
 use bevy::prelude::*;
 use tracing_subscriber::EnvFilter;
 
-/// Headless server app shared by `mareforge-server` and the playtest child.
+/// Headless server app shared by `marvyr-server` and the playtest child.
 pub fn run_headless() {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info,mareforge_server=debug")),
+                .unwrap_or_else(|_| EnvFilter::new("info,marvyr_server=debug")),
         )
         .init();
 

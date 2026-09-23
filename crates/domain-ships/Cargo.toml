@@ -1,11 +1,11 @@
 [package]
-name = "mareforge-domain-ships"
+name = "marvyr-domain-ships"
 version = "0.1.0"
 edition = "2021"
 license.workspace = true
 
 [dependencies]
-mareforge-shared = { path = "../shared" }
-mareforge-domain-items = { path = "../domain-items" }
+marvyr-shared = { path = "../shared" }
+marvyr-domain-items = { path = "../domain-items" }
 serde = { version = "1", features = ["derive"] }
 thiserror = "1"

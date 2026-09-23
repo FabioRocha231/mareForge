@@ -6,15 +6,13 @@
 use bevy::ecs::prelude::*;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
-use mareforge_domain_crafting::{
-    can_construct, Ingredient, Recipe, ShipConstructionJob, StationKind,
-};
-use mareforge_domain_items::ItemCatalog;
-use mareforge_domain_ships::{ShipDefinition, ShipKind, VesselPresence};
-use mareforge_domain_world::map::PIRATE_PORT;
-use mareforge_domain_world::WorldMap;
-use mareforge_protocol::{AssignShip, CraftItem, CraftResult, RecipeEntry, RecipesSnapshot};
-use mareforge_shared::ids::{ItemDefinitionId, RecipeId, RegionId};
+use marvyr_domain_crafting::{can_construct, Ingredient, Recipe, ShipConstructionJob, StationKind};
+use marvyr_domain_items::ItemCatalog;
+use marvyr_domain_ships::{ShipDefinition, ShipKind, VesselPresence};
+use marvyr_domain_world::map::PIRATE_PORT;
+use marvyr_domain_world::WorldMap;
+use marvyr_protocol::{AssignShip, CraftItem, CraftResult, RecipeEntry, RecipesSnapshot};
+use marvyr_shared::ids::{ItemDefinitionId, RecipeId, RegionId};
 use tracing::{info, warn};
 
 use crate::net::{
@@ -159,7 +157,7 @@ impl DevRecipes {
         let lines = |ingredients: &[Ingredient]| {
             ingredients
                 .iter()
-                .map(|ingredient| mareforge_protocol::IngredientLine {
+                .map(|ingredient| marvyr_protocol::IngredientLine {
                     name: catalog
                         .get(ingredient.item)
                         .map(|definition| definition.display_name.clone())

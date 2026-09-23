@@ -11,8 +11,8 @@ use bevy::render::render_asset::RenderAssetUsages;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::sprite::Anchor;
 use lightyear::prelude::ClientReceiveMessage;
-use mareforge_domain_world::map::{FOG_ZONE, MAELSTROM_ZONE};
-use mareforge_protocol::{PortalKindWire, PortalState, PortalsUpdate};
+use marvyr_domain_world::map::{FOG_ZONE, MAELSTROM_ZONE};
+use marvyr_protocol::{PortalKindWire, PortalState, PortalsUpdate};
 
 use crate::assets::layers;
 use crate::ship::ShipVisual;

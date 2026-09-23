@@ -8,7 +8,7 @@ use bevy::ecs::prelude::*;
 use bevy::prelude::*;
 use bevy::sprite::Anchor;
 use lightyear::prelude::*;
-use mareforge_protocol::{GatherResult, NodeState, NodeUpdated, NodesSnapshot};
+use marvyr_protocol::{GatherResult, NodeState, NodeUpdated, NodesSnapshot};
 
 use crate::assets::{deco, layers, GameAssets};
 

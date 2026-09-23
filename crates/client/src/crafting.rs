@@ -7,7 +7,7 @@ use bevy::ecs::prelude::*;
 use bevy::prelude::*;
 use lightyear::prelude::client::*;
 use lightyear::prelude::*;
-use mareforge_protocol::{CraftItem, CraftResult, RecipeEntry, RecipesSnapshot};
+use marvyr_protocol::{CraftItem, CraftResult, RecipeEntry, RecipesSnapshot};
 
 use crate::net::ReliableChannel;
 
@@ -54,7 +54,7 @@ fn handle_craft_result(mut events: EventReader<ClientReceiveMessage<CraftResult>
 }
 
 /// Teclas 1-9 fabricam a receita correspondente. Dev tooling (§39):
-/// MAREFORGE_AUTOCRAFT=1 tenta a lista em ciclo — smoke sem interação.
+/// MARVYR_AUTOCRAFT=1 tenta a lista em ciclo — smoke sem interação.
 pub fn send_craft_input(
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
@@ -99,5 +99,5 @@ pub fn send_craft_input(
 }
 
 fn autocraft_enabled() -> bool {
-    std::env::var_os("MAREFORGE_AUTOCRAFT").is_some()
+    std::env::var_os("MARVYR_AUTOCRAFT").is_some()
 }

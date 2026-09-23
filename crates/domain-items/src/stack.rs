@@ -1,4 +1,4 @@
-use mareforge_shared::ids::ItemInstanceId;
+use marvyr_shared::ids::ItemInstanceId;
 use thiserror::Error;
 
 use crate::definition::ItemDefinition;
@@ -79,7 +79,7 @@ mod tests {
     use super::*;
     use crate::definition::{ItemDefinition, ItemKind};
     use crate::instance::ItemInstance;
-    use mareforge_shared::ids::{ItemDefinitionId, ItemInstanceId};
+    use marvyr_shared::ids::{ItemDefinitionId, ItemInstanceId};
 
     fn def(kind: ItemKind, max_stack: u32) -> ItemDefinition {
         ItemDefinition {

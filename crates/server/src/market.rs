@@ -17,21 +17,19 @@ use bevy::time::Time;
 use chrono::{DateTime, Utc};
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
-use mareforge_domain_crafting::{craft_in_storage, CraftError, Recipe, StationKind};
-use mareforge_domain_economy::{
+use marvyr_domain_crafting::{craft_in_storage, CraftError, Recipe, StationKind};
+use marvyr_domain_economy::{
     validate_new_order, FeePolicy, Ledger, LedgerKind, MarketError, MarketOrder, MarketPriceIndex,
     Money, OrderStatus,
 };
-use mareforge_domain_items::{
-    put_stack, CargoHold, Custody, ItemCatalog, ItemInstance, ItemLocation,
-};
-use mareforge_domain_ships::VesselPresence;
-use mareforge_domain_world::WorldMap;
-use mareforge_protocol::{
+use marvyr_domain_items::{put_stack, CargoHold, Custody, ItemCatalog, ItemInstance, ItemLocation};
+use marvyr_domain_ships::VesselPresence;
+use marvyr_domain_world::WorldMap;
+use marvyr_protocol::{
     BuySellOrder, CancelSellOrder, CatalogSnapshot, CreateSellOrder, ItemLine, MarketResult,
     OrderLine, OrdersSnapshot, StorageDepositAll, StorageWithdrawAll, WalletUpdated,
 };
-use mareforge_shared::ids::{CharacterId, ItemDefinitionId, MarketOrderId, RegionId};
+use marvyr_shared::ids::{CharacterId, ItemDefinitionId, MarketOrderId, RegionId};
 use tracing::{info, warn};
 
 use crate::net::{DevItems, ReliableChannel, ServerShip, ServerWorldMap};
@@ -1311,8 +1309,8 @@ pub fn save_state(
 mod tests {
     use chrono::Duration;
 
-    use mareforge_domain_items::{CargoHold, ItemDefinition, ItemInstance, ItemKind};
-    use mareforge_shared::ids::{ItemInstanceId, ShipInstanceId};
+    use marvyr_domain_items::{CargoHold, ItemDefinition, ItemInstance, ItemKind};
+    use marvyr_shared::ids::{ItemInstanceId, ShipInstanceId};
 
     use super::*;
 

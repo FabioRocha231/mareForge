@@ -1,7 +1,7 @@
 # Asset Registry
 
-Toda asset externa usada no mareForge vive aqui. Nada entra em
-`assets/external/` ou `assets/mareforge/` sem estar registrado.
+Toda asset externa usada no Marvyr vive aqui. Nada entra em
+`assets/external/` ou `assets/marvyr/` sem estar registrado.
 
 ## Política de Licença (fail-closed)
 - **CC0 / Public Domain:** permitido.
@@ -12,7 +12,7 @@ Toda asset externa usada no mareForge vive aqui. Nada entra em
 
 ## Como registrar uma asset
 
-1. Coloque o arquivo em `assets/external/<nome>.png` (ou em `assets/mareforge/` se for uma adaptação nossa).
+1. Coloque o arquivo em `assets/external/<nome>.png` (ou em `assets/marvyr/` se for uma adaptação nossa).
 2. Adicione uma entrada na tabela abaixo com:
    - nome do arquivo
    - autor original
@@ -40,13 +40,13 @@ Toda asset externa usada no mareForge vive aqui. Nada entra em
 | Kenney Impact Sounds | Kenney | https://kenney.nl/assets/impact-sounds | CC0 1.0 | false | `assets/external/kenney-impact-sounds/impactBell_heavy_000.ogg` | nenhuma | 2026-09-23 |
 | Kenney Interface Sounds | Kenney | https://kenney.nl/assets/interface-sounds | CC0 1.0 | false | `assets/external/kenney-interface-sounds/click_002.ogg` | nenhuma | 2026-09-23 |
 
-## Assets geradas pelo próprio mareForge
+## Assets geradas pelo próprio Marvyr
 
-Sprites geradas pelo time do mareForge para preencher HUD, combate e mar. O conteúdo é nosso, dedicado ao domínio público (CC0 1.0); sem attribution externa, então `ATTRIBUTION.md` permanece vazio para esta seção.
+Sprites geradas pelo time do Marvyr para preencher HUD, combate e mar. O conteúdo é nosso, dedicado ao domínio público (CC0 1.0); sem attribution externa, então `ATTRIBUTION.md` permanece vazio para esta seção.
 
 | Pack | Autor | URL | Licença | Attribution required | Arquivos utilizados | Modificações | Data de inclusão |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| mareForge UI (MF-057A) | Equipe mareForge | (gerado internamente) | CC0 1.0 | false | `assets/mareforge/ui/panel_ship.png`, `assets/mareforge/ui/panel_zone.png`, `assets/mareforge/ui/panel_cooldowns.png`, `assets/mareforge/ui/panel_prompt.png`, `assets/mareforge/ui/panel_warning.png`, `assets/mareforge/ui/panel_port.png`, `assets/mareforge/ui/icon_ship.png`, `assets/mareforge/ui/icon_hp.png`, `assets/mareforge/ui/icon_cargo.png`, `assets/mareforge/ui/icon_gold.png`, `assets/mareforge/ui/icon_warn.png`, `assets/mareforge/ui/icon_skull.png` | nenhuma | 2026-08-31 |
-| mareForge Ships presence (MF-057F) | Equipe mareForge | (gerado internamente) | CC0 1.0 | false | `assets/mareforge/ships/shadow.png` | nenhuma | 2026-08-31 |
-| mareForge Ocean polish (MF-057D) | Equipe mareForge | (gerado internamente) | CC0 1.0 | false | `assets/mareforge/world/ocean_deep.png`, `assets/mareforge/world/shore_band.png` | nenhuma | 2026-08-31 |
-| mareForge Combat feel (MF-057J) | Equipe mareForge | (gerado internamente) | CC0 1.0 | false | `assets/mareforge/effects/muzzle_flash.png`, `assets/mareforge/effects/smoke.png`, `assets/mareforge/effects/wake.png` | nenhuma | 2026-08-31 |
+| Marvyr UI (MF-057A) | Equipe Marvyr | (gerado internamente) | CC0 1.0 | false | `assets/marvyr/ui/panel_ship.png`, `assets/marvyr/ui/panel_zone.png`, `assets/marvyr/ui/panel_cooldowns.png`, `assets/marvyr/ui/panel_prompt.png`, `assets/marvyr/ui/panel_warning.png`, `assets/marvyr/ui/panel_port.png`, `assets/marvyr/ui/icon_ship.png`, `assets/marvyr/ui/icon_hp.png`, `assets/marvyr/ui/icon_cargo.png`, `assets/marvyr/ui/icon_gold.png`, `assets/marvyr/ui/icon_warn.png`, `assets/marvyr/ui/icon_skull.png` | nenhuma | 2026-08-31 |
+| Marvyr Ships presence (MF-057F) | Equipe Marvyr | (gerado internamente) | CC0 1.0 | false | `assets/marvyr/ships/shadow.png` | nenhuma | 2026-08-31 |
+| Marvyr Ocean polish (MF-057D) | Equipe Marvyr | (gerado internamente) | CC0 1.0 | false | `assets/marvyr/world/ocean_deep.png`, `assets/marvyr/world/shore_band.png` | nenhuma | 2026-08-31 |
+| Marvyr Combat feel (MF-057J) | Equipe Marvyr | (gerado internamente) | CC0 1.0 | false | `assets/marvyr/effects/muzzle_flash.png`, `assets/marvyr/effects/smoke.png`, `assets/marvyr/effects/wake.png` | nenhuma | 2026-08-31 |

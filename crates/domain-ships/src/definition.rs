@@ -1,5 +1,5 @@
-use mareforge_domain_items::EquipmentSlot;
-use mareforge_shared::ids::ShipDefinitionId;
+use marvyr_domain_items::EquipmentSlot;
+use marvyr_shared::ids::ShipDefinitionId;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

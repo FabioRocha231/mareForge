@@ -1,4 +1,4 @@
-use mareforge_shared::ids::{ItemDefinitionId, ItemInstanceId};
+use marvyr_shared::ids::{ItemDefinitionId, ItemInstanceId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

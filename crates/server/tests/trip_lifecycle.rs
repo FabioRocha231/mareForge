@@ -8,23 +8,21 @@
 //! expostos pelo modulo `net` para validar a semantica do lifecycle sem
 //! precisar montar todo o grafo Bevy.
 
-use mareforge_domain_combat::BroadsideBattery;
-use mareforge_domain_economy::{MarketPriceIndex, Money};
-use mareforge_domain_items::{CargoHold, ItemCatalog, ItemDefinition, ItemInstance, ItemKind};
-use mareforge_domain_ships::{
+use marvyr_domain_combat::BroadsideBattery;
+use marvyr_domain_economy::{MarketPriceIndex, Money};
+use marvyr_domain_items::{CargoHold, ItemCatalog, ItemDefinition, ItemInstance, ItemKind};
+use marvyr_domain_ships::{
     compute_ship_stats, EquippedComponents, MotionTuning, ShipKind, ShipLoadout, ShipMotion,
     VesselPresence,
 };
-use mareforge_protocol::ShipInput;
-use mareforge_server::crafting::DevShips;
-use mareforge_server::market::ServerPriceIndex;
-use mareforge_server::net::{
+use marvyr_protocol::ShipInput;
+use marvyr_server::crafting::DevShips;
+use marvyr_server::market::ServerPriceIndex;
+use marvyr_server::net::{
     finalize_trip, start_trip, Metrics, ServerShip, TradeRouteKey, TripOutcome, TripTelemetry,
 };
-use mareforge_server::persist::ShipRecord;
-use mareforge_shared::ids::{
-    CharacterId, ItemDefinitionId, ItemInstanceId, RegionId, ShipInstanceId,
-};
+use marvyr_server::persist::ShipRecord;
+use marvyr_shared::ids::{CharacterId, ItemDefinitionId, ItemInstanceId, RegionId, ShipInstanceId};
 use smallvec::SmallVec;
 
 /// Constroi um ServerShip minimo so para os testes de lifecycle. Stats de

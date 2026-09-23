@@ -1,4 +1,4 @@
-use mareforge_shared::ids::ItemDefinitionId;
+use marvyr_shared::ids::ItemDefinitionId;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 

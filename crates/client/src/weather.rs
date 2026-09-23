@@ -8,11 +8,9 @@ use std::f32::consts::{PI, TAU};
 use bevy::prelude::*;
 use lightyear::prelude::client::*;
 use lightyear::prelude::*;
-use mareforge_domain_combat::Ammo;
-use mareforge_domain_ships::{
-    angle_off_wind, point_of_sail, polar_factor, PointOfSail, SAIL_HP_MAX,
-};
-use mareforge_protocol::{SelectAmmo, StormState, WeatherUpdate};
+use marvyr_domain_combat::Ammo;
+use marvyr_domain_ships::{angle_off_wind, point_of_sail, polar_factor, PointOfSail, SAIL_HP_MAX};
+use marvyr_protocol::{SelectAmmo, StormState, WeatherUpdate};
 
 use crate::assets::layers;
 use crate::hud::SeaHud;
@@ -74,7 +72,7 @@ fn receive_weather(
 }
 
 /// C alterna bala/corrente. Pede ao servidor a PRÓXIMA da munição que o
-/// servidor diz estar carregada. Dev: MAREFORGE_AMMO=chain pede corrente.
+/// servidor diz estar carregada. Dev: MARVYR_AMMO=chain pede corrente.
 fn send_ammo_input(
     keys: Res<ButtonInput<KeyCode>>,
     docked: Res<MyDocked>,
@@ -86,8 +84,8 @@ fn send_ammo_input(
     let Some(current) = my_state(&my_ship, &visuals).map(|s| s.ammo) else {
         return;
     };
-    let dev_chain = !*dev_sent
-        && std::env::var("MAREFORGE_AMMO").is_ok_and(|v| v.eq_ignore_ascii_case("chain"));
+    let dev_chain =
+        !*dev_sent && std::env::var("MARVYR_AMMO").is_ok_and(|v| v.eq_ignore_ascii_case("chain"));
     let ammo = if keys.just_pressed(KeyCode::KeyC) && !docked.0 {
         current.next()
     } else if dev_chain {
@@ -103,7 +101,7 @@ fn send_ammo_input(
 fn my_state<'a>(
     my_ship: &MyShip,
     visuals: &'a Query<&ShipVisual>,
-) -> Option<&'a mareforge_protocol::ShipState> {
+) -> Option<&'a marvyr_protocol::ShipState> {
     let id = my_ship.0?;
     visuals
         .iter()

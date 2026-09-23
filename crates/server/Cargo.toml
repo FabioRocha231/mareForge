@@ -1,5 +1,5 @@
 [package]
-name = "mareforge-server"
+name = "marvyr-server"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,14 +8,14 @@ license.workspace = true
 [dependencies]
 bevy = { version = "0.15", default-features = false, features = ["bevy_asset", "bevy_state"] }
 lightyear = "0.19"
-mareforge-domain-combat = { path = "../domain-combat" }
-mareforge-domain-crafting = { path = "../domain-crafting" }
-mareforge-domain-economy = { path = "../domain-economy" }
-mareforge-domain-items = { path = "../domain-items" }
-mareforge-domain-ships = { path = "../domain-ships" }
-mareforge-domain-world = { path = "../domain-world" }
-mareforge-protocol = { path = "../protocol" }
-mareforge-shared = { path = "../shared" }
+marvyr-domain-combat = { path = "../domain-combat" }
+marvyr-domain-crafting = { path = "../domain-crafting" }
+marvyr-domain-economy = { path = "../domain-economy" }
+marvyr-domain-items = { path = "../domain-items" }
+marvyr-domain-ships = { path = "../domain-ships" }
+marvyr-domain-world = { path = "../domain-world" }
+marvyr-protocol = { path = "../protocol" }
+marvyr-shared = { path = "../shared" }
 chrono = "0.4"
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }
@@ -29,4 +29,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
 crossbeam-channel = "0.5"
-mareforge-client = { path = "../client" }
+marvyr-client = { path = "../client" }

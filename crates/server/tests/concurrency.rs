@@ -4,16 +4,16 @@
 //! no mesmo tick. Cada teste prova que apenas uma operação vence.
 
 use chrono::Utc;
-use mareforge_domain_combat::{resolve_ship_destruction, LootPolicy, SurvivorItem, WreckChest};
-use mareforge_domain_crafting::{craft_in_storage, Ingredient, Recipe, StationKind};
-use mareforge_domain_economy::{LedgerKind, MarketError, Money};
+use marvyr_domain_combat::{resolve_ship_destruction, LootPolicy, SurvivorItem, WreckChest};
+use marvyr_domain_crafting::{craft_in_storage, Ingredient, Recipe, StationKind};
+use marvyr_domain_economy::{LedgerKind, MarketError, Money};
 
 // Money não implementa Add/Sub: comparação via tuple interno.
-use mareforge_domain_items::{
+use marvyr_domain_items::{
     CargoHold, Custody, ItemCatalog, ItemDefinition, ItemInstance, ItemKind, ItemLocation,
 };
-use mareforge_server::market::ServerMarket;
-use mareforge_shared::ids::{
+use marvyr_server::market::ServerMarket;
+use marvyr_shared::ids::{
     CharacterId, DestructionEventId, ItemDefinitionId, ItemInstanceId, RecipeId, RegionId,
     ShipInstanceId, WreckId,
 };

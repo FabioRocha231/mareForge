@@ -3,7 +3,7 @@
 //! posição fora de todas é `UnknownZone` (§69, fail-closed).
 
 use crate::risk::RiskTier;
-use mareforge_shared::ids::ZoneId;
+use marvyr_shared::ids::ZoneId;
 
 /// Forma de uma zona. O Vertical Slice usa só círculos: corredores e rotas
 /// são cadeias de círculos encadeados — geometria suficiente, zero matemática
