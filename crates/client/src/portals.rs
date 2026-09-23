@@ -254,8 +254,9 @@ fn update_edge_markers(
             let Ok(screen) = camera.world_to_viewport(camera_transform, at.extend(0.0)) else {
                 continue;
             };
-            // Faixa livre entre os painéis do HUD (topo e rodapé ocupados).
-            let area = Rect::new(60.0, 120.0, viewport.x - 60.0, viewport.y - 130.0);
+            // Faixa livre entre os painéis do HUD (topo e rodapé ocupados;
+            // o painel de vento desce até ~140 px).
+            let area = Rect::new(60.0, 150.0, viewport.x - 60.0, viewport.y - 130.0);
             if area.contains(screen) {
                 continue;
             }

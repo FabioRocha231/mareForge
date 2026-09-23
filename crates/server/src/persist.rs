@@ -760,6 +760,8 @@ impl std::str::FromStr for StoredLedgerKind {
             "npcbounty" => Ok(Self(LedgerKind::NpcBounty)),
             "guildpurchase" => Ok(Self(LedgerKind::GuildPurchase)),
             "contractreward" => Ok(Self(LedgerKind::ContractReward)),
+            "caravanplunder" => Ok(Self(LedgerKind::CaravanPlunder)),
+            "bountyclaim" => Ok(Self(LedgerKind::BountyClaim)),
             _ => Err(()),
         }
     }

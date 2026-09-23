@@ -48,7 +48,9 @@ use serde::{Deserialize, Serialize};
 ///     porão para a UI.
 /// v13: MF-059 — portais (`PortalsUpdate`), guilda e contratos, clima,
 ///      munição e `ShipState.sail_hp`/`ammo`.
-pub const PROTOCOL_VERSION: u16 = 13;
+/// v14: MF-060 — mar vivo: `ShipState.faction`/`notoriety_tier`,
+///      `ReputationUpdate` e `WorldEvent`.
+pub const PROTOCOL_VERSION: u16 = 14;
 
 /// Primeira mensagem do client após conectar (ADR-0011). `identity` é o
 /// token persistente do jogador (MF-035): o servidor resolve token →
@@ -137,6 +139,14 @@ pub struct ShipState {
     /// MF-059: munição carregada (tecla C). Default bala redonda.
     #[serde(default)]
     pub ammo: Ammo,
+    /// Bandeira do navio (jogador, pirata, marinha, mercador NPC). Aditivo;
+    /// só apresentação e HUD — regras de facção vivem no servidor.
+    #[serde(default)]
+    pub faction: Faction,
+    /// Faixa de notoriedade do capitão (0 Honrado, 1 Suspeito, 2 Procurado).
+    /// Todos veem quem é procurado. Aditivo, default 0.
+    #[serde(default)]
+    pub notoriety_tier: u8,
 }
 
 fn full_sails() -> f32 {
@@ -168,6 +178,49 @@ pub struct WeatherUpdate {
     pub wind_dir: f32,
     pub wind_strength: f32,
     pub storms: Vec<StormState>,
+}
+
+/// Facção de um navio no mar. `Player` é o default de wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum Faction {
+    #[default]
+    Player,
+    Pirate,
+    Navy,
+    Merchant,
+}
+
+/// Faixas de notoriedade no wire (`ShipState.notoriety_tier`).
+pub const TIER_HONRADO: u8 = 0;
+pub const TIER_SUSPEITO: u8 = 1;
+pub const TIER_PROCURADO: u8 = 2;
+
+/// Reputação do PRÓPRIO capitão (só para o dono): notoriedade 0..1000,
+/// faixa e cabeça a prêmio em ouro (0 fora de Procurado).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReputationUpdate {
+    pub notoriety: u32,
+    pub tier: u8,
+    pub bounty: u64,
+}
+
+/// Tipo de evento do feed (cor/ícone no client).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WorldEventKind {
+    /// Afundamento, saque, recompensa recebida.
+    Kill,
+    /// Alarme: mercador atacado, marinha a caminho.
+    Alert,
+    /// Cabeça a prêmio / mudança de faixa de notoriedade.
+    Bounty,
+}
+
+/// Linha do feed de eventos, só para jogadores envolvidos ou por perto.
+/// Texto ASCII (a fonte padrão do client não tem acentos).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorldEvent {
+    pub text: String,
+    pub kind: WorldEventKind,
 }
 
 /// Instala um item do storage regional no slot dele (MF-039). Só atracado;
@@ -583,7 +636,7 @@ mod tests {
 
     #[test]
     fn current_protocol_version_is_twelve() {
-        assert_eq!(PROTOCOL_VERSION, 13);
+        assert_eq!(PROTOCOL_VERSION, 14);
         assert_eq!(
             ClientHello::current("token").protocol_version,
             PROTOCOL_VERSION
@@ -611,6 +664,8 @@ mod tests {
             cargo_capacity: 100,
             sail_hp: 100.0,
             ammo: Ammo::Round,
+            faction: Faction::Player,
+            notoriety_tier: 0,
         };
         let bytes = bincode::serialize(&state).unwrap();
         let decoded = bincode::deserialize::<ShipState>(&bytes).unwrap();
@@ -642,6 +697,8 @@ mod tests {
                 cargo_capacity: 70,
                 sail_hp: 100.0,
                 ammo: Ammo::Round,
+                faction: Faction::Navy,
+                notoriety_tier: 0,
             };
             let bytes = bincode::serialize(&state).unwrap();
             let decoded = bincode::deserialize::<ShipState>(&bytes).unwrap();
@@ -649,6 +706,26 @@ mod tests {
             assert_eq!(decoded.is_npc, is_npc);
             assert_eq!(decoded.cargo_capacity, 70);
         }
+    }
+
+    #[test]
+    fn reputation_and_world_event_roundtrip() {
+        let update = ReputationUpdate {
+            notoriety: 320,
+            tier: TIER_PROCURADO,
+            bounty: 640,
+        };
+        let bytes = bincode::serialize(&update).unwrap();
+        assert_eq!(
+            bincode::deserialize::<ReputationUpdate>(&bytes).unwrap(),
+            update
+        );
+        let event = WorldEvent {
+            text: String::from("CABECA A PRECO: 640g"),
+            kind: WorldEventKind::Bounty,
+        };
+        let bytes = bincode::serialize(&event).unwrap();
+        assert_eq!(bincode::deserialize::<WorldEvent>(&bytes).unwrap(), event);
     }
 
     #[test]
@@ -761,6 +838,8 @@ mod tests {
             cargo_capacity: 100,
             sail_hp: 100.0,
             ammo: Ammo::Round,
+            faction: Faction::Player,
+            notoriety_tier: 0,
         };
         let bytes = bincode::serialize(&full).expect("encode");
         // Trunca 8 bytes (dois f32): simula cliente novo lendo servidor antigo.
@@ -828,6 +907,8 @@ mod tests {
                     cargo_capacity: 100,
                     sail_hp: 100.0,
                     ammo: Ammo::Round,
+                    faction: Faction::Player,
+                    notoriety_tier: 2,
                 },
                 ShipState {
                     ship_id: 2,
@@ -848,6 +929,8 @@ mod tests {
                     cargo_capacity: 40,
                     sail_hp: 100.0,
                     ammo: Ammo::Round,
+                    faction: Faction::Pirate,
+                    notoriety_tier: 0,
                 },
             ],
             projectiles: vec![ProjectileState {

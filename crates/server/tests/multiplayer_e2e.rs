@@ -156,6 +156,21 @@ impl Harness {
             },
         ]));
         server_app.add_plugins(ServerPlugin);
+        // MF-060: piratas e marinha nascem na Rota da Costa, bem onde o duelo
+        // acontece — entram na briga e tornam o teste aleatório. Sem NPCs:
+        // o teste mede AOI e dano entre jogadores.
+        server_app.insert_resource(mareforge_server::npc::NpcSpawnConfig {
+            count: 0,
+            raider_positions: Vec::new(),
+            navy_positions: Vec::new(),
+            caravan_count: 0,
+            ..Default::default()
+        });
+        // Portais com semente fixa: sorteio pelo relógio punha um redemoinho
+        // no caminho de A de vez em quando.
+        server_app.insert_resource(mareforge_server::portals::ServerPortals(
+            mareforge_domain_world::PortalDirector::new(7, Default::default()),
+        ));
         server_app.add_plugins(ServerNetPlugin);
         // MF-059: vento soprando para o norte — leste e oeste são través, o
         // teste mede AOI, não navegação.
@@ -269,11 +284,10 @@ impl Harness {
     fn prepare_ships(&mut self, a_id: u32, b_id: u32) {
         set_ship_position(&mut self.server_app, a_id, 300.0, 0.0, 0.0);
         set_ship_position(&mut self.server_app, b_id, 250.0, 0.0, 0.0);
-        self.run_frames(30);
-        assert!(
-            self.recorded_b().contains_ship(a_id),
-            "B should see A inside the AOI"
-        );
+        // Espera a condição em vez de um número fixo de frames: em CI lento
+        // 30 frames às vezes não bastavam para o snapshot chegar.
+        let seen = self.run_until(300, |harness| harness.recorded_b().contains_ship(a_id));
+        assert!(seen, "B should see A inside the AOI");
     }
 
     fn move_a_out_of_aoi(&mut self, a_id: u32) {

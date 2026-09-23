@@ -10,6 +10,7 @@ pub mod persist;
 mod playtest;
 pub mod plugin;
 pub mod portals;
+pub mod reputation;
 pub mod sets;
 pub mod weather;
 
