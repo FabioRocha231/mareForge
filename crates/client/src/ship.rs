@@ -17,7 +17,7 @@ use bevy::ecs::prelude::*;
 use bevy::prelude::*;
 use lightyear::prelude::ClientReceiveMessage;
 use mareforge_domain_ships::ShipKind;
-use mareforge_protocol::{ProjectileState, ShipState, WorldSnapshot};
+use mareforge_protocol::{Faction, ProjectileState, ShipState, WorldSnapshot, TIER_PROCURADO};
 
 use crate::assets::{deco, fort, layers, parts, GameAssets, HullSize};
 use crate::vfx::{spawn_animation, spawn_particle, Particle, VfxHandles};
@@ -82,6 +82,7 @@ pub struct FoamEmitter(f32);
 
 /// Aparência de cada tipo: casco, cores e posição dos mastros (px locais,
 /// +Y = popa).
+#[derive(Clone, Copy)]
 struct ShipLook {
     hull: HullSize,
     hull_color: usize,
@@ -90,15 +91,16 @@ struct ShipLook {
     masts: &'static [f32],
 }
 
-fn ship_look(kind: ShipKind, is_npc: bool) -> ShipLook {
-    // NPC é sempre vela vermelha: pirata se reconhece de longe.
-    let npc_sail = |color| if is_npc { 5 } else { color };
-    match kind {
+/// O casco (tamanho, mastros) vem do tipo; as cores vêm da bandeira, para
+/// pirata, marinha e mercador se reconhecerem de longe. Jogador mantém as
+/// cores do tipo.
+fn ship_look(kind: ShipKind, faction: Faction) -> ShipLook {
+    let base = match kind {
         // Cargueiro bojudo: casco médio claro, vela creme, dois mastros.
         ShipKind::SmallMerchant => ShipLook {
             hull: HullSize::Medium,
             hull_color: 1,
-            sail_color: npc_sail(1),
+            sail_color: 1,
             trim_color: 1,
             masts: &[14.0, -12.0],
         },
@@ -106,18 +108,53 @@ fn ship_look(kind: ShipKind, is_npc: bool) -> ShipLook {
         ShipKind::Patrol => ShipLook {
             hull: HullSize::Large,
             hull_color: 3,
-            sail_color: npc_sail(0),
+            sail_color: 0,
             trim_color: 4,
             masts: &[30.0, 0.0, -30.0],
         },
-        // Interceptador: casco pequeno escuro, um mastro, rápido.
+        // Interceptador: casco pequeno, um mastro, rápido.
         ShipKind::Corsair => ShipLook {
             hull: HullSize::Small,
-            hull_color: if is_npc { 0 } else { 2 },
-            sail_color: npc_sail(2),
+            hull_color: 2,
+            sail_color: 2,
             trim_color: 1,
             masts: &[2.0],
         },
+    };
+    match faction {
+        Faction::Player => base,
+        // Casco escuro, vela vermelha.
+        Faction::Pirate => ShipLook {
+            hull_color: 0,
+            sail_color: 5,
+            ..base
+        },
+        // Azul-marinho, vela branca, verga clara (prata).
+        Faction::Navy => ShipLook {
+            hull_color: 3,
+            sail_color: 0,
+            trim_color: 0,
+            ..base
+        },
+        // Madeira clara, vela creme.
+        Faction::Merchant => ShipLook {
+            hull_color: 1,
+            sail_color: 1,
+            ..base
+        },
+    }
+}
+
+/// Cor da bandeira no atlas (creme, verde, dourada, azul, vermelha,
+/// branca): dourada no próprio navio, vermelha no pirata, azul na marinha,
+/// branca nos mercadores e nos demais jogadores.
+fn flag_color(faction: Faction, mine: bool) -> usize {
+    match faction {
+        Faction::Pirate => 4,
+        Faction::Navy => 3,
+        Faction::Merchant => 5,
+        Faction::Player if mine => 2,
+        Faction::Player => 5,
     }
 }
 
@@ -131,7 +168,7 @@ fn hull_px(size: HullSize) -> Vec2 {
 
 /// Comprimento do casco em metros (usado por VFX e HUD).
 pub fn hull_length(kind: ShipKind) -> f32 {
-    hull_px(ship_look(kind, false).hull).y * WORLD_PER_PX
+    hull_px(ship_look(kind, Faction::Player).hull).y * WORLD_PER_PX
 }
 
 fn part_sprite(assets: &GameAssets, index: usize) -> Sprite {
@@ -157,7 +194,7 @@ fn sail_full(state: &ShipState) -> bool {
 pub struct DestroyedShips(pub HashSet<u32>);
 
 fn spawn_ship(commands: &mut Commands, assets: &GameAssets, state: &ShipState, mine: bool) {
-    let look = ship_look(state.kind, state.is_npc);
+    let look = ship_look(state.kind, state.faction);
     let size = hull_px(look.hull);
     let mut entity = commands.spawn((
         ShipVisual {
@@ -219,15 +256,7 @@ fn spawn_ship(commands: &mut Commands, assets: &GameAssets, state: &ShipState, m
                 Transform::from_xyz(0.0, main_mast + 4.0, 0.4).with_scale(Vec3::splat(0.6)),
             ));
         }
-        // Bandeira: dourada no próprio navio, vermelha no pirata, branca
-        // nos demais jogadores.
-        let flag_color = if state.is_npc {
-            4
-        } else if mine {
-            2
-        } else {
-            5
-        };
+        let flag_color = flag_color(state.faction, mine);
         ship.spawn((
             Sprite::from_atlas_image(
                 assets.fort.clone(),
@@ -671,6 +700,75 @@ pub fn upsert_wreck_visuals(
     }
 }
 
+/// Marca de cabeça a prêmio sobre um navio Procurado (visível a todos):
+/// losango vermelho e "PROCURADO". Entidade própria, fora da hierarquia do
+/// navio, para não girar com o casco.
+#[derive(Component)]
+pub struct WantedMarker {
+    ship_id: u32,
+}
+
+const WANTED_MARKER_OFFSET: f32 = 34.0;
+
+fn is_wanted(state: &ShipState) -> bool {
+    state.notoriety_tier >= TIER_PROCURADO
+}
+
+pub fn update_wanted_markers(
+    mut commands: Commands,
+    ships: Query<(&ShipVisual, &Transform), Without<WantedMarker>>,
+    mut markers: Query<(Entity, &WantedMarker, &mut Transform), Without<ShipVisual>>,
+) {
+    let above = |ship: &Transform| {
+        Vec3::new(
+            ship.translation.x,
+            ship.translation.y + WANTED_MARKER_OFFSET,
+            layers::LABELS,
+        )
+    };
+    let mut marked = HashSet::new();
+    for (entity, marker, mut transform) in &mut markers {
+        match ships
+            .iter()
+            .find(|(visual, _)| visual.target.ship_id == marker.ship_id)
+        {
+            Some((visual, ship)) if is_wanted(&visual.target) => {
+                transform.translation = above(ship);
+                marked.insert(marker.ship_id);
+            }
+            _ => commands.entity(entity).despawn_recursive(),
+        }
+    }
+    for (visual, ship) in &ships {
+        if !is_wanted(&visual.target) || marked.contains(&visual.target.ship_id) {
+            continue;
+        }
+        commands
+            .spawn((
+                WantedMarker {
+                    ship_id: visual.target.ship_id,
+                },
+                Transform::from_translation(above(ship)),
+                Visibility::default(),
+            ))
+            .with_children(|marker| {
+                marker.spawn((
+                    Sprite::from_color(Color::srgb(0.9, 0.12, 0.1), Vec2::splat(9.0)),
+                    Transform::from_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_4)),
+                ));
+                marker.spawn((
+                    Text2d::new("PROCURADO"),
+                    TextFont {
+                        font_size: 13.0,
+                        ..default()
+                    },
+                    TextColor(Color::srgb(1.0, 0.25, 0.2)),
+                    Transform::from_xyz(0.0, 13.0, 0.1),
+                ));
+            });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -680,17 +778,76 @@ mod tests {
         let kinds = [ShipKind::SmallMerchant, ShipKind::Patrol, ShipKind::Corsair];
         let hulls: HashSet<_> = kinds
             .iter()
-            .map(|kind| format!("{:?}", ship_look(*kind, false).hull))
+            .map(|kind| format!("{:?}", ship_look(*kind, Faction::Player).hull))
             .collect();
         assert_eq!(hulls.len(), 3);
     }
 
     #[test]
-    fn npc_always_flies_red_sails() {
+    fn factions_fly_their_own_colors() {
         for kind in [ShipKind::SmallMerchant, ShipKind::Patrol, ShipKind::Corsair] {
-            assert_eq!(ship_look(kind, true).sail_color, 5);
-            assert_ne!(ship_look(kind, false).sail_color, 5);
+            let pirate = ship_look(kind, Faction::Pirate);
+            assert_eq!((pirate.hull_color, pirate.sail_color), (0, 5));
+            let navy = ship_look(kind, Faction::Navy);
+            assert_eq!((navy.hull_color, navy.sail_color), (3, 0));
+            let merchant = ship_look(kind, Faction::Merchant);
+            assert_eq!((merchant.hull_color, merchant.sail_color), (1, 1));
+            assert_ne!(ship_look(kind, Faction::Player).sail_color, 5);
         }
+        assert_eq!(flag_color(Faction::Pirate, false), 4);
+        assert_eq!(flag_color(Faction::Navy, false), 3);
+        assert_eq!(flag_color(Faction::Merchant, false), 5);
+        assert_eq!(flag_color(Faction::Player, true), 2);
+    }
+
+    #[test]
+    fn wanted_ship_gets_one_marker_that_leaves_when_pardoned() {
+        use bevy::ecs::schedule::Schedule;
+        let mut world = World::new();
+        let mut state = ShipState {
+            ship_id: 7,
+            kind: ShipKind::Corsair,
+            x: 0.0,
+            y: 0.0,
+            heading: 0.0,
+            speed: 0.0,
+            cargo_weight: 0,
+            hp: 70,
+            max_hp: 70,
+            max_speed: 40.0,
+            weapon_damage: 25,
+            weapon_range: 55.0,
+            port_cooldown_secs: 0.0,
+            starboard_cooldown_secs: 0.0,
+            is_npc: false,
+            cargo_capacity: 40,
+            sail_hp: 100.0,
+            ammo: Default::default(),
+            faction: Faction::Player,
+            notoriety_tier: TIER_PROCURADO,
+        };
+        let ship = world
+            .spawn((
+                ShipVisual {
+                    target: state,
+                    last_seen: Instant::now(),
+                },
+                Transform::from_xyz(100.0, 50.0, 0.0),
+            ))
+            .id();
+        let mut schedule = Schedule::default();
+        schedule.add_systems(update_wanted_markers);
+        schedule.run(&mut world);
+        schedule.run(&mut world);
+        let mut markers = world.query::<(&WantedMarker, &Transform)>();
+        let found: Vec<_> = markers.iter(&world).collect();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].1.translation.y, 50.0 + WANTED_MARKER_OFFSET);
+
+        state.notoriety_tier = 0;
+        world.get_mut::<ShipVisual>(ship).unwrap().target = state;
+        schedule.run(&mut world);
+        assert_eq!(markers.iter(&world).count(), 0);
     }
 
     #[test]

@@ -455,6 +455,8 @@ mod tests {
             cargo_capacity: 0,
             sail_hp: 100.0,
             ammo: mareforge_domain_combat::Ammo::Round,
+            faction: mareforge_protocol::Faction::Player,
+            notoriety_tier: 0,
         }
     }
 

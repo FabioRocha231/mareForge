@@ -15,6 +15,7 @@ pub mod portals;
 pub mod ship;
 pub mod ui;
 pub mod vfx;
+pub mod wanted_hud;
 pub mod weather;
 pub mod world;
 pub mod zone;

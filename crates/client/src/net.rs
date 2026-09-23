@@ -187,6 +187,10 @@ impl Plugin for ClientNetPlugin {
             ChannelDirection::ServerToClient,
         );
         app.register_message::<mareforge_protocol::WeatherUpdate>(ChannelDirection::ServerToClient);
+        app.register_message::<mareforge_protocol::ReputationUpdate>(
+            ChannelDirection::ServerToClient,
+        );
+        app.register_message::<mareforge_protocol::WorldEvent>(ChannelDirection::ServerToClient);
         app.init_resource::<crate::ship::DestroyedShips>();
         app.init_resource::<KnownWrecks>();
         app.init_resource::<MyDocked>();

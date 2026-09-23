@@ -447,6 +447,7 @@ impl Plugin for ServerNetPlugin {
         app.init_resource::<crate::npc::NpcIdCounter>();
         app.init_resource::<crate::npc::NpcSpawnConfig>();
         app.init_resource::<crate::npc::NpcRespawnQueue>();
+        app.init_resource::<crate::reputation::Reputation>();
         app.init_resource::<ProjectileIdCounter>();
         app.init_resource::<WreckIdCounter>();
         app.insert_resource(ServerLootPolicy(LootPolicy::default()));
@@ -537,6 +538,10 @@ impl Plugin for ServerNetPlugin {
         app.add_plugins(crate::guild::GuildPlugin);
         app.register_message::<mareforge_protocol::WeatherUpdate>(ChannelDirection::ServerToClient);
         crate::weather::install(app);
+        app.register_message::<mareforge_protocol::ReputationUpdate>(
+            ChannelDirection::ServerToClient,
+        );
+        app.register_message::<mareforge_protocol::WorldEvent>(ChannelDirection::ServerToClient);
         app.add_systems(Startup, start_server);
         app.add_systems(Startup, crate::nodes::spawn_dev_nodes.after(start_server));
         app.add_systems(Startup, crate::npc::setup_npcs.after(start_server));
@@ -580,8 +585,23 @@ impl Plugin for ServerNetPlugin {
         simulate_world(app);
         app.add_systems(
             FixedUpdate,
-            crate::npc::simulate_npcs
+            (crate::npc::drive_npcs, crate::npc::simulate_npcs)
+                .chain()
                 .after(respawn_destroyed_ships)
+                .in_set(SimulationSet::Destruction),
+        );
+        // MF-059: notoriedade lê os impactos antes do dano (ficha da vítima
+        // pré-naufrágio) e os naufrágios antes do wreck.
+        app.add_systems(
+            FixedUpdate,
+            (
+                crate::reputation::track_player_hits.before(apply_combat_damage),
+                crate::reputation::settle_player_sinks
+                    .after(apply_combat_damage)
+                    .before(resolve_destructions),
+                crate::reputation::decay_notoriety,
+                crate::reputation::announce_reputation_on_spawn,
+            )
                 .in_set(SimulationSet::Destruction),
         );
         app.add_systems(
@@ -1829,6 +1849,7 @@ fn apply_combat_damage(
     mut impacts: ResMut<CombatImpacts>,
     mut pending: ResMut<PendingShipDestructions>,
     mut ships: Query<(Entity, &mut ServerShip)>,
+    (npcs, reputation): (Query<&NpcShip>, Res<crate::reputation::Reputation>),
 ) {
     pending.0.clear();
     let impacts = std::mem::take(&mut impacts.0);
@@ -1871,7 +1892,12 @@ fn apply_combat_damage(
                 .zone_at(ship.motion.x, ship.motion.y)
                 .map(|zone| risk_policy.0.pvp_allowed(zone.tier))
                 .unwrap_or(false);
-            if !pvp_here {
+            // MF-059: a marinha alcança o Procurado também nas águas da coroa.
+            let navy_arrest = reputation.tier(ship.character) == crate::reputation::Tier::Procurado
+                && npcs.iter().any(|npc| {
+                    npc.ship_id == killer_ship_id && npc.role == crate::npc::NpcRole::Navy
+                });
+            if !pvp_here && !navy_arrest {
                 info!(
                     ship_id = target_ship_id,
                     "impacto ignorado: vítima em águas protegidas ou fora do mapa"
@@ -2138,6 +2164,9 @@ fn to_ship_state(ship: &ServerShip, catalog: &ItemCatalog) -> ShipState {
         cargo_capacity: ship.stats.cargo_capacity,
         sail_hp: ship.sail_hp,
         ammo: ship.ammo,
+        faction: mareforge_protocol::Faction::Player,
+        // Preenchido em `send_snapshots` a partir da `Reputation`.
+        notoriety_tier: 0,
     }
 }
 
@@ -2156,6 +2185,7 @@ fn send_snapshots(
     npc_ships: Query<&NpcShip>,
     projectiles: Query<(Entity, &mut ServerProjectile)>,
     wrecks: Query<&ServerWreck>,
+    reputation: Res<crate::reputation::Reputation>,
 ) {
     if advance_snapshot_clock(&mut clock.accumulator, f64::from(time.delta_secs())) == 0 {
         return;
@@ -2172,7 +2202,10 @@ fn send_snapshots(
         .collect();
     let mut ship_states: Vec<ShipState> = ships
         .iter()
-        .map(|(_, ship)| to_ship_state(ship, &dev.catalog))
+        .map(|(_, ship)| ShipState {
+            notoriety_tier: reputation.tier(ship.character).wire(),
+            ..to_ship_state(ship, &dev.catalog)
+        })
         .collect();
     ship_states.extend(
         npc_ships
@@ -2491,6 +2524,7 @@ fn handle_dock(
     time: Res<Time>,
     mut metrics: ResMut<Metrics>,
     mut ships: Query<&mut ServerShip>,
+    reputation: Res<crate::reputation::Reputation>,
 ) {
     for event in dock_events.read() {
         let client_id = event.from();
@@ -2501,6 +2535,20 @@ fn handle_dock(
             continue;
         };
         let at_port = crate::market::port_region(&map.0, ship.motion.x, ship.motion.y);
+        // MF-059: porto da coroa recusa Procurado.
+        if let Some(reason) = at_port.and_then(|(_, name)| {
+            crate::reputation::dock_refusal(name, reputation.notoriety(ship.character))
+        }) {
+            let _ = connection_manager.send_message::<ReliableChannel, _>(
+                client_id,
+                &DockResult {
+                    success: false,
+                    docked: false,
+                    reason: reason.to_owned(),
+                },
+            );
+            continue;
+        }
         match dock_vessel(
             &ship.presence,
             ship.motion.speed,

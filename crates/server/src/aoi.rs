@@ -92,6 +92,8 @@ mod tests {
             cargo_capacity: 100,
             sail_hp: 100.0,
             ammo: Default::default(),
+            faction: mareforge_protocol::Faction::Player,
+            notoriety_tier: 0,
         }
     }
 

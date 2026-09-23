@@ -64,6 +64,8 @@ fn ship_state(ship_id: u32, kind: ShipKind) -> ShipState {
         cargo_capacity: 100,
         sail_hp: 100.0,
         ammo: Default::default(),
+        faction: mareforge_protocol::Faction::Player,
+        notoriety_tier: 0,
     }
 }
 
