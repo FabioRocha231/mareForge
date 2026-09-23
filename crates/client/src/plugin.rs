@@ -3,8 +3,8 @@ use bevy::prelude::*;
 use crate::assets::AssetManifestPlugin;
 use crate::camera::{follow_camera, setup_camera, zoom_from_wheel, CameraZoom};
 use crate::crafting::{send_craft_input, CraftPlugin};
-use crate::hud::{setup_hud, toggle_sea_hud, HudPlugin};
-use crate::market::{send_market_input, spawn_market_panel, MarketPlugin};
+use crate::hud::{toggle_sea_hud, HudPlugin};
+use crate::market::{send_market_input, MarketPlugin};
 use crate::net::{ClientNetPlugin, MyDocked};
 use crate::nodes::NodePlugin;
 use crate::port_screen::PortPlugin;
@@ -13,6 +13,7 @@ use crate::ship::{
     lerp_projectile_visuals, lerp_ship_visuals, upsert_projectile_visuals, upsert_ship_visuals,
     upsert_wreck_visuals,
 };
+use crate::ui::UiThemePlugin;
 use crate::vfx::VfxPlugin;
 use crate::world::WorldVisualPlugin;
 use crate::zone::ZonePlugin;
@@ -35,10 +36,8 @@ impl Plugin for ClientPlugin {
             .add_plugins(PortPlugin)
             .add_plugins(HudPlugin)
             .add_plugins(VfxPlugin)
-            .add_systems(
-                Startup,
-                (setup_camera, setup_hud, spawn_market_panel).chain(),
-            )
+            .add_plugins(UiThemePlugin)
+            .add_systems(Startup, setup_camera)
             .add_systems(
                 Update,
                 (

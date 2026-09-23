@@ -10,8 +10,7 @@ use lightyear::prelude::*;
 use mareforge_domain_world::RiskTier;
 use mareforge_protocol::ZoneChanged;
 
-use crate::assets::GameAssets;
-use crate::hud::{spawn_pvp_warning, spawn_zone_banner};
+use crate::hud::{spawn_pvp_warning, spawn_zone_banner, PvpWarningAnchor, ZoneBannerAnchor};
 
 /// Zona atual do navio do jogador, segundo o servidor.
 #[derive(Resource, Debug, Clone, Default)]
@@ -44,8 +43,8 @@ fn handle_zone_changed(
     mut current: ResMut<CurrentZone>,
     mut shown: ResMut<PvpWarningShown>,
     mut commands: Commands,
-    assets: Res<GameAssets>,
-    camera: Query<Entity, With<Camera2d>>,
+    banner_anchor: Query<Entity, With<ZoneBannerAnchor>>,
+    warning_anchor: Query<Entity, With<PvpWarningAnchor>>,
 ) {
     for event in events.read() {
         let zone = event.message();
@@ -53,8 +52,8 @@ fn handle_zone_changed(
         info!(zone = %zone.zone_name, tier = ?zone.tier, "servidor confirmou a zona");
 
         // MF-057B: banner momentaneo com nome da zona ao entrar.
-        if let Ok(cam) = camera.get_single() {
-            spawn_zone_banner(&mut commands, cam, &assets, &zone.zone_name);
+        if let Ok(anchor) = banner_anchor.get_single() {
+            spawn_zone_banner(&mut commands, anchor, &zone.zone_name);
         }
 
         // MF-057C: placa de PvP com fade na primeira entrada em aguas de
@@ -64,8 +63,8 @@ fn handle_zone_changed(
         if entering_pvp {
             shown.0 = true;
             warn!("primeira entrada em aguas de risco nesta sessao");
-            if let Ok(cam) = camera.get_single() {
-                spawn_pvp_warning(&mut commands, cam, &assets);
+            if let Ok(anchor) = warning_anchor.get_single() {
+                spawn_pvp_warning(&mut commands, anchor);
             }
         }
 
@@ -80,8 +79,8 @@ fn handle_zone_changed(
 pub fn risk_tag(tier: RiskTier) -> &'static str {
     match tier {
         RiskTier::Protected => "PvP desativado",
-        RiskTier::Frontier => "PvP ATIVO · full loot",
-        RiskTier::Lawless => "PvP ATIVO · full loot",
+        RiskTier::Frontier => "PvP ATIVO - full loot",
+        RiskTier::Lawless => "PvP ATIVO - full loot",
     }
 }
 
