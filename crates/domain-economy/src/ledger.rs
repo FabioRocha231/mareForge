@@ -19,6 +19,11 @@ pub enum LedgerKind {
     /// bootstrap dev. Auditar NpcBounty ≠ Mint quando a telemetria medir a
     /// economia (§71).
     NpcBounty,
+    /// Ouro pago pela Guilda Mercante (NPC) por itens que ela destrói —
+    /// faucet auditado; o item vendido é sink (Pilar 1).
+    GuildPurchase,
+    /// Ouro de recompensa do Quadro de Contratos — faucet auditado.
+    ContractReward,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

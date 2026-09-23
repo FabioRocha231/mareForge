@@ -409,6 +409,21 @@ impl Plugin for ServerNetPlugin {
         app.register_message::<OrdersSnapshot>(ChannelDirection::ServerToClient);
         app.register_message::<PortStorageSnapshot>(ChannelDirection::ServerToClient);
         app.register_message::<MarketResult>(ChannelDirection::ServerToClient);
+        app.register_message::<mareforge_protocol::SellToGuild>(ChannelDirection::ClientToServer);
+        app.register_message::<mareforge_protocol::AcceptContract>(
+            ChannelDirection::ClientToServer,
+        );
+        app.register_message::<mareforge_protocol::AbandonContract>(
+            ChannelDirection::ClientToServer,
+        );
+        app.register_message::<mareforge_protocol::GuildPrices>(ChannelDirection::ServerToClient);
+        app.register_message::<mareforge_protocol::ContractsSnapshot>(
+            ChannelDirection::ServerToClient,
+        );
+        app.register_message::<mareforge_protocol::ContractResult>(
+            ChannelDirection::ServerToClient,
+        );
+        app.add_plugins(crate::guild::GuildPlugin);
         app.add_systems(Startup, start_server);
         app.add_systems(Startup, crate::nodes::spawn_dev_nodes.after(start_server));
         app.add_systems(Startup, crate::npc::setup_npcs.after(start_server));
@@ -2382,7 +2397,7 @@ fn handle_dock(
 
 /// Linhas de storage para a UI, agregando pilhas por item e omitindo itens
 /// desconhecidos do catálogo (fail-closed: UI não inventa nome).
-fn port_storage_snapshot(
+pub(crate) fn port_storage_snapshot(
     catalog: &ItemCatalog,
     region: &str,
     storage: &[Custody],
