@@ -2,6 +2,7 @@ pub mod assets;
 pub mod audio;
 pub mod camera;
 pub mod crafting;
+pub mod guild;
 pub mod hud;
 pub mod juice;
 pub mod market;

@@ -471,6 +471,72 @@ pub struct MarketResult {
     pub reason: String,
 }
 
+/// Vender à Guilda Mercante (NPC) do porto onde está ATRACADO, a partir do
+/// storage regional. O servidor limita ao estoque; item fora da tabela da
+/// guilda é recusado (fail-closed). Veredito vem em `MarketResult`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SellToGuild {
+    pub item: ItemDefinitionId,
+    pub quantity: u32,
+}
+
+/// Preço da próxima unidade de um item em cada porto (mesma ordem de
+/// `GuildPrices::ports`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuildPriceLine {
+    pub item: ItemDefinitionId,
+    pub item_name: String,
+    pub prices: Vec<u64>,
+}
+
+/// Preços da guilda em TODOS os portos (arbitragem visível) + o que o navio
+/// leva no porão (só leitura). Enviado ao atracado quando algo muda.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuildPrices {
+    pub ports: Vec<String>,
+    pub lines: Vec<GuildPriceLine>,
+    pub cargo: Vec<StorageLine>,
+}
+
+/// Um contrato do Quadro (oferta ou ativo).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContractLine {
+    pub id: u32,
+    pub title: String,
+    pub reward: u64,
+    pub duration_secs: u32,
+    /// Tempo restante (só faz sentido no contrato ativo).
+    pub remaining_secs: u32,
+    pub progress: u32,
+    pub target: u32,
+    /// Caça (abates) em vez de Entrega.
+    pub hunt: bool,
+}
+
+/// Ofertas do porto atracado (vazio no mar) + seu contrato ativo.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContractsSnapshot {
+    pub offers: Vec<ContractLine>,
+    pub active: Option<ContractLine>,
+}
+
+/// Aceitar uma oferta do Quadro (só atracado; 1 contrato ativo por vez).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AcceptContract {
+    pub id: u32,
+}
+
+/// Abandonar o contrato ativo (sem reembolso, sem multa).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AbandonContract;
+
+/// Veredito de contrato: aceite, abandono, conclusão ou expiração.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContractResult {
+    pub success: bool,
+    pub reason: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

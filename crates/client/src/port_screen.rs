@@ -21,6 +21,10 @@ use mareforge_protocol::{
 use mareforge_shared::ids::{ItemDefinitionId, ShipDefinitionId};
 
 use crate::crafting::KnownRecipes;
+use crate::guild::{
+    contracts_view, guild_view, spawn_contracts_body, spawn_guild_body, ContractFeedback,
+    ContractsView, GuildPlugin, GuildView, KnownContracts, KnownGuildPrices,
+};
 use crate::market::{
     market_view, spawn_market_body, KnownCatalog, KnownOrders, MarketFeedback, MarketForm,
     MarketView, Wallet,
@@ -56,15 +60,19 @@ pub enum PortTab {
     Crafting,
     Shipyard,
     Market,
+    Guild,
+    Contracts,
 }
 
 impl PortTab {
-    pub const ALL: [PortTab; 5] = [
+    pub const ALL: [PortTab; 7] = [
         PortTab::Storage,
         PortTab::Loadout,
         PortTab::Crafting,
         PortTab::Shipyard,
         PortTab::Market,
+        PortTab::Guild,
+        PortTab::Contracts,
     ];
 
     pub fn next(self) -> Self {
@@ -73,13 +81,17 @@ impl PortTab {
             PortTab::Loadout => PortTab::Crafting,
             PortTab::Crafting => PortTab::Shipyard,
             PortTab::Shipyard => PortTab::Market,
-            PortTab::Market => PortTab::Storage,
+            PortTab::Market => PortTab::Guild,
+            PortTab::Guild => PortTab::Contracts,
+            PortTab::Contracts => PortTab::Storage,
         }
     }
 
     pub fn previous(self) -> Self {
         match self {
-            PortTab::Storage => PortTab::Market,
+            PortTab::Storage => PortTab::Contracts,
+            PortTab::Contracts => PortTab::Guild,
+            PortTab::Guild => PortTab::Market,
             PortTab::Loadout => PortTab::Storage,
             PortTab::Crafting => PortTab::Loadout,
             PortTab::Shipyard => PortTab::Crafting,
@@ -94,6 +106,8 @@ impl PortTab {
             PortTab::Crafting => "Fabricação",
             PortTab::Shipyard => "Estaleiro",
             PortTab::Market => "Mercado",
+            PortTab::Guild => "Guilda",
+            PortTab::Contracts => "Contratos",
         }
     }
 }
@@ -107,8 +121,15 @@ pub struct PortScreenState {
 
 impl Default for PortScreenState {
     fn default() -> Self {
+        // Dev (§39): MAREFORGE_PORT_TAB=Guilda|Contratos abre direto na aba
+        // (capturas MAREFORGE_SHOT sem teclado).
+        let dev_tab = std::env::var("MAREFORGE_PORT_TAB").ok().and_then(|label| {
+            PortTab::ALL
+                .into_iter()
+                .find(|tab| tab.label().eq_ignore_ascii_case(&label))
+        });
         Self {
-            active_tab: PortTab::Storage,
+            active_tab: dev_tab.unwrap_or(PortTab::Storage),
             selected_action: 0,
         }
     }
@@ -158,6 +179,8 @@ enum BodyView {
         selected: usize,
     },
     Market(MarketView),
+    Guild(GuildView),
+    Contracts(ContractsView),
 }
 
 /// Snapshots que alimentam as ações do porto.
@@ -200,6 +223,7 @@ impl Plugin for PortPlugin {
             .init_resource::<PortScreenState>()
             .init_resource::<LoadoutFeedback>()
             .init_resource::<CraftFeedback>()
+            .add_plugins(GuildPlugin)
             .add_systems(Startup, spawn_port_screen)
             .add_systems(
                 Update,
@@ -485,7 +509,7 @@ fn port_actions(
             .into_iter()
             .map(|entry| PortAction::Craft(entry.recipe_id))
             .collect(),
-        PortTab::Market => Vec::new(),
+        PortTab::Market | PortTab::Guild | PortTab::Contracts => Vec::new(),
     };
     actions.push(PortAction::Undock);
     actions
@@ -555,7 +579,11 @@ fn handle_port_input(
         return;
     }
 
-    if state.active_tab == PortTab::Market {
+    // Abas de painel próprio (mouse): Mercado tem teclado em market.rs.
+    if matches!(
+        state.active_tab,
+        PortTab::Market | PortTab::Guild | PortTab::Contracts
+    ) {
         return;
     }
 
@@ -745,6 +773,7 @@ fn info_lines(
         PortTab::Crafting => recipe_lines(recipes, false),
         PortTab::Shipyard => recipe_lines(recipes, true),
         PortTab::Market => vec![String::from("Mercado regional")],
+        PortTab::Guild | PortTab::Contracts => Vec::new(),
     }
 }
 
@@ -757,9 +786,11 @@ fn status_line(
     market_feedback: Option<&MarketResult>,
 ) -> Option<(bool, String)> {
     match tab {
-        PortTab::Storage | PortTab::Market => {
+        PortTab::Storage | PortTab::Market | PortTab::Guild => {
             market_feedback.map(|r| (r.success, feedback_line(r.success, &r.reason)))
         }
+        // Contratos usam `ContractFeedback` (ver update_port_screen).
+        PortTab::Contracts => None,
         PortTab::Loadout => {
             loadout_feedback.map(|r| (r.success, feedback_line(r.success, &r.reason)))
         }
@@ -824,6 +855,12 @@ fn update_port_screen(
     data: PortData,
     feedback: PortFeedback,
     market: (Res<MarketForm>, Res<KnownOrders>),
+    guild: (
+        Res<KnownGuildPrices>,
+        Res<KnownContracts>,
+        Res<ContractFeedback>,
+        Res<Time>,
+    ),
     bodies: Query<Entity, With<PortBody>>,
     mut texts: Query<(&mut Text, &mut TextColor, &PortText)>,
     mut tabs: Query<(&TabButton, &mut UiButton, &mut BackgroundColor)>,
@@ -832,6 +869,14 @@ fn update_port_screen(
     let tab = state.active_tab;
     let view = if tab == PortTab::Market {
         BodyView::Market(market_view(&market.0, &market.1 .0, &data.catalog))
+    } else if tab == PortTab::Guild {
+        BodyView::Guild(guild_view(
+            guild.0 .0.as_ref(),
+            &data.storage.0,
+            &port_name.0,
+        ))
+    } else if tab == PortTab::Contracts {
+        BodyView::Contracts(contracts_view(&guild.1, guild.3.elapsed_secs()))
     } else {
         let cargo = my_ship.0.and_then(|ship_id| {
             visuals
@@ -870,18 +915,28 @@ fn update_port_screen(
                         selected,
                     } => spawn_port_body(parent, info, actions, *selected),
                     BodyView::Market(market) => spawn_market_body(parent, market),
+                    BodyView::Guild(guild) => spawn_guild_body(parent, guild),
+                    BodyView::Contracts(contracts) => spawn_contracts_body(parent, contracts),
                 });
         }
         *last_view = Some(view);
     }
 
-    let status = status_line(
-        tab,
-        &data.recipes.0,
-        feedback.loadout.0.as_ref(),
-        feedback.craft.0.as_ref(),
-        feedback.market.0.as_ref(),
-    );
+    let status = if tab == PortTab::Contracts {
+        guild
+            .2
+             .0
+            .as_ref()
+            .map(|r| (r.success, feedback_line(r.success, &r.reason)))
+    } else {
+        status_line(
+            tab,
+            &data.recipes.0,
+            feedback.loadout.0.as_ref(),
+            feedback.craft.0.as_ref(),
+            feedback.market.0.as_ref(),
+        )
+    };
     for (mut text, mut color, kind) in &mut texts {
         let value = match kind {
             PortText::Title if port_name.0.is_empty() => String::from("Porto: ?"),
@@ -1053,6 +1108,8 @@ mod tests {
             PortTab::Crafting,
             PortTab::Shipyard,
             PortTab::Market,
+            PortTab::Guild,
+            PortTab::Contracts,
             PortTab::Storage,
         ] {
             tab = tab.next();
@@ -1061,6 +1118,8 @@ mod tests {
 
         let mut tab = PortTab::Storage;
         for expected in [
+            PortTab::Contracts,
+            PortTab::Guild,
             PortTab::Market,
             PortTab::Shipyard,
             PortTab::Crafting,
@@ -1278,6 +1337,10 @@ mod tests {
         world.init_resource::<MarketFeedback>();
         world.init_resource::<MarketForm>();
         world.init_resource::<KnownOrders>();
+        world.init_resource::<KnownGuildPrices>();
+        world.init_resource::<KnownContracts>();
+        world.init_resource::<ContractFeedback>();
+        world.init_resource::<Time>();
         world.run_system_once(spawn_port_screen).unwrap();
         let mut schedule = bevy::ecs::schedule::Schedule::default();
         schedule.add_systems(update_port_screen);

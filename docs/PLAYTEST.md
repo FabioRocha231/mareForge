@@ -38,8 +38,12 @@ servidor; `127.0.0.1:5000` no client).
 11. **fight (Q/R)** — `Q` dispara bombordo, `R` dispara boreste; a faixa dourada ao lado do casco mostra por onde a salva passa quando o canhao esta pronto. Terra e rochedos bloqueiam balas e encalham o navio.
 12. **loot (F)** — aproxime de um destroco e pressione `F`.
 13. **dock** — volte ao porto e pressione `E`.
-14. **sell** — `Tab` ate Market; no painel, `Tab` troca campo, setas escolhem
-    item, digitos preenchem quantidade e preco, `Enter` envia a venda.
+14. **sell** — deposite o porao (Storage) e abra a aba Guilda: clique
+    `Vender 1`/`10`/`Tudo` para vender a Guilda Mercante (NPC) pelo preco do
+    porto; a coluna do outro porto mostra a arbitragem. Para vender a outro
+    jogador, use a aba Market (`Tab` troca campo, setas escolhem item, digitos
+    preenchem quantidade e preco, `Enter` envia a ordem). Na aba Contratos,
+    aceite uma Entrega ou Caca; o contrato ativo aparece no HUD do mar.
 
 ## O que observar
 

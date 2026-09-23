@@ -527,6 +527,7 @@ pub(crate) fn award_npc_bounty(
     bounty_gold: u64,
 ) -> WalletUpdated {
     market.credit(killer, Money(bounty_gold));
+    market.npc_kills.push(killer);
     market.ledger.record(
         LedgerKind::NpcBounty,
         Money(bounty_gold),
