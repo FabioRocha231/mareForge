@@ -157,6 +157,12 @@ impl Harness {
         ]));
         server_app.add_plugins(ServerPlugin);
         server_app.add_plugins(ServerNetPlugin);
+        // MF-059: vento soprando para o norte — leste e oeste são través, o
+        // teste mede AOI, não navegação.
+        server_app.insert_resource(mareforge_server::weather::ServerWeather(
+            mareforge_domain_ships::Weather::new(1)
+                .with_wind_direction(std::f32::consts::FRAC_PI_2),
+        ));
 
         let mut client_a = build_client(client_a_config, "multiplayer-token-a");
         let mut client_b = build_client(client_b_config, "multiplayer-token-b");

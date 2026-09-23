@@ -90,7 +90,7 @@ pub enum HudContext {
 const BROADSIDE_RELOAD_SECS: f32 = 3.0;
 
 pub const CONTROLS_HINT: &str =
-    "W/S velas | A/D leme | Q/R canhoes | E atracar | G coletar | F saquear | roda do mouse: zoom";
+    "W/S velas | A/D leme | Q/R canhoes | C municao | E atracar | G coletar | F saquear | roda do mouse: zoom";
 
 pub struct HudPlugin;
 
@@ -738,6 +738,8 @@ mod tests {
             starboard_cooldown_secs: starboard_cooldown,
             is_npc: false,
             cargo_capacity: 100,
+            sail_hp: 100.0,
+            ammo: Default::default(),
         }
     }
 

@@ -143,6 +143,7 @@ impl Plugin for ClientNetPlugin {
         app.register_message::<EquipItem>(ChannelDirection::ClientToServer);
         app.register_message::<UnequipItem>(ChannelDirection::ClientToServer);
         app.register_message::<FireBroadside>(ChannelDirection::ClientToServer);
+        app.register_message::<mareforge_protocol::SelectAmmo>(ChannelDirection::ClientToServer);
         app.register_message::<LootWreck>(ChannelDirection::ClientToServer);
         app.register_message::<GatherNode>(ChannelDirection::ClientToServer);
         app.register_message::<CraftItem>(ChannelDirection::ClientToServer);
@@ -170,6 +171,7 @@ impl Plugin for ClientNetPlugin {
         app.register_message::<OrdersSnapshot>(ChannelDirection::ServerToClient);
         app.register_message::<PortStorageSnapshot>(ChannelDirection::ServerToClient);
         app.register_message::<MarketResult>(ChannelDirection::ServerToClient);
+        app.register_message::<mareforge_protocol::WeatherUpdate>(ChannelDirection::ServerToClient);
         app.init_resource::<crate::ship::DestroyedShips>();
         app.init_resource::<KnownWrecks>();
         app.init_resource::<MyDocked>();

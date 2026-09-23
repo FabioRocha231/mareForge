@@ -62,6 +62,8 @@ fn ship_state(ship_id: u32, kind: ShipKind) -> ShipState {
         starboard_cooldown_secs: 0.0,
         is_npc: false,
         cargo_capacity: 100,
+        sail_hp: 100.0,
+        ammo: Default::default(),
     }
 }
 

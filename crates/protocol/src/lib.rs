@@ -5,6 +5,7 @@
 //! client e servidor. Versionamento no handshake conforme ADR-0011.
 
 use mareforge_domain_combat::weapon::BroadsideSide;
+use mareforge_domain_combat::Ammo;
 use mareforge_domain_crafting::recipe::StationKind;
 use mareforge_domain_items::EquipmentSlot;
 use mareforge_domain_ships::ShipKind;
@@ -128,6 +129,43 @@ pub struct ShipState {
     /// default 0 (cliente antigo não quebra).
     #[serde(default)]
     pub cargo_capacity: u32,
+    /// MF-059: integridade do pano (0..100); rasgado, o navio anda menos.
+    #[serde(default = "full_sails")]
+    pub sail_hp: f32,
+    /// MF-059: munição carregada (tecla C). Default bala redonda.
+    #[serde(default)]
+    pub ammo: Ammo,
+}
+
+fn full_sails() -> f32 {
+    100.0
+}
+
+/// Troca de munição do próprio navio (MF-059). O servidor guarda e aplica
+/// no próximo disparo; o veredito aparece em `ShipState.ammo`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SelectAmmo {
+    pub ammo: Ammo,
+}
+
+/// Célula de tempestade visível (MF-059).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct StormState {
+    pub storm_id: u32,
+    pub x: f32,
+    pub y: f32,
+    pub radius: f32,
+    /// 0..1 — fade in/out da célula.
+    pub intensity: f32,
+}
+
+/// Clima do mar (MF-059), ~1 Hz para todos: vento global e tempestades.
+/// `wind_dir` é para onde o vento sopra (radianos, convenção do heading).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WeatherUpdate {
+    pub wind_dir: f32,
+    pub wind_strength: f32,
+    pub storms: Vec<StormState>,
 }
 
 /// Instala um item do storage regional no slot dele (MF-039). Só atracado;
@@ -475,6 +513,8 @@ mod tests {
             starboard_cooldown_secs: 1.25,
             is_npc: false,
             cargo_capacity: 100,
+            sail_hp: 100.0,
+            ammo: Ammo::Round,
         };
         let bytes = bincode::serialize(&state).unwrap();
         let decoded = bincode::deserialize::<ShipState>(&bytes).unwrap();
@@ -504,6 +544,8 @@ mod tests {
                 starboard_cooldown_secs: 0.0,
                 is_npc,
                 cargo_capacity: 70,
+                sail_hp: 100.0,
+                ammo: Ammo::Round,
             };
             let bytes = bincode::serialize(&state).unwrap();
             let decoded = bincode::deserialize::<ShipState>(&bytes).unwrap();
@@ -621,6 +663,8 @@ mod tests {
             starboard_cooldown_secs: 1.5,
             is_npc: false,
             cargo_capacity: 100,
+            sail_hp: 100.0,
+            ammo: Ammo::Round,
         };
         let bytes = bincode::serialize(&full).expect("encode");
         // Trunca 8 bytes (dois f32): simula cliente novo lendo servidor antigo.
@@ -686,6 +730,8 @@ mod tests {
                     starboard_cooldown_secs: 2.0,
                     is_npc: false,
                     cargo_capacity: 100,
+                    sail_hp: 100.0,
+                    ammo: Ammo::Round,
                 },
                 ShipState {
                     ship_id: 2,
@@ -704,6 +750,8 @@ mod tests {
                     starboard_cooldown_secs: 0.0,
                     is_npc: false,
                     cargo_capacity: 40,
+                    sail_hp: 100.0,
+                    ammo: Ammo::Round,
                 },
             ],
             projectiles: vec![ProjectileState {

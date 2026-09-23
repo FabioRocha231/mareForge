@@ -9,6 +9,7 @@ pub mod persist;
 mod playtest;
 pub mod plugin;
 pub mod sets;
+pub mod weather;
 
 pub use plugin::ServerPlugin;
 
