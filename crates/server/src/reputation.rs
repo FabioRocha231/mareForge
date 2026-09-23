@@ -12,6 +12,7 @@ use bevy::prelude::*;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 use mareforge_domain_economy::{LedgerKind, Money};
+use mareforge_domain_ships::VesselPresence;
 use mareforge_domain_world::RiskTier;
 use mareforge_protocol::{
     ReputationUpdate, WorldEvent, WorldEventKind, TIER_HONRADO, TIER_PROCURADO, TIER_SUSPEITO,
@@ -36,6 +37,10 @@ pub const PROCURADO_AT: u32 = 300;
 pub const BOUNTY_PER_NOTORIETY: u64 = 2;
 /// Quem ataca uma caravana fica marcado pela marinha por este tempo.
 pub const CROWN_AGGRESSOR_SECS: f32 = 60.0;
+/// Quanto tempo um ataque dá direito a revide sem sujar a ficha.
+pub const AGGRESSION_SECS: f32 = 60.0;
+/// Balas do mesmo par dentro desta janela contam como um acerto só.
+const HIT_WINDOW_SECS: f32 = 1.0;
 /// Portos da coroa: recusam Procurados. Um porto pirata fica de fora da
 /// lista e atraca qualquer um.
 pub const CROWN_PORTS: [&str; 2] = ["Porto da Serra", "Porto da Mina"];
@@ -115,6 +120,10 @@ pub struct Reputation {
     notoriety: HashMap<CharacterId, u32>,
     /// Segundos restantes de marca de "atacou caravana" (marinha caça).
     crown_aggressors: HashMap<CharacterId, f32>,
+    /// (atacante, vítima) → segundos desde que a marca foi posta, contando
+    /// para baixo. Revidar quem te atacou não suja a ficha, e cada par conta
+    /// no máximo um acerto por segundo (uma salva = um acerto).
+    aggression: HashMap<(CharacterId, CharacterId), f32>,
     decay_clock: f32,
 }
 
@@ -143,6 +152,27 @@ impl Reputation {
         self.notoriety.remove(&character).unwrap_or(0)
     }
 
+    /// Registra o acerto de `attacker` em `victim` e diz se ele conta para a
+    /// notoriedade: não conta se for revide nem se o par acertou há < 1 s.
+    pub fn register_hit(&mut self, attacker: CharacterId, victim: CharacterId) -> bool {
+        // Revide não vira agressão: senão quem começou a briga passava a
+        // contar como "revidando" e afundava o outro de graça.
+        if self.aggression.contains_key(&(victim, attacker)) {
+            return false;
+        }
+        let same_salvo = self
+            .aggression
+            .get(&(attacker, victim))
+            .is_some_and(|secs| *secs > AGGRESSION_SECS - HIT_WINDOW_SECS);
+        self.aggression.insert((attacker, victim), AGGRESSION_SECS);
+        !same_salvo
+    }
+
+    /// Afundar quem te atacou há pouco é legítima defesa.
+    pub fn is_self_defense(&self, killer: CharacterId, victim: CharacterId) -> bool {
+        self.aggression.contains_key(&(victim, killer))
+    }
+
     pub fn mark_crown_aggressor(&mut self, character: CharacterId) {
         self.crown_aggressors
             .insert(character, CROWN_AGGRESSOR_SECS);
@@ -154,8 +184,14 @@ impl Reputation {
     }
 
     /// Avança decaimento e marcas; devolve quem teve a notoriedade mudada.
-    pub fn tick(&mut self, dt: f32) -> Vec<CharacterId> {
+    /// `at_sea` = quem decai: deslogado ou atracado não limpa a ficha
+    /// esperando.
+    pub fn tick(&mut self, dt: f32, at_sea: impl Fn(CharacterId) -> bool) -> Vec<CharacterId> {
         self.crown_aggressors.retain(|_, secs| {
+            *secs -= dt;
+            *secs > 0.0
+        });
+        self.aggression.retain(|_, secs| {
             *secs -= dt;
             *secs > 0.0
         });
@@ -164,9 +200,16 @@ impl Reputation {
             return Vec::new();
         }
         self.decay_clock -= DECAY_EVERY_SECS;
-        let changed: Vec<CharacterId> = self.notoriety.keys().copied().collect();
-        for value in self.notoriety.values_mut() {
-            *value -= 1;
+        let changed: Vec<CharacterId> = self
+            .notoriety
+            .keys()
+            .copied()
+            .filter(|character| at_sea(*character))
+            .collect();
+        for character in &changed {
+            if let Some(value) = self.notoriety.get_mut(character) {
+                *value -= 1;
+            }
         }
         self.notoriety.retain(|_, value| *value > 0);
         changed
@@ -274,7 +317,9 @@ pub fn track_player_hits(
         else {
             continue;
         };
-        if attacker.character == victim.character {
+        if attacker.character == victim.character
+            || !reputation.register_hit(attacker.character, victim.character)
+        {
             continue;
         }
         let gain = notoriety_gain(
@@ -319,22 +364,27 @@ pub fn settle_player_sinks(
                 .and_then(|(client, _)| *client);
             let bounty = bounty_for(victim_notoriety);
             if bounty > 0 {
-                claim_bounty(&mut market, killer, bounty);
+                let paid = claim_bounty(&mut market, victim, killer, bounty);
                 crate::market::send_wallet(&mut connection_manager, &market, &viewers, killer);
+                crate::market::send_wallet(&mut connection_manager, &market, &viewers, victim);
                 if let Some(client) = killer_client {
                     send_event(
                         &mut connection_manager,
                         &[client],
-                        format!("Recompensa da coroa: +{bounty}g"),
+                        format!("Cabeca cobrada: +{paid}g"),
                         WorldEventKind::Kill,
                     );
                 }
             } else {
-                let gain = notoriety_gain(
-                    Offense::Sink,
-                    zone_tier(&map, destruction.victim_x, destruction.victim_y),
-                    false,
-                );
+                let gain = if reputation.is_self_defense(killer, victim) {
+                    0
+                } else {
+                    notoriety_gain(
+                        Offense::Sink,
+                        zone_tier(&map, destruction.victim_x, destruction.victim_y),
+                        false,
+                    )
+                };
                 if let Some(client) = killer_client {
                     send_event(
                         &mut connection_manager,
@@ -352,7 +402,9 @@ pub fn settle_player_sinks(
                 );
             }
         }
-        if reputation.reset(victim) > 0 {
+        // Só outro capitão limpa a ficha: afundar para um NPC (ou de
+        // propósito) não apaga a cabeça a prêmio.
+        if killer.is_some() && reputation.reset(victim) > 0 {
             send_reputation(
                 &mut connection_manager,
                 &reputation,
@@ -373,20 +425,28 @@ pub fn settle_player_sinks(
     }
 }
 
-/// A coroa paga a cabeça: faucet auditado no ledger (`BountyClaim`).
+/// A cabeça sai do bolso do Procurado, até o que ele tem: transferência,
+/// nunca ouro novo (dois jogadores combinados não cunham nada).
+/// Devolve quanto foi pago.
 pub(crate) fn claim_bounty(
     market: &mut crate::market::ServerMarket,
+    wanted: CharacterId,
     killer: CharacterId,
     bounty: u64,
-) {
-    market.credit(killer, Money(bounty));
+) -> u64 {
+    let paid = bounty.min(market.balance(wanted).0);
+    if paid == 0 || market.debit(wanted, Money(paid)).is_err() {
+        return 0;
+    }
+    market.credit(killer, Money(paid));
     market.ledger.record(
         LedgerKind::BountyClaim,
-        Money(bounty),
-        format!("bounty claim {bounty}g"),
+        Money(paid),
+        format!("bounty transfer {paid}g"),
     );
     market.persist();
-    info!(killer = ?killer, bounty, "cabeca de Procurado cobrada");
+    info!(killer = ?killer, wanted = ?wanted, paid, "cabeca de Procurado cobrada");
+    paid
 }
 
 pub fn decay_notoriety(
@@ -395,7 +455,14 @@ pub fn decay_notoriety(
     ships: Query<&ServerShip>,
     mut reputation: ResMut<Reputation>,
 ) {
-    for character in reputation.tick(time.delta_secs()) {
+    let at_sea = |character: CharacterId| {
+        ships.iter().any(|ship| {
+            ship.character == character
+                && ship.client_id.is_some()
+                && ship.presence == VesselPresence::AtSea
+        })
+    };
+    for character in reputation.tick(time.delta_secs(), at_sea) {
         if let Some(ship) = ships.iter().find(|ship| ship.character == character) {
             send_reputation(
                 &mut connection_manager,
@@ -415,10 +482,14 @@ pub fn announce_reputation_on_spawn(
     mut connection_manager: ResMut<ConnectionManager>,
     ships: Query<&ServerShip, Added<ServerShip>>,
     mut reputation: ResMut<Reputation>,
+    mut dev_notoriety: Local<Option<Option<u32>>>,
 ) {
-    let dev_notoriety: Option<u32> = std::env::var("MAREFORGE_DEV_NOTORIETY")
-        .ok()
-        .and_then(|value| value.parse().ok());
+    // Lido uma vez (o sistema roda a 60 Hz).
+    let dev_notoriety = *dev_notoriety.get_or_insert_with(|| {
+        std::env::var("MAREFORGE_DEV_NOTORIETY")
+            .ok()
+            .and_then(|value| value.parse().ok())
+    });
     for ship in &ships {
         if let Some(value) = dev_notoriety.filter(|_| reputation.notoriety(ship.character) == 0) {
             reputation.add(ship.character, value);
@@ -469,8 +540,8 @@ mod tests {
         rep.add(captain, 5_000);
         assert_eq!(rep.notoriety(captain), MAX_NOTORIETY);
 
-        assert!(rep.tick(DECAY_EVERY_SECS - 0.5).is_empty());
-        assert_eq!(rep.tick(1.0), vec![captain]);
+        assert!(rep.tick(DECAY_EVERY_SECS - 0.5, |_| true).is_empty());
+        assert_eq!(rep.tick(1.0, |_| true), vec![captain]);
         assert_eq!(rep.notoriety(captain), MAX_NOTORIETY - 1);
 
         assert_eq!(rep.reset(captain), MAX_NOTORIETY - 1);
@@ -483,9 +554,9 @@ mod tests {
         let mut rep = Reputation::default();
         let captain = CharacterId::new();
         rep.add(captain, 1);
-        rep.tick(DECAY_EVERY_SECS);
+        rep.tick(DECAY_EVERY_SECS, |_| true);
         assert_eq!(rep.notoriety(captain), 0);
-        assert!(rep.tick(DECAY_EVERY_SECS).is_empty());
+        assert!(rep.tick(DECAY_EVERY_SECS, |_| true).is_empty());
     }
 
     #[test]
@@ -508,21 +579,49 @@ mod tests {
         assert!(!rep.hunted_by_navy(honest));
         assert!(rep.hunted_by_navy(wanted));
         assert!(rep.hunted_by_navy(raider));
-        rep.tick(CROWN_AGGRESSOR_SECS + 1.0);
+        rep.tick(CROWN_AGGRESSOR_SECS + 1.0, |_| true);
         assert!(!rep.hunted_by_navy(raider));
     }
 
     #[test]
-    fn claiming_a_bounty_pays_the_killer_from_the_crown() {
+    fn claiming_a_bounty_moves_gold_from_the_wanted_to_the_killer() {
         let mut market = crate::market::ServerMarket::new();
         let killer = market.character("hunter");
-        let start = market.balance(killer).0;
-        claim_bounty(&mut market, killer, 640);
-        assert_eq!(market.balance(killer).0, start + 640);
+        let wanted = market.character("outlaw");
+        let (killer_start, wanted_start) = (market.balance(killer).0, market.balance(wanted).0);
+        assert_eq!(claim_bounty(&mut market, wanted, killer, 640), 640);
+        assert_eq!(market.balance(killer).0, killer_start + 640);
+        assert_eq!(market.balance(wanted).0, wanted_start - 640);
         assert!(market
             .ledger
             .entries()
             .iter()
             .any(|entry| entry.kind == LedgerKind::BountyClaim && entry.amount == Money(640)));
+        // Cabeça maior que o bolso: paga o que tem, nunca cria ouro.
+        let broke = market.balance(wanted).0;
+        assert_eq!(
+            claim_bounty(&mut market, wanted, killer, broke + 5_000),
+            broke
+        );
+        assert_eq!(market.balance(wanted).0, 0);
+    }
+
+    #[test]
+    fn retaliation_and_same_salvo_hits_do_not_count() {
+        let mut rep = Reputation::default();
+        let (a, b) = (CharacterId::new(), CharacterId::new());
+        assert!(rep.register_hit(a, b));
+        // Segunda bala da mesma salva.
+        assert!(!rep.register_hit(a, b));
+        // B revida: legítima defesa.
+        assert!(!rep.register_hit(b, a));
+        assert!(rep.is_self_defense(b, a));
+        // Quem começou continua sujando a ficha na salva seguinte.
+        rep.tick(HIT_WINDOW_SECS + 0.5, |_| true);
+        assert!(rep.register_hit(a, b));
+        assert!(!rep.is_self_defense(a, b));
+        rep.tick(AGGRESSION_SECS + 1.0, |_| true);
+        assert!(!rep.is_self_defense(b, a));
+        assert!(rep.register_hit(b, a));
     }
 }

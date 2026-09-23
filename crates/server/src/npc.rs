@@ -480,8 +480,8 @@ pub fn drive_npcs(
     let find = |id: u32| contacts.iter().find(|c| c.ship_id == id).copied();
 
     for (entity, mut npc) in &mut npcs {
+        // `simulate_npcs` já despawna o morto; aqui só não mexe nele.
         if npc.ai.state == NpcState::Dead {
-            commands.entity(entity).despawn();
             continue;
         }
         npc.battery.advance(dt);
@@ -873,8 +873,13 @@ pub fn simulate_npcs(
     for (attacker_ship_id, x, y) in caravan_alarms {
         let mut responding = false;
         for (_, mut navy) in &mut npcs {
+            // Quem já está caçando não larga o alvo pelo alarme.
+            let busy = matches!(
+                navy.ai.state,
+                NpcState::Dead | NpcState::Chase { .. } | NpcState::Attack
+            );
             if navy.role == NpcRole::Navy
-                && navy.ai.state != NpcState::Dead
+                && !busy
                 && distance(navy.motion.x, navy.motion.y, x, y) <= config.navy_response_radius
             {
                 navy.ai.state = NpcState::Chase {

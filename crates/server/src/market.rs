@@ -296,7 +296,11 @@ impl ServerMarket {
         balance.0 = balance.0.saturating_add(amount.0);
     }
 
-    fn debit(&mut self, character: CharacterId, amount: Money) -> Result<(), MarketError> {
+    pub(crate) fn debit(
+        &mut self,
+        character: CharacterId,
+        amount: Money,
+    ) -> Result<(), MarketError> {
         let available = self.balance(character);
         if available.0 < amount.0 {
             return Err(MarketError::InsufficientFunds {

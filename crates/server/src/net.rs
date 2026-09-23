@@ -1886,6 +1886,11 @@ fn apply_combat_damage(
             else {
                 continue;
             };
+            // Já afundou neste tick (outra bala da mesma salva): o despawn
+            // só aplica depois — sem isso o navio "morre" duas vezes.
+            if ship.hp == 0 {
+                continue;
+            }
             // A zona da VÍTIMA decide (MF-017, §9): proteção é da vítima.
             let pvp_here = map
                 .0
@@ -1919,6 +1924,7 @@ fn apply_combat_damage(
                     None
                 }
                 DamageOutcome::Destroyed => {
+                    ship.hp = 0;
                     metrics.ships_destroyed += 1;
                     if ship.client_id.is_some() {
                         // §72 ship_losses_by_kind: conta só navios de player.

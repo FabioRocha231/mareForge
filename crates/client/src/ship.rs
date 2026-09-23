@@ -708,7 +708,8 @@ pub struct WantedMarker {
     ship_id: u32,
 }
 
-const WANTED_MARKER_OFFSET: f32 = 34.0;
+/// Folga entre a proa (meio casco) e o losango de procurado.
+const WANTED_MARKER_GAP: f32 = 10.0;
 
 fn is_wanted(state: &ShipState) -> bool {
     state.notoriety_tier >= TIER_PROCURADO
@@ -719,10 +720,11 @@ pub fn update_wanted_markers(
     ships: Query<(&ShipVisual, &Transform), Without<WantedMarker>>,
     mut markers: Query<(Entity, &WantedMarker, &mut Transform), Without<ShipVisual>>,
 ) {
-    let above = |ship: &Transform| {
+    // Acima do casco inteiro: um Patrol (64 m) engoliria um offset fixo.
+    let above = |visual: &ShipVisual, ship: &Transform| {
         Vec3::new(
             ship.translation.x,
-            ship.translation.y + WANTED_MARKER_OFFSET,
+            ship.translation.y + hull_length(visual.target.kind) * 0.5 + WANTED_MARKER_GAP,
             layers::LABELS,
         )
     };
@@ -733,7 +735,7 @@ pub fn update_wanted_markers(
             .find(|(visual, _)| visual.target.ship_id == marker.ship_id)
         {
             Some((visual, ship)) if is_wanted(&visual.target) => {
-                transform.translation = above(ship);
+                transform.translation = above(visual, ship);
                 marked.insert(marker.ship_id);
             }
             _ => commands.entity(entity).despawn_recursive(),
@@ -748,7 +750,7 @@ pub fn update_wanted_markers(
                 WantedMarker {
                     ship_id: visual.target.ship_id,
                 },
-                Transform::from_translation(above(ship)),
+                Transform::from_translation(above(visual, ship)),
                 Visibility::default(),
             ))
             .with_children(|marker| {
@@ -842,7 +844,10 @@ mod tests {
         let mut markers = world.query::<(&WantedMarker, &Transform)>();
         let found: Vec<_> = markers.iter(&world).collect();
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0].1.translation.y, 50.0 + WANTED_MARKER_OFFSET);
+        assert_eq!(
+            found[0].1.translation.y,
+            50.0 + hull_length(state.kind) * 0.5 + WANTED_MARKER_GAP
+        );
 
         state.notoriety_tier = 0;
         world.get_mut::<ShipVisual>(ship).unwrap().target = state;

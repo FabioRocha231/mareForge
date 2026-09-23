@@ -27,7 +27,9 @@ pub enum LedgerKind {
     /// Carga de caravana NPC saqueada: pago em ouro direto ao killer
     /// (faucet). Pilar 1: NPC nunca fabrica item — a carga vira ouro.
     CaravanPlunder,
-    /// Cabeça de capitão Procurado cobrada: a coroa paga (faucet).
+    /// Cabeça de capitão Procurado cobrada: TRANSFERÊNCIA da carteira do
+    /// Procurado para quem o afundou (nunca faucet — senão dois jogadores
+    /// combinados cunhavam ouro).
     BountyClaim,
 }
 

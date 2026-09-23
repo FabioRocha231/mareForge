@@ -12,8 +12,11 @@ use mareforge_protocol::{
 use crate::hud::{spawn_faded_panel, SeaHud};
 use crate::ui;
 
-/// Linhas visíveis no feed; a mais antiga sai quando chega uma nova.
-const FEED_MAX: usize = 5;
+/// Linhas visíveis no feed; a mais antiga sai quando chega uma nova. Três
+/// cabem entre o painel de vento e os toasts (40% da tela).
+const FEED_MAX: usize = 3;
+/// Abaixo do painel de vento (canto superior direito, ~140 px).
+const FEED_TOP: f32 = 150.0;
 /// Fade in, fim do hold, fim do fade out (s).
 const FEED_FADE: (f32, f32, f32) = (0.3, 5.2, 6.0);
 /// Logo abaixo do painel do navio (topo-esquerda).
@@ -43,12 +46,7 @@ impl Plugin for WantedHudPlugin {
             .add_systems(Startup, setup_wanted_hud)
             .add_systems(
                 Update,
-                (
-                    receive_reputation,
-                    receive_world_events,
-                    feed_dock_refusals,
-                    update_wanted_badge,
-                ),
+                (receive_reputation, update_feed, update_wanted_badge),
             );
     }
 }
@@ -58,7 +56,7 @@ pub fn setup_wanted_hud(mut commands: Commands) {
         Node {
             position_type: PositionType::Absolute,
             right: Val::Px(ui::MARGIN),
-            top: Val::Px(ui::MARGIN),
+            top: Val::Px(FEED_TOP),
             flex_direction: FlexDirection::Column,
             align_items: AlignItems::End,
             row_gap: Val::Px(4.0),
@@ -116,78 +114,61 @@ fn receive_reputation(
     }
 }
 
-fn push_feed_line(
-    commands: &mut Commands,
-    feed: Entity,
-    entries: &[Entity],
-    text: &str,
-    color: Color,
-) {
-    // Cheio: a linha mais antiga (primeiro filho) sai.
-    if entries.len() >= FEED_MAX {
-        commands.entity(entries[0]).despawn_recursive();
-    }
-    spawn_faded_panel(
-        commands,
-        feed,
-        FEED_FADE,
-        color,
-        FeedEntry,
-        &[(text, 13.0, color)],
-    );
-}
-
-fn feed_entries(
-    feed: &Query<(Entity, Option<&Children>), With<KillFeed>>,
-) -> Option<(Entity, Vec<Entity>)> {
-    let (entity, children) = feed.get_single().ok()?;
-    Some((
-        entity,
-        children
-            .map(|c| c.iter().copied().collect())
-            .unwrap_or_default(),
-    ))
-}
-
-fn receive_world_events(
+/// Um só sistema para eventos e recusas: com a lista de filhos do começo do
+/// frame, dois leitores separados passavam de `FEED_MAX` e despawnavam a
+/// mesma linha duas vezes.
+fn update_feed(
     mut commands: Commands,
-    mut events: EventReader<ClientReceiveMessage<WorldEvent>>,
+    mut world_events: EventReader<ClientReceiveMessage<WorldEvent>>,
+    mut dock_results: EventReader<ClientReceiveMessage<DockResult>>,
     feed: Query<(Entity, Option<&Children>), With<KillFeed>>,
 ) {
-    let Some((feed, mut entries)) = feed_entries(&feed) else {
-        return;
-    };
-    for event in events.read() {
-        let message = event.message();
-        push_feed_line(
-            &mut commands,
-            feed,
-            &entries,
-            &message.text,
-            event_color(message.kind),
-        );
-        if entries.len() >= FEED_MAX {
-            entries.remove(0);
-        }
-    }
-}
-
-/// Porto da coroa recusou o Procurado: o motivo vai para o feed.
-fn feed_dock_refusals(
-    mut commands: Commands,
-    mut events: EventReader<ClientReceiveMessage<DockResult>>,
-    feed: Query<(Entity, Option<&Children>), With<KillFeed>>,
-) {
-    let Some((feed, entries)) = feed_entries(&feed) else {
-        return;
-    };
-    if let Some(result) = events
+    let mut lines: Vec<(String, Color)> = world_events
+        .read()
+        .map(|event| {
+            let message = event.message();
+            (message.text.clone(), event_color(message.kind))
+        })
+        .collect();
+    // Porto da coroa recusou o Procurado: o motivo vai para o feed.
+    if let Some(result) = dock_results
         .read()
         .map(|event| event.message())
         .filter(|result| !result.success && result.reason.starts_with("Procurado"))
         .last()
     {
-        push_feed_line(&mut commands, feed, &entries, &result.reason, ui::DANGER);
+        lines.push((result.reason.clone(), ui::DANGER));
+    }
+    if lines.is_empty() {
+        return;
+    }
+    let Ok((feed, children)) = feed.get_single() else {
+        return;
+    };
+    let mut oldest: std::collections::VecDeque<Entity> = children
+        .map(|c| c.iter().copied().collect())
+        .unwrap_or_default();
+    // Só as últimas FEED_MAX desta rajada importam.
+    let skip = lines.len().saturating_sub(FEED_MAX);
+    for (text, color) in lines.into_iter().skip(skip) {
+        while oldest.len() >= FEED_MAX {
+            if let Some(entry) = oldest.pop_front() {
+                // A linha pode ter acabado de sumir pelo fade no mesmo frame.
+                if let Some(entity) = commands.get_entity(entry) {
+                    entity.despawn_recursive();
+                }
+            }
+        }
+        spawn_faded_panel(
+            &mut commands,
+            feed,
+            FEED_FADE,
+            color,
+            FeedEntry,
+            &[(&text, 13.0, color)],
+        );
+        // Placeholder: a linha nova ocupa uma vaga até o próximo frame.
+        oldest.push_back(Entity::PLACEHOLDER);
     }
 }
 
@@ -200,20 +181,30 @@ fn update_wanted_badge(
         return;
     }
     let line = mine.0.as_ref().and_then(badge_line);
+    // ReputationUpdate chega a cada 10 s igual: não suja o Node à toa.
+    let display = if line.is_some() {
+        Display::Flex
+    } else {
+        Display::None
+    };
     for (mut node, mut border) in &mut badge {
-        node.display = if line.is_some() {
-            Display::Flex
-        } else {
-            Display::None
-        };
+        if node.display != display {
+            node.display = display;
+        }
         if let Some((_, color)) = &line {
-            border.0 = *color;
+            if border.0 != *color {
+                border.0 = *color;
+            }
         }
     }
     if let Some((value, color)) = line {
         for (mut text, mut text_color) in &mut text {
-            text.0 = value.clone();
-            text_color.0 = color;
+            if text.0 != value {
+                text.0 = value.clone();
+            }
+            if text_color.0 != color {
+                text_color.0 = color;
+            }
         }
     }
 }
