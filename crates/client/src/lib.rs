@@ -1,7 +1,9 @@
 pub mod assets;
+pub mod audio;
 pub mod camera;
 pub mod crafting;
 pub mod hud;
+pub mod juice;
 pub mod market;
 pub mod net;
 pub mod nodes;

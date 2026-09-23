@@ -1,9 +1,11 @@
 use bevy::prelude::*;
 
 use crate::assets::AssetManifestPlugin;
+use crate::audio::SoundPlugin;
 use crate::camera::{follow_camera, setup_camera, zoom_from_wheel, CameraZoom};
 use crate::crafting::{send_craft_input, CraftPlugin};
 use crate::hud::{toggle_sea_hud, HudPlugin};
+use crate::juice::JuicePlugin;
 use crate::market::{send_market_input, MarketPlugin};
 use crate::net::{ClientNetPlugin, MyDocked};
 use crate::nodes::NodePlugin;
@@ -38,6 +40,8 @@ impl Plugin for ClientPlugin {
             .add_plugins(VfxPlugin)
             .add_plugins(UiThemePlugin)
             .add_plugins(crate::portals::PortalClientPlugin)
+            .add_plugins(JuicePlugin)
+            .add_plugins(SoundPlugin)
             .add_systems(Startup, setup_camera)
             .add_systems(
                 Update,
