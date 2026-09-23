@@ -25,6 +25,92 @@ pub enum WorldError {
     UnknownRegion,
 }
 
+/// Nome da zona mais perigosa (Águas Negras) e seu centro.
+pub const BLACK_WATERS: &str = "Águas Negras";
+pub const BLACK_WATERS_CENTER: (f32, f32) = (0.0, 1750.0);
+/// Porto pirata na ilha — fora da coroa, aceita procurados.
+pub const PIRATE_PORT: &str = "Porto do Coral Negro";
+/// Instâncias de Cerração: arenas cercadas de terra, longe do mapa principal.
+pub const FOG_ZONE: &str = "Cerração";
+pub const FOG_SLOTS: [(f32, f32); 3] = [(4200.0, -1400.0), (4200.0, 0.0), (4200.0, 1400.0)];
+/// Raio navegável de cada cerração (a parede começa aqui).
+pub const FOG_RADIUS: f32 = 560.0;
+/// Passagem do Sorvedouro: corredor norte-sul cercado de terra.
+pub const MAELSTROM_ZONE: &str = "Passagem do Sorvedouro";
+pub const MAELSTROM_X: f32 = -4200.0;
+pub const MAELSTROM_HALF_LENGTH: f32 = 1400.0;
+/// Meia largura navegável do corredor.
+pub const MAELSTROM_HALF_WIDTH: f32 = 250.0;
+/// Pontos da passagem ligados a cada redemoinho do mundo (sul, meio, norte).
+pub const MAELSTROM_POINTS: [(f32, f32); 3] = [
+    (MAELSTROM_X, -1000.0),
+    (MAELSTROM_X, 0.0),
+    (MAELSTROM_X, 1000.0),
+];
+
+const WALL_RADIUS: f32 = 170.0;
+
+/// Terra das instâncias: anel de parede em cada cerração, corredor de Sorvedouro
+/// e rochedos de dentro. Determinístico (mesma geometria no servidor e no
+/// client).
+fn instance_land() -> Vec<LandMass> {
+    let mut land = Vec::new();
+    for (slot, (cx, cy)) in FOG_SLOTS.into_iter().enumerate() {
+        let ring = FOG_RADIUS + WALL_RADIUS;
+        let count = (std::f32::consts::TAU * ring / 200.0).ceil() as usize;
+        for k in 0..count {
+            let a = k as f32 / count as f32 * std::f32::consts::TAU;
+            land.push(LandMass {
+                x: cx + a.cos() * ring,
+                y: cy + a.sin() * ring,
+                radius: WALL_RADIUS,
+            });
+        }
+        for k in 0..5 {
+            let a = k as f32 * 1.3 + slot as f32;
+            let r = 190.0 + (k % 3) as f32 * 90.0;
+            land.push(LandMass {
+                x: cx + a.cos() * r,
+                y: cy + a.sin() * r,
+                radius: 22.0 + (k % 3) as f32 * 8.0,
+            });
+        }
+    }
+    let wall_x = MAELSTROM_HALF_WIDTH + WALL_RADIUS;
+    let mut y = -MAELSTROM_HALF_LENGTH - WALL_RADIUS;
+    while y <= MAELSTROM_HALF_LENGTH + WALL_RADIUS {
+        for side in [-1.0, 1.0] {
+            land.push(LandMass {
+                x: MAELSTROM_X + side * wall_x,
+                y,
+                radius: WALL_RADIUS,
+            });
+        }
+        y += 170.0;
+    }
+    for end in [-1.0, 1.0] {
+        let mut x = -wall_x;
+        while x <= wall_x {
+            land.push(LandMass {
+                x: MAELSTROM_X + x,
+                y: end * (MAELSTROM_HALF_LENGTH + WALL_RADIUS),
+                radius: WALL_RADIUS,
+            });
+            x += 170.0;
+        }
+    }
+    // Slalom de rochedos no corredor, longe dos pontos de chegada.
+    for (i, y) in [-1300.0, -500.0, 500.0, 1300.0].into_iter().enumerate() {
+        let side = if i % 2 == 0 { -1.0 } else { 1.0 };
+        land.push(LandMass {
+            x: MAELSTROM_X + side * 110.0,
+            y,
+            radius: 34.0,
+        });
+    }
+    land
+}
+
 /// O mundo: zonas de risco e regiões econômicas.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorldMap {
@@ -144,6 +230,26 @@ impl WorldMap {
             900.0,
             350.0,
         );
+        // 4. MF-059 — zonas de alto risco, todas sem lei (full loot):
+        // Águas Negras ao norte da ilha; instâncias de Cerração
+        // e a Passagem do Sorvedouro, isoladas por paredes de terra longe do
+        // mapa principal e alcançáveis só por portal.
+        zone(
+            BLACK_WATERS,
+            RiskTier::Lawless,
+            BLACK_WATERS_CENTER.0,
+            BLACK_WATERS_CENTER.1,
+            560.0,
+        );
+        for (x, y) in FOG_SLOTS {
+            zone(FOG_ZONE, RiskTier::Lawless, x, y, FOG_RADIUS + 40.0);
+        }
+        let mut y = -MAELSTROM_HALF_LENGTH;
+        while y <= MAELSTROM_HALF_LENGTH {
+            zone(MAELSTROM_ZONE, RiskTier::Lawless, MAELSTROM_X, y, 300.0);
+            y += 280.0;
+        }
+
         zone("Mar Sem Lei", RiskTier::Lawless, 0.0, 0.0, 8000.0);
 
         let regions = vec![
@@ -170,7 +276,14 @@ impl WorldMap {
             Region {
                 id: RegionId::new(),
                 name: "Ilha do Coral Negro",
-                port: None,
+                // Porto pirata: atraca qualquer um, até
+                // procurado, mas a porta dele é água sem lei.
+                port: Some(Port {
+                    name: PIRATE_PORT,
+                    x: 10.0,
+                    y: 1078.0,
+                    service_radius: 60.0,
+                }),
             },
         ];
 
@@ -206,9 +319,17 @@ impl WorldMap {
             (-60.0, 520.0, 28.0),
             (92.0, 600.0, 22.0),
             (0.0, 330.0, 18.0),
+            // Recifes das Águas Negras.
+            (-220.0, 1500.0, 30.0),
+            (180.0, 1580.0, 36.0),
+            (-60.0, 1790.0, 26.0),
+            (260.0, 1900.0, 32.0),
+            (-300.0, 1960.0, 38.0),
+            (60.0, 2110.0, 28.0),
         ] {
             land.push(LandMass { x, y, radius });
         }
+        land.extend(instance_land());
 
         Self {
             zones,
@@ -288,8 +409,9 @@ mod tests {
         assert!(port.contains(-600.0, 0.0));
         assert!(!port.contains(0.0, 0.0));
 
+        // MF-059: a ilha ganhou o porto pirata.
         let ilha = map.region_by_name("Ilha do Coral Negro").unwrap();
-        assert!(ilha.port.is_none());
+        assert_eq!(ilha.port.as_ref().map(|p| p.name), Some(PIRATE_PORT));
 
         assert!(matches!(
             map.region_by_name("Atlântida"),
@@ -354,5 +476,38 @@ mod tests {
         assert!(map.is_land(0.0, 950.0));
         let (x, y) = map.push_out_of_land(0.0, 950.0, 15.0).unwrap();
         assert!(!map.is_land(x, y));
+    }
+
+    #[test]
+    fn instances_are_enclosed_and_their_portal_points_are_open_water() {
+        let map = WorldMap::vertical_slice();
+        for (x, y) in FOG_SLOTS {
+            assert_eq!(map.zone_at(x, y).unwrap().name, FOG_ZONE);
+            assert!(map.push_out_of_land(x, y - 250.0, 20.0).is_none());
+            // Qualquer direção, logo depois do raio navegável, é parede.
+            for k in 0..16 {
+                let a = k as f32 / 16.0 * std::f32::consts::TAU;
+                let r = FOG_RADIUS + 60.0;
+                assert!(map.is_land(x + a.cos() * r, y + a.sin() * r), "brecha {k}");
+            }
+        }
+        for (x, y) in MAELSTROM_POINTS {
+            assert_eq!(map.zone_at(x, y).unwrap().name, MAELSTROM_ZONE);
+            assert!(map.push_out_of_land(x, y, 20.0).is_none());
+            assert!(map.is_land(x + MAELSTROM_HALF_WIDTH + 60.0, y));
+            assert!(map.is_land(x - MAELSTROM_HALF_WIDTH - 60.0, y));
+        }
+    }
+
+    #[test]
+    fn black_waters_and_pirate_port() {
+        let map = WorldMap::vertical_slice();
+        let (x, y) = BLACK_WATERS_CENTER;
+        let zone = map.zone_at(x, y).unwrap();
+        assert_eq!((zone.name, zone.tier), (BLACK_WATERS, RiskTier::Lawless));
+        let island = map.region_by_name("Ilha do Coral Negro").unwrap();
+        let port = island.port.as_ref().expect("porto pirata");
+        assert_eq!(port.name, PIRATE_PORT);
+        assert_eq!(map.zone_at(port.x, port.y).unwrap().tier, RiskTier::Lawless);
     }
 }

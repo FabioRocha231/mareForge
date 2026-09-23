@@ -211,6 +211,34 @@ pub struct WorldSnapshot {
     pub wrecks: Vec<WreckState>,
 }
 
+/// Tipo de portal (MF-059): entrada/saída de cerração e sorvedouro.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PortalKindWire {
+    FogGate,
+    FogExit,
+    Whirlpool,
+}
+
+/// Portal visível no mundo. Poucos e globais: vão para todos, sem AOI.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct PortalState {
+    pub portal_id: u32,
+    pub kind: PortalKindWire,
+    pub x: f32,
+    pub y: f32,
+    pub radius: f32,
+    /// Segundos até sumir.
+    pub expires_in_secs: f32,
+    /// Travessias restantes; `None` = ilimitado.
+    pub uses_left: Option<u32>,
+}
+
+/// Estado completo dos portais (MF-059), a cada segundo e quando mudam.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PortalsUpdate {
+    pub portals: Vec<PortalState>,
+}
+
 /// Jogador quer saquear um wreck (PRD §27: precisa estar nele, com porão).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LootWreck {

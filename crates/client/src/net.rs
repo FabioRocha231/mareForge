@@ -157,6 +157,7 @@ impl Plugin for ClientNetPlugin {
         app.register_message::<LoadoutSnapshot>(ChannelDirection::ServerToClient);
         app.register_message::<LoadoutResult>(ChannelDirection::ServerToClient);
         app.register_message::<WorldSnapshot>(ChannelDirection::ServerToClient);
+        app.register_message::<mareforge_protocol::PortalsUpdate>(ChannelDirection::ServerToClient);
         app.register_message::<ShipDestroyed>(ChannelDirection::ServerToClient);
         app.register_message::<LootResult>(ChannelDirection::ServerToClient);
         app.register_message::<ZoneChanged>(ChannelDirection::ServerToClient);

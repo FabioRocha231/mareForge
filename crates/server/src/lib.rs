@@ -8,6 +8,7 @@ pub mod npc;
 pub mod persist;
 mod playtest;
 pub mod plugin;
+pub mod portals;
 pub mod sets;
 
 pub use plugin::ServerPlugin;

@@ -7,7 +7,7 @@
 #import bevy_sprite::mesh2d_view_bindings::globals
 
 struct SeaParams {
-    land: array<vec4<f32>, 48>,
+    land: array<vec4<f32>, 64>,
     safe: array<vec4<f32>, 4>,
     // x: nº de discos de terra, y: nº de círculos protegidos, z: perigo 0..1
     info: vec4<f32>,
@@ -59,7 +59,8 @@ fn land_field(p: vec2<f32>) -> vec2<f32> {
         d = smin(d, di, 24.0);
         if (di < nearest) {
             nearest = di;
-            rocky = select(0.0, 1.0, disc.z < 40.0);
+            // Rochedo pequeno ou penhasco de instância (w = 1).
+            rocky = select(0.0, 1.0, disc.z < 40.0 || disc.w > 0.5);
         }
     }
     // Costa irregular: ruído grande na terra firme, fino nos rochedos.

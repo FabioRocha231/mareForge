@@ -28,6 +28,9 @@ use crate::world::WavingFlag;
 /// AOI, não verdade sobre o mundo.
 pub const STALE_VISUAL_TTL: f32 = 2.0;
 
+/// Distância que só um portal explica (nenhum casco anda isso num snapshot).
+const TELEPORT_SNAP: f32 = 150.0;
+
 /// Metros por pixel do atlas. O casco médio (80 px) vira 40 m.
 pub const WORLD_PER_PX: f32 = 0.5;
 
@@ -429,6 +432,12 @@ pub fn lerp_ship_visuals(time: Res<Time>, mut ships: Query<(&mut Transform, &Shi
     // desaparece em ~0.15s, o bastante para disfarçar 30 Hz sem atrasar.
     let factor = 1.0 - (-20.0 * time.delta_secs()).exp();
     for (mut transform, visual) in &mut ships {
+        // Salto de portal (MF-059): reaparece do outro lado, sem deslizar
+        // pelo mapa.
+        let target = Vec2::new(visual.target.x, visual.target.y);
+        if transform.translation.truncate().distance(target) > TELEPORT_SNAP {
+            transform.translation = target.extend(transform.translation.z);
+        }
         apply_lerp(
             &mut transform,
             visual.target.x,

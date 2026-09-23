@@ -37,6 +37,7 @@ impl Plugin for ClientPlugin {
             .add_plugins(HudPlugin)
             .add_plugins(VfxPlugin)
             .add_plugins(UiThemePlugin)
+            .add_plugins(crate::portals::PortalClientPlugin)
             .add_systems(Startup, setup_camera)
             .add_systems(
                 Update,

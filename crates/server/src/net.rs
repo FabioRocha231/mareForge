@@ -139,6 +139,46 @@ pub struct DevItems {
     pub hull_plate: ItemDefinitionId,
     pub racing_sails: ItemDefinitionId,
     pub bronze_cannon: ItemDefinitionId,
+    // MF-059: recursos raros das zonas de alto risco e o tier 2 que eles
+    // viram na Forja Pirata.
+    pub abyssal_pearl: ItemDefinitionId,
+    pub fog_essence: ItemDefinitionId,
+    pub abyssal_amber: ItemDefinitionId,
+    pub black_hull: ItemDefinitionId,
+    pub fog_sails: ItemDefinitionId,
+    pub abyssal_cannons: ItemDefinitionId,
+}
+
+/// Recurso raro (sem slot) para o catálogo dev.
+fn rare_resource(id: ItemDefinitionId, name: &str, weight: u32) -> ItemDefinition {
+    ItemDefinition {
+        id,
+        kind: ItemKind::Resource,
+        equipment: None,
+        max_stack: 20,
+        base_weight: weight,
+        tags: SmallVec::new(),
+        display_name: String::from(name),
+    }
+}
+
+/// Equipamento dev de um slot com os stats dados.
+fn equipment_item(
+    id: ItemDefinitionId,
+    name: &str,
+    slot: EquipmentSlot,
+    stats: EquipmentStats,
+    weight: u32,
+) -> ItemDefinition {
+    ItemDefinition {
+        id,
+        kind: ItemKind::Equipment,
+        equipment: Some(EquipmentDefinition { slot, stats }),
+        max_stack: 1,
+        base_weight: weight,
+        tags: SmallVec::new(),
+        display_name: String::from(name),
+    }
 }
 
 impl DevItems {
@@ -239,6 +279,57 @@ impl DevItems {
             tags: SmallVec::new(),
             display_name: String::from("Canhão de Bronze"),
         });
+        let abyssal_pearl = ItemDefinitionId::new();
+        let fog_essence = ItemDefinitionId::new();
+        let abyssal_amber = ItemDefinitionId::new();
+        let black_hull = ItemDefinitionId::new();
+        let fog_sails = ItemDefinitionId::new();
+        let abyssal_cannons = ItemDefinitionId::new();
+        let no_stats = EquipmentStats {
+            damage: 0,
+            speed: 0,
+            cargo: 0,
+            hp: 0,
+            range: 0,
+        };
+        for definition in [
+            rare_resource(abyssal_pearl, "Pérola Abissal", 1),
+            rare_resource(fog_essence, "Essência da Cerração", 1),
+            rare_resource(abyssal_amber, "Âmbar Abissal", 2),
+            equipment_item(
+                black_hull,
+                "Casco Negro",
+                EquipmentSlot::Hull,
+                EquipmentStats {
+                    hp: 100,
+                    ..no_stats
+                },
+                10,
+            ),
+            equipment_item(
+                fog_sails,
+                "Velas de Cerração",
+                EquipmentSlot::Sail,
+                EquipmentStats {
+                    speed: 1000,
+                    ..no_stats
+                },
+                5,
+            ),
+            equipment_item(
+                abyssal_cannons,
+                "Canhões Abissais",
+                EquipmentSlot::Weapon,
+                EquipmentStats {
+                    damage: 20,
+                    range: 3000,
+                    ..no_stats
+                },
+                12,
+            ),
+        ] {
+            register(definition);
+        }
         Self {
             catalog,
             timber,
@@ -247,6 +338,12 @@ impl DevItems {
             hull_plate,
             racing_sails,
             bronze_cannon,
+            abyssal_pearl,
+            fog_essence,
+            abyssal_amber,
+            black_hull,
+            fog_sails,
+            abyssal_cannons,
         }
     }
 }
@@ -281,6 +378,17 @@ pub struct ServerDockPolicy(pub DockPolicy);
 /// protegidas. Jogadores nascem em segurança e escolhem quando se arriscar
 /// (Pilar 3). O mapa fixa em teste que este ponto é Protected.
 pub const DEV_SPAWN: (f32, f32) = (-560.0, 0.0);
+
+/// Dev tooling (MF-059): `MAREFORGE_DEV_SPAWN=x,y` faz o navio novo nascer
+/// em outro ponto — revisar zonas distantes sem navegar até lá.
+fn dev_spawn_point() -> (f32, f32) {
+    parse_spawn(std::env::var("MAREFORGE_DEV_SPAWN").ok().as_deref()).unwrap_or(DEV_SPAWN)
+}
+
+fn parse_spawn(value: Option<&str>) -> Option<(f32, f32)> {
+    let (x, y) = value?.split_once(',')?;
+    Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
+}
 
 /// Relógio do snapshot de rede (ADR-0008, MF-032): acumula o tempo simulado
 /// e dispara o envio na cadência de [`SNAPSHOT_HZ`] (20 Hz), independente do
@@ -367,6 +475,7 @@ impl Plugin for ServerNetPlugin {
         app.insert_resource(crate::crafting::DevRecipes::new(&dev_items));
         app.insert_resource(dev_items);
         app.add_plugins(crate::loadout::LoadoutPlugin);
+        app.add_plugins(crate::portals::PortalPlugin);
         app.add_channel::<ReliableChannel>(ChannelSettings {
             mode: ChannelMode::OrderedReliable(ReliableSettings::default()),
             ..default()
@@ -396,6 +505,7 @@ impl Plugin for ServerNetPlugin {
         app.register_message::<LoadoutSnapshot>(ChannelDirection::ServerToClient);
         app.register_message::<LoadoutResult>(ChannelDirection::ServerToClient);
         app.register_message::<WorldSnapshot>(ChannelDirection::ServerToClient);
+        app.register_message::<mareforge_protocol::PortalsUpdate>(ChannelDirection::ServerToClient);
         app.register_message::<ShipDestroyed>(ChannelDirection::ServerToClient);
         app.register_message::<LootResult>(ChannelDirection::ServerToClient);
         app.register_message::<ZoneChanged>(ChannelDirection::ServerToClient);
@@ -820,7 +930,8 @@ pub(crate) fn spawn_ship_for(
 
     // Nasce na doca do Porto da Serra, em águas protegidas (Pilar 3: o
     // risco é escolha do jogador, não condição de nascimento).
-    let zone = map.zone_at(DEV_SPAWN.0, DEV_SPAWN.1).ok().map(|z| z.id);
+    let spawn = dev_spawn_point();
+    let zone = map.zone_at(spawn.0, spawn.1).ok().map(|z| z.id);
 
     commands.spawn((ServerShip {
         ship_id,
@@ -839,8 +950,8 @@ pub(crate) fn spawn_ship_for(
         battery: BroadsideBattery::default(),
         stats,
         motion: ShipMotion {
-            x: DEV_SPAWN.0,
-            y: DEV_SPAWN.1,
+            x: spawn.0,
+            y: spawn.1,
             ..ShipMotion::default()
         },
         tuning: MotionTuning::default(),
@@ -1151,7 +1262,12 @@ fn handle_hello(
                     character,
                     Vec::new(),
                 );
-                (ship_id, DEV_SPAWN, Vec::new(), ShipKind::SmallMerchant)
+                (
+                    ship_id,
+                    dev_spawn_point(),
+                    Vec::new(),
+                    ShipKind::SmallMerchant,
+                )
             }
         };
         let _ = connection_manager.send_message::<ReliableChannel, _>(
@@ -1932,7 +2048,8 @@ fn respawn_destroyed_ships(
                 kind: ShipKind::SmallMerchant,
             },
         );
-        if let Some(zone) = zone_changed_for(&map.0, new_ship_id, DEV_SPAWN.0, DEV_SPAWN.1) {
+        let spawn = dev_spawn_point();
+        if let Some(zone) = zone_changed_for(&map.0, new_ship_id, spawn.0, spawn.1) {
             let _ = connection_manager.send_message::<ReliableChannel, _>(victim_client_id, &zone);
         }
         info!(
@@ -2476,6 +2593,13 @@ mod tests {
     use mareforge_shared::ids::RegionId;
 
     use super::*;
+
+    #[test]
+    fn dev_spawn_parses_x_comma_y_and_rejects_garbage() {
+        assert_eq!(parse_spawn(Some("10, -20.5")), Some((10.0, -20.5)));
+        assert_eq!(parse_spawn(Some("oops")), None);
+        assert_eq!(parse_spawn(None), None);
+    }
 
     #[test]
     fn port_defaults_to_5000() {
