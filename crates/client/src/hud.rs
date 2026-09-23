@@ -87,7 +87,7 @@ pub enum HudContext {
 
 /// Recarga de bordo do servidor (`server::net` tuning.cooldown_secs).
 // ponytail: espelha a constante do servidor; mandar no snapshot se virar por navio.
-const BROADSIDE_RELOAD_SECS: f32 = 4.0;
+const BROADSIDE_RELOAD_SECS: f32 = 3.0;
 
 pub const CONTROLS_HINT: &str =
     "W/S velas | A/D leme | Q/R canhoes | E atracar | G coletar | F saquear | roda do mouse: zoom";
@@ -103,10 +103,35 @@ impl Plugin for HudPlugin {
                 update_zone_panel,
                 update_cooldown_panel,
                 update_prompt_panel,
+                update_sail_indicator,
                 ui::tick_ui_fades,
             ),
         );
     }
+}
+
+/// Nível de pano armado (W/S), lido do `SailLevel` do client.
+fn update_sail_indicator(
+    sail: Res<crate::net::SailLevel>,
+    mut texts: Query<&mut Text, With<SailIndicator>>,
+) {
+    if !sail.is_changed() {
+        return;
+    }
+    for mut text in &mut texts {
+        text.0 = sail_indicator_text(*sail);
+    }
+}
+
+fn sail_indicator_text(sail: crate::net::SailLevel) -> String {
+    let filled = usize::from(sail.0);
+    let empty = usize::from(crate::net::SailLevel::MAX) - filled;
+    format!(
+        "[{}{}]\n{}",
+        "#".repeat(filled),
+        "-".repeat(empty),
+        sail.label()
+    )
 }
 
 fn anchored(node: Node) -> Node {
@@ -688,6 +713,13 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn sail_indicator_shows_level_bar_and_label() {
+        use crate::net::SailLevel;
+        assert_eq!(sail_indicator_text(SailLevel(0)), "[---]\nVelas recolhidas");
+        assert_eq!(sail_indicator_text(SailLevel(3)), "[###]\nPano cheio");
+    }
+
     fn ship_state(port_cooldown: f32, starboard_cooldown: f32) -> mareforge_protocol::ShipState {
         mareforge_protocol::ShipState {
             ship_id: 1,
@@ -725,7 +757,7 @@ mod tests {
     fn reload_bar_fills_as_cooldown_drops() {
         assert_eq!(reload_fraction(BROADSIDE_RELOAD_SECS), 0.0);
         assert_eq!(reload_fraction(0.0), 1.0);
-        assert!((reload_fraction(1.0) - 0.75).abs() < 1e-5);
+        assert!((reload_fraction(BROADSIDE_RELOAD_SECS * 0.25) - 0.75).abs() < 1e-5);
     }
 
     #[test]
@@ -798,7 +830,7 @@ mod tests {
         let mut world = World::new();
         world.insert_resource(MyShip(Some(1)));
         world.spawn(ShipVisual {
-            target: ship_state(3.0, 0.0),
+            target: ship_state(BROADSIDE_RELOAD_SECS * 0.75, 0.0),
             last_seen: Instant::now(),
         });
         world.spawn((

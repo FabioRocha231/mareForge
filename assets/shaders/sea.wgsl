@@ -63,8 +63,10 @@ fn land_field(p: vec2<f32>) -> vec2<f32> {
         }
     }
     // Costa irregular: ruído grande na terra firme, fino nos rochedos.
-    let warp = select(16.0, 5.0, rocky > 0.5);
-    d += (fbm(p * 0.018) - 0.5) * warp * 2.0;
+    // Rochedo pequeno precisa de ruído mais fino, senão vira círculo.
+    let freq = select(0.018, 0.09, rocky > 0.5);
+    let warp = select(16.0, 6.0, rocky > 0.5);
+    d += (fbm(p * freq) - 0.5) * warp * 2.0;
     return vec2<f32>(d, rocky);
 }
 

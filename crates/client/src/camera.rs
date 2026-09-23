@@ -25,10 +25,12 @@ impl Default for CameraZoom {
 pub fn setup_camera(mut commands: Commands) {
     commands.spawn((
         Camera2d,
-        Projection::Orthographic(OrthographicProjection {
+        // Bevy 0.15: a Camera2d lê `OrthographicProjection`; um `Projection`
+        // avulso é ignorado (era por isso que o zoom antigo não valia).
+        OrthographicProjection {
             scale: DEFAULT_ZOOM,
             ..OrthographicProjection::default_2d()
-        }),
+        },
         // Começa sobre o Porto da Serra para não abrir num mar vazio.
         Transform::from_xyz(-560.0, 0.0, 0.0),
     ));
@@ -54,13 +56,13 @@ pub fn follow_camera(
     zoom: Res<CameraZoom>,
     my_ship: Res<crate::net::MyShip>,
     visuals: Query<(&ShipVisual, &Transform), Without<Camera2d>>,
-    mut camera: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
+    mut camera: Query<(&mut Transform, &mut OrthographicProjection), With<Camera2d>>,
 ) {
-    let Ok((mut transform, mut projection)) = camera.get_single_mut() else {
+    let Ok((mut transform, mut ortho)) = camera.get_single_mut() else {
         return;
     };
     let dt = time.delta_secs();
-    if let Projection::Orthographic(ortho) = projection.as_mut() {
+    if (zoom.0 - ortho.scale).abs() > 1e-4 {
         ortho.scale += (zoom.0 - ortho.scale) * (1.0 - (-10.0 * dt).exp());
     }
     let Some(my_id) = my_ship.0 else { return };

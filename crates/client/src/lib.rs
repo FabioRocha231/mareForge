@@ -35,12 +35,18 @@ pub fn windowed_app() -> App {
                 primary_window: Some(Window {
                     title: "Mareforge — Playtest α".into(),
                     resolution: (1280.0_f32, 720.0_f32).into(),
+                    // Captura de dev não rouba o foco (nem o teclado) de
+                    // quem está usando a máquina.
+                    focused: std::env::var_os("MAREFORGE_SHOT").is_none(),
                     ..default()
                 }),
                 ..default()
             }),
     );
     app.add_plugins(ClientPlugin);
+    if let Some(shots) = playtest::DevScreenshotPlugin::from_env() {
+        app.add_plugins(shots);
+    }
     app
 }
 

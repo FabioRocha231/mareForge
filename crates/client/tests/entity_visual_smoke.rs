@@ -41,18 +41,6 @@ fn test_assets() -> GameAssets {
         deco: Handle::default(),
         fort: Handle::default(),
         fort_parts: Handle::default(),
-        panel_ship: Handle::default(),
-        panel_zone: Handle::default(),
-        panel_cooldowns: Handle::default(),
-        panel_prompt: Handle::default(),
-        panel_warning: Handle::default(),
-        panel_port: Handle::default(),
-        icon_ship: Handle::default(),
-        icon_hp: Handle::default(),
-        icon_cargo: Handle::default(),
-        icon_gold: Handle::default(),
-        icon_warn: Handle::default(),
-        icon_skull: Handle::default(),
     }
 }
 

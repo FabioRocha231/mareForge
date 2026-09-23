@@ -6,8 +6,6 @@
 //! sao pecas separadas. Os recortes abaixo foram medidos no atlas (bounding
 //! box de pixels opacos) e o navio e montado peca a peca em `ship.rs`.
 
-use std::path::Path;
-
 use bevy::asset::{AssetServer, Handle, LoadState};
 use bevy::prelude::*;
 use bevy::sprite::TextureAtlasLayout;
@@ -120,15 +118,6 @@ pub mod fort {
     pub const FLAG: usize = 8;
 }
 
-/// `mareforge/...` resolve para o asset root configurado em `lib.rs`
-/// (workspace_root/assets/mareforge/...). Usado pelos paineis de HUD.
-pub fn mareforge_sprite(rel: &str) -> String {
-    Path::new("mareforge")
-        .join(rel)
-        .to_string_lossy()
-        .into_owned()
-}
-
 #[derive(Resource)]
 pub struct GameAssets {
     pub ships: Handle<Image>,
@@ -137,19 +126,6 @@ pub struct GameAssets {
     pub deco: Handle<TextureAtlasLayout>,
     pub fort: Handle<Image>,
     pub fort_parts: Handle<TextureAtlasLayout>,
-    // MF-057A HUD.
-    pub panel_ship: Handle<Image>,
-    pub panel_zone: Handle<Image>,
-    pub panel_cooldowns: Handle<Image>,
-    pub panel_prompt: Handle<Image>,
-    pub panel_warning: Handle<Image>,
-    pub panel_port: Handle<Image>,
-    pub icon_ship: Handle<Image>,
-    pub icon_hp: Handle<Image>,
-    pub icon_cargo: Handle<Image>,
-    pub icon_gold: Handle<Image>,
-    pub icon_warn: Handle<Image>,
-    pub icon_skull: Handle<Image>,
 }
 
 pub struct AssetManifestPlugin;
@@ -274,18 +250,6 @@ pub(crate) fn load_game_assets(
         deco: layouts.add(deco_layout()),
         fort: asset_server.load(FORT_SHEET),
         fort_parts: layouts.add(fort_parts_layout()),
-        panel_ship: asset_server.load(mareforge_sprite("ui/panel_ship.png")),
-        panel_zone: asset_server.load(mareforge_sprite("ui/panel_zone.png")),
-        panel_cooldowns: asset_server.load(mareforge_sprite("ui/panel_cooldowns.png")),
-        panel_prompt: asset_server.load(mareforge_sprite("ui/panel_prompt.png")),
-        panel_warning: asset_server.load(mareforge_sprite("ui/panel_warning.png")),
-        panel_port: asset_server.load(mareforge_sprite("ui/panel_port.png")),
-        icon_ship: asset_server.load(mareforge_sprite("ui/icon_ship.png")),
-        icon_hp: asset_server.load(mareforge_sprite("ui/icon_hp.png")),
-        icon_cargo: asset_server.load(mareforge_sprite("ui/icon_cargo.png")),
-        icon_gold: asset_server.load(mareforge_sprite("ui/icon_gold.png")),
-        icon_warn: asset_server.load(mareforge_sprite("ui/icon_warn.png")),
-        icon_skull: asset_server.load(mareforge_sprite("ui/icon_skull.png")),
     });
 }
 

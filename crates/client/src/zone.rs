@@ -53,6 +53,8 @@ fn handle_zone_changed(
 
         // MF-057B: banner momentaneo com nome da zona ao entrar.
         if let Ok(anchor) = banner_anchor.get_single() {
+            // Um banner por vez: a zona nova substitui a anterior.
+            commands.entity(anchor).despawn_descendants();
             spawn_zone_banner(&mut commands, anchor, &zone.zone_name);
         }
 
