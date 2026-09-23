@@ -2,14 +2,18 @@
 //! puras de mundo — regiões, zonas de risco, portos, nós de recurso — sem
 //! ECS, sem Bevy. O servidor conecta as peças; o client apenas representa.
 
+pub mod land;
 pub mod map;
 pub mod node;
+pub mod portal;
 pub mod region;
 pub mod risk;
 pub mod zone;
 
+pub use land::{push_out_of_land, LandMass};
 pub use map::{WorldError, WorldMap};
 pub use node::{GatheringPolicy, ResourceNode};
+pub use portal::{ClosedArena, FogArena, Portal, PortalDirector, PortalKind, PortalTuning};
 pub use region::{Port, Region};
 pub use risk::{RiskPolicy, RiskTier};
 pub use zone::{Zone, ZoneShape};

@@ -66,6 +66,8 @@ fn make_ship(presence: VesselPresence) -> ServerShip {
         zone: None,
         trip: None,
         restored_trip_started_at: None,
+        sail_hp: 100.0,
+        ammo: Default::default(),
     }
 }
 

@@ -5,6 +5,7 @@
 //! client e servidor. Versionamento no handshake conforme ADR-0011.
 
 use mareforge_domain_combat::weapon::BroadsideSide;
+use mareforge_domain_combat::Ammo;
 use mareforge_domain_crafting::recipe::StationKind;
 use mareforge_domain_items::EquipmentSlot;
 use mareforge_domain_ships::ShipKind;
@@ -45,7 +46,9 @@ use serde::{Deserialize, Serialize};
 ///     casco; o client escolhe sprite, nunca stats ou regras.
 /// v12: MF-056H — `ShipState.cargo_capacity` expõe o limite autoritativo do
 ///     porão para a UI.
-pub const PROTOCOL_VERSION: u16 = 12;
+/// v13: MF-059 — portais (`PortalsUpdate`), guilda e contratos, clima,
+///      munição e `ShipState.sail_hp`/`ammo`.
+pub const PROTOCOL_VERSION: u16 = 13;
 
 /// Primeira mensagem do client após conectar (ADR-0011). `identity` é o
 /// token persistente do jogador (MF-035): o servidor resolve token →
@@ -128,6 +131,43 @@ pub struct ShipState {
     /// default 0 (cliente antigo não quebra).
     #[serde(default)]
     pub cargo_capacity: u32,
+    /// MF-059: integridade do pano (0..100); rasgado, o navio anda menos.
+    #[serde(default = "full_sails")]
+    pub sail_hp: f32,
+    /// MF-059: munição carregada (tecla C). Default bala redonda.
+    #[serde(default)]
+    pub ammo: Ammo,
+}
+
+fn full_sails() -> f32 {
+    100.0
+}
+
+/// Troca de munição do próprio navio (MF-059). O servidor guarda e aplica
+/// no próximo disparo; o veredito aparece em `ShipState.ammo`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SelectAmmo {
+    pub ammo: Ammo,
+}
+
+/// Célula de tempestade visível (MF-059).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct StormState {
+    pub storm_id: u32,
+    pub x: f32,
+    pub y: f32,
+    pub radius: f32,
+    /// 0..1 — fade in/out da célula.
+    pub intensity: f32,
+}
+
+/// Clima do mar (MF-059), ~1 Hz para todos: vento global e tempestades.
+/// `wind_dir` é para onde o vento sopra (radianos, convenção do heading).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WeatherUpdate {
+    pub wind_dir: f32,
+    pub wind_strength: f32,
+    pub storms: Vec<StormState>,
 }
 
 /// Instala um item do storage regional no slot dele (MF-039). Só atracado;
@@ -209,6 +249,34 @@ pub struct WorldSnapshot {
     pub ships: Vec<ShipState>,
     pub projectiles: Vec<ProjectileState>,
     pub wrecks: Vec<WreckState>,
+}
+
+/// Tipo de portal (MF-059): entrada/saída de cerração e sorvedouro.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PortalKindWire {
+    FogGate,
+    FogExit,
+    Whirlpool,
+}
+
+/// Portal visível no mundo. Poucos e globais: vão para todos, sem AOI.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct PortalState {
+    pub portal_id: u32,
+    pub kind: PortalKindWire,
+    pub x: f32,
+    pub y: f32,
+    pub radius: f32,
+    /// Segundos até sumir.
+    pub expires_in_secs: f32,
+    /// Travessias restantes; `None` = ilimitado.
+    pub uses_left: Option<u32>,
+}
+
+/// Estado completo dos portais (MF-059), a cada segundo e quando mudam.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PortalsUpdate {
+    pub portals: Vec<PortalState>,
 }
 
 /// Jogador quer saquear um wreck (PRD §27: precisa estar nele, com porão).
@@ -443,13 +511,79 @@ pub struct MarketResult {
     pub reason: String,
 }
 
+/// Vender à Guilda Mercante (NPC) do porto onde está ATRACADO, a partir do
+/// storage regional. O servidor limita ao estoque; item fora da tabela da
+/// guilda é recusado (fail-closed). Veredito vem em `MarketResult`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SellToGuild {
+    pub item: ItemDefinitionId,
+    pub quantity: u32,
+}
+
+/// Preço da próxima unidade de um item em cada porto (mesma ordem de
+/// `GuildPrices::ports`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuildPriceLine {
+    pub item: ItemDefinitionId,
+    pub item_name: String,
+    pub prices: Vec<u64>,
+}
+
+/// Preços da guilda em TODOS os portos (arbitragem visível) + o que o navio
+/// leva no porão (só leitura). Enviado ao atracado quando algo muda.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuildPrices {
+    pub ports: Vec<String>,
+    pub lines: Vec<GuildPriceLine>,
+    pub cargo: Vec<StorageLine>,
+}
+
+/// Um contrato do Quadro (oferta ou ativo).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContractLine {
+    pub id: u32,
+    pub title: String,
+    pub reward: u64,
+    pub duration_secs: u32,
+    /// Tempo restante (só faz sentido no contrato ativo).
+    pub remaining_secs: u32,
+    pub progress: u32,
+    pub target: u32,
+    /// Caça (abates) em vez de Entrega.
+    pub hunt: bool,
+}
+
+/// Ofertas do porto atracado (vazio no mar) + seu contrato ativo.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContractsSnapshot {
+    pub offers: Vec<ContractLine>,
+    pub active: Option<ContractLine>,
+}
+
+/// Aceitar uma oferta do Quadro (só atracado; 1 contrato ativo por vez).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AcceptContract {
+    pub id: u32,
+}
+
+/// Abandonar o contrato ativo (sem reembolso, sem multa).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AbandonContract;
+
+/// Veredito de contrato: aceite, abandono, conclusão ou expiração.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContractResult {
+    pub success: bool,
+    pub reason: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn current_protocol_version_is_twelve() {
-        assert_eq!(PROTOCOL_VERSION, 12);
+        assert_eq!(PROTOCOL_VERSION, 13);
         assert_eq!(
             ClientHello::current("token").protocol_version,
             PROTOCOL_VERSION
@@ -475,6 +609,8 @@ mod tests {
             starboard_cooldown_secs: 1.25,
             is_npc: false,
             cargo_capacity: 100,
+            sail_hp: 100.0,
+            ammo: Ammo::Round,
         };
         let bytes = bincode::serialize(&state).unwrap();
         let decoded = bincode::deserialize::<ShipState>(&bytes).unwrap();
@@ -504,6 +640,8 @@ mod tests {
                 starboard_cooldown_secs: 0.0,
                 is_npc,
                 cargo_capacity: 70,
+                sail_hp: 100.0,
+                ammo: Ammo::Round,
             };
             let bytes = bincode::serialize(&state).unwrap();
             let decoded = bincode::deserialize::<ShipState>(&bytes).unwrap();
@@ -621,6 +759,8 @@ mod tests {
             starboard_cooldown_secs: 1.5,
             is_npc: false,
             cargo_capacity: 100,
+            sail_hp: 100.0,
+            ammo: Ammo::Round,
         };
         let bytes = bincode::serialize(&full).expect("encode");
         // Trunca 8 bytes (dois f32): simula cliente novo lendo servidor antigo.
@@ -686,6 +826,8 @@ mod tests {
                     starboard_cooldown_secs: 2.0,
                     is_npc: false,
                     cargo_capacity: 100,
+                    sail_hp: 100.0,
+                    ammo: Ammo::Round,
                 },
                 ShipState {
                     ship_id: 2,
@@ -704,6 +846,8 @@ mod tests {
                     starboard_cooldown_secs: 0.0,
                     is_npc: false,
                     cargo_capacity: 40,
+                    sail_hp: 100.0,
+                    ammo: Ammo::Round,
                 },
             ],
             projectiles: vec![ProjectileState {

@@ -51,7 +51,8 @@ MAREFORGE_PORT=5001 cargo run --bin mareforge_playtest --release
 For the complete 14-step checklist and bug-reporting guidance, see
 [`docs/PLAYTEST.md`](docs/PLAYTEST.md).
 
-Essential controls: `WASD` sail, `E` dock or undock, `G` gather, `Q`/`R` fire
+Essential controls: `W`/`S` raise or lower sail (3 levels), `A`/`D` rudder,
+mouse wheel zoom, `E` dock or undock, `G` gather, `Q`/`R` fire
 broadside weapons, and `F` loot a wreck. The checklist covers the complete UI
 flow.
 

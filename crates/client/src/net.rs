@@ -143,6 +143,7 @@ impl Plugin for ClientNetPlugin {
         app.register_message::<EquipItem>(ChannelDirection::ClientToServer);
         app.register_message::<UnequipItem>(ChannelDirection::ClientToServer);
         app.register_message::<FireBroadside>(ChannelDirection::ClientToServer);
+        app.register_message::<mareforge_protocol::SelectAmmo>(ChannelDirection::ClientToServer);
         app.register_message::<LootWreck>(ChannelDirection::ClientToServer);
         app.register_message::<GatherNode>(ChannelDirection::ClientToServer);
         app.register_message::<CraftItem>(ChannelDirection::ClientToServer);
@@ -157,6 +158,7 @@ impl Plugin for ClientNetPlugin {
         app.register_message::<LoadoutSnapshot>(ChannelDirection::ServerToClient);
         app.register_message::<LoadoutResult>(ChannelDirection::ServerToClient);
         app.register_message::<WorldSnapshot>(ChannelDirection::ServerToClient);
+        app.register_message::<mareforge_protocol::PortalsUpdate>(ChannelDirection::ServerToClient);
         app.register_message::<ShipDestroyed>(ChannelDirection::ServerToClient);
         app.register_message::<LootResult>(ChannelDirection::ServerToClient);
         app.register_message::<ZoneChanged>(ChannelDirection::ServerToClient);
@@ -170,15 +172,34 @@ impl Plugin for ClientNetPlugin {
         app.register_message::<OrdersSnapshot>(ChannelDirection::ServerToClient);
         app.register_message::<PortStorageSnapshot>(ChannelDirection::ServerToClient);
         app.register_message::<MarketResult>(ChannelDirection::ServerToClient);
+        app.register_message::<mareforge_protocol::SellToGuild>(ChannelDirection::ClientToServer);
+        app.register_message::<mareforge_protocol::AcceptContract>(
+            ChannelDirection::ClientToServer,
+        );
+        app.register_message::<mareforge_protocol::AbandonContract>(
+            ChannelDirection::ClientToServer,
+        );
+        app.register_message::<mareforge_protocol::GuildPrices>(ChannelDirection::ServerToClient);
+        app.register_message::<mareforge_protocol::ContractsSnapshot>(
+            ChannelDirection::ServerToClient,
+        );
+        app.register_message::<mareforge_protocol::ContractResult>(
+            ChannelDirection::ServerToClient,
+        );
+        app.register_message::<mareforge_protocol::WeatherUpdate>(ChannelDirection::ServerToClient);
         app.init_resource::<crate::ship::DestroyedShips>();
         app.init_resource::<KnownWrecks>();
         app.init_resource::<MyDocked>();
+        app.init_resource::<SailLevel>();
         app.add_systems(Startup, (connect, log_connecting));
+        // Intenção contínua (leme/pano) vai no tick fixo; comandos de tecla
+        // única ficam no Update — `just_pressed` vale um frame de render e o
+        // FixedUpdate a 30 Hz pula frames, engolindo tiros e atracações.
+        app.add_systems(FixedUpdate, (send_hello_on_connect, send_ship_input));
         app.add_systems(
-            FixedUpdate,
+            Update,
             (
-                send_hello_on_connect,
-                send_ship_input,
+                update_sail_level,
                 send_dock_input,
                 send_loadout_input,
                 send_fire_input,
@@ -210,11 +231,11 @@ pub struct KnownWrecks(pub HashMap<u32, Vec2>);
 #[derive(Resource, Debug, Default)]
 pub struct MyDocked(pub bool);
 
-/// Raio de saque usado pelo HUD e pelo atalho F (28 m: 30 do servidor com
+/// Raio de saque usado pelo HUD e pelo atalho F (38 m: 40 do servidor com
 /// folga para o lerp visual).
-pub const LOOT_RADIUS_SQ: f32 = 28.0 * 28.0;
-/// Raio de coleta usado pelo HUD e pelo atalho G (mesma folga do saque).
-pub const GATHER_RADIUS_SQ: f32 = 28.0 * 28.0;
+pub const LOOT_RADIUS_SQ: f32 = 38.0 * 38.0;
+/// Raio de coleta usado pelo HUD e pelo atalho G (45 do servidor, com folga).
+pub const GATHER_RADIUS_SQ: f32 = 43.0 * 43.0;
 
 /// E alterna atracar/desatracar (MF-036). Dev tooling (§39):
 /// MAREFORGE_AUTODOCK=1 tenta atracar sozinho até conseguir — smoke da
@@ -398,24 +419,63 @@ fn send_hello_on_connect(
     }
 }
 
+/// Pano armado (MF-058): W iça um nível, S recolhe um. O navio mantém o
+/// seguimento sem o jogador segurar tecla — navegar é escolher o pano e
+/// governar o leme, não apertar W por dois minutos.
+#[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct SailLevel(pub u8);
+
+impl SailLevel {
+    pub const MAX: u8 = 3;
+
+    pub fn throttle(self) -> f32 {
+        f32::from(self.0) / f32::from(Self::MAX)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self.0 {
+            0 => "Velas recolhidas",
+            1 => "Pano de manobra",
+            2 => "Meio pano",
+            _ => "Pano cheio",
+        }
+    }
+}
+
+/// W/S mudam o nível de pano; atracado, o pano é recolhido.
+fn update_sail_level(
+    keys: Res<ButtonInput<KeyCode>>,
+    docked: Res<MyDocked>,
+    mut sail: ResMut<SailLevel>,
+) {
+    if docked.0 {
+        sail.0 = 0;
+        return;
+    }
+    if keys.just_pressed(KeyCode::KeyW) || keys.just_pressed(KeyCode::ArrowUp) {
+        sail.0 = (sail.0 + 1).min(SailLevel::MAX);
+    }
+    if keys.just_pressed(KeyCode::KeyS) || keys.just_pressed(KeyCode::ArrowDown) {
+        sail.0 = sail.0.saturating_sub(1);
+    }
+}
+
 /// Intenção de navegação local — o servidor valida e aplica (Pilar 4).
 fn send_ship_input(
     keys: Res<ButtonInput<KeyCode>>,
+    sail: Res<SailLevel>,
     override_input: Res<ShipInputOverride>,
     mut connection_manager: ResMut<ConnectionManager>,
 ) {
     let input = match override_input.0 {
         Some(input) => input,
         None => {
-            // Dev tooling (PRD §39): MAREFORGE_AUTOSAIL=1 segura o W sozinho.
+            // Dev tooling (PRD §39): MAREFORGE_AUTOSAIL=1 navega a pano cheio.
             let autosail = std::env::var_os("MAREFORGE_AUTOSAIL").is_some();
-            let throttle = if keys.pressed(KeyCode::KeyW) || autosail {
-                1.0
-            } else {
-                0.0
-            };
-            let turn =
-                (keys.pressed(KeyCode::KeyA) as i32 - keys.pressed(KeyCode::KeyD) as i32) as f32;
+            let throttle = if autosail { 1.0 } else { sail.throttle() };
+            let left = keys.pressed(KeyCode::KeyA) || keys.pressed(KeyCode::ArrowLeft);
+            let right = keys.pressed(KeyCode::KeyD) || keys.pressed(KeyCode::ArrowRight);
+            let turn = (left as i32 - right as i32) as f32;
             ShipInput { throttle, turn }
         }
     };
@@ -477,9 +537,14 @@ fn handle_ship_destroyed(
         let ship_id = event.message().ship_id;
         warn!(ship_id, "navio destruído no horizonte");
         destroyed.0.insert(ship_id);
+        // O casco não some: afunda (animação em `ship::animate_sinking`).
         for (entity, visual) in &visuals {
             if visual.target.ship_id == ship_id {
-                commands.entity(entity).despawn();
+                // try_insert: um soluço > TTL pode ter expirado o visual.
+                commands
+                    .entity(entity)
+                    .remove::<crate::ship::ShipVisual>()
+                    .try_insert(crate::ship::Sinking::of(ship_id));
             }
         }
     }

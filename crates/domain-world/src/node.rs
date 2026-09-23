@@ -64,7 +64,8 @@ impl Default for GatheringPolicy {
     fn default() -> Self {
         Self {
             amount_per_gather: 10,
-            interact_radius: 30.0,
+            // Casco tem 30-40 m: 45 m deixa encostar no node sem abalroar.
+            interact_radius: 45.0,
             respawn_secs: 45.0,
         }
     }

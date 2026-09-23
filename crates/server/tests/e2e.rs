@@ -224,6 +224,11 @@ fn vertical_slice_loop_gather_craft_transport_fight_loot_sell() {
                 throttle: 1.0,
                 turn: 0.0,
             },
+            // MF-059: vento de través (soprando para o norte).
+            mareforge_domain_ships::Wind {
+                direction: std::f32::consts::FRAC_PI_2,
+                strength: 0.7,
+            },
             &tuning,
             1.0 / 30.0,
         );

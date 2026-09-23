@@ -11,6 +11,7 @@ use mareforge_domain_crafting::{
 };
 use mareforge_domain_items::ItemCatalog;
 use mareforge_domain_ships::{ShipDefinition, ShipKind, VesselPresence};
+use mareforge_domain_world::map::PIRATE_PORT;
 use mareforge_domain_world::WorldMap;
 use mareforge_protocol::{AssignShip, CraftItem, CraftResult, RecipeEntry, RecipesSnapshot};
 use mareforge_shared::ids::{ItemDefinitionId, RecipeId, RegionId};
@@ -90,6 +91,36 @@ impl DevRecipes {
                 dev.bronze_cannon,
                 vec![ingredient(dev.ore, 20), ingredient(dev.coral, 5)],
             ),
+            // MF-059: tier 2 só na Forja Pirata (Anvil do Porto do Coral
+            // Negro) — o recurso raro tem que atravessar as Águas Negras.
+            Recipe {
+                required_station: StationKind::Anvil,
+                ..equipment_recipe(
+                    "Casco Negro",
+                    dev.black_hull,
+                    vec![ingredient(dev.timber, 20), ingredient(dev.abyssal_pearl, 6)],
+                )
+            },
+            Recipe {
+                required_station: StationKind::Anvil,
+                ..equipment_recipe(
+                    "Velas de Cerração",
+                    dev.fog_sails,
+                    vec![
+                        ingredient(dev.timber, 10),
+                        ingredient(dev.fog_essence, 5),
+                        ingredient(dev.coral, 5),
+                    ],
+                )
+            },
+            Recipe {
+                required_station: StationKind::Anvil,
+                ..equipment_recipe(
+                    "Canhões Abissais",
+                    dev.abyssal_cannons,
+                    vec![ingredient(dev.ore, 20), ingredient(dev.abyssal_amber, 5)],
+                )
+            },
         ];
 
         let ships = vec![
@@ -173,12 +204,12 @@ impl DevRecipes {
 /// Disponibilidade de estação no porto da região (PRD §5/§7, MF-036/037):
 /// a oficina é do porto ONDE ESTÁ ATRACADO — água protegida não é doca. O
 /// Porto da Serra tem Workbench + Dock; o Porto da Mina, Dock. Anvil não
-/// existe no slice; região sem porto não tem estação alguma.
+/// é a Forja Pirata do Porto do Coral Negro (MF-059); região sem porto não
+/// tem estação alguma.
 pub fn station_available(map: &WorldMap, region: RegionId, required: StationKind) -> bool {
     match required {
         StationKind::None => true,
-        StationKind::Anvil => false,
-        StationKind::Workbench | StationKind::Dock => {
+        StationKind::Workbench | StationKind::Anvil | StationKind::Dock => {
             let Some(known) = map
                 .regions()
                 .iter()
@@ -186,9 +217,12 @@ pub fn station_available(map: &WorldMap, region: RegionId, required: StationKind
             else {
                 return false;
             };
+            let port_name = known.port.as_ref().map(|port| port.name);
             match required {
                 StationKind::Workbench => known.name == "Porto da Serra",
-                _ => known.port.is_some(), // Dock: toda região com porto
+                // Forja Pirata: só no porto das Águas Negras (MF-059).
+                StationKind::Anvil => port_name == Some(PIRATE_PORT),
+                _ => port_name.is_some(), // Dock: toda região com porto
             }
         }
     }
@@ -431,10 +465,13 @@ mod tests {
         // Mina: só Dock.
         assert!(!station_available(&map, mina, StationKind::Workbench));
         assert!(station_available(&map, mina, StationKind::Dock));
-        // Ilha sem porto: nada (e Anvil não existe no slice).
-        assert!(!station_available(&map, ilha, StationKind::Dock));
+        // Ilha (MF-059): porto pirata com Dock e Forja (Anvil), sem Workbench;
+        // a Forja não existe nos portos da coroa.
+        assert!(station_available(&map, ilha, StationKind::Dock));
+        assert!(station_available(&map, ilha, StationKind::Anvil));
         assert!(!station_available(&map, ilha, StationKind::Workbench));
         assert!(!station_available(&map, serra, StationKind::Anvil));
+        assert!(!station_available(&map, mina, StationKind::Anvil));
         assert!(station_available(&map, serra, StationKind::None));
     }
 }

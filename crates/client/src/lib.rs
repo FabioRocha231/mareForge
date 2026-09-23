@@ -1,12 +1,21 @@
 pub mod assets;
+pub mod audio;
+pub mod camera;
 pub mod crafting;
+pub mod guild;
+pub mod hud;
+pub mod juice;
 pub mod market;
 pub mod net;
 pub mod nodes;
 pub mod playtest;
 pub mod plugin;
 pub mod port_screen;
+pub mod portals;
 pub mod ship;
+pub mod ui;
+pub mod vfx;
+pub mod weather;
 pub mod world;
 pub mod zone;
 
@@ -29,14 +38,20 @@ pub fn windowed_app() -> App {
             .set(ImagePlugin::default_nearest())
             .set(WindowPlugin {
                 primary_window: Some(Window {
-                    title: "Mareforge".into(),
+                    title: "Mareforge — Playtest α".into(),
                     resolution: (1280.0_f32, 720.0_f32).into(),
+                    // Captura de dev não rouba o foco (nem o teclado) de
+                    // quem está usando a máquina.
+                    focused: std::env::var_os("MAREFORGE_SHOT").is_none(),
                     ..default()
                 }),
                 ..default()
             }),
     );
     app.add_plugins(ClientPlugin);
+    if let Some(shots) = playtest::DevScreenshotPlugin::from_env() {
+        app.add_plugins(shots);
+    }
     app
 }
 

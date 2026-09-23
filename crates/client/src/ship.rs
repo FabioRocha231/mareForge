@@ -5,6 +5,10 @@
 //! AOI (MF-031): entidades que SAEM do snapshot não somem na hora — ficam
 //! como last-known-state por [`STALE_VISUAL_TTL`] segundos e só então o
 //! visual sai. Wrecks chegam pelo snapshot (protocolo v8), com o mesmo TTL.
+//!
+//! MF-058: o navio é montado peça a peça do pack modular (casco, verga,
+//! vela, cesto, bandeira). A vela enche com o seguimento, o casco racha
+//! abaixo de 50% de HP, a proa levanta onda e a popa deixa espuma.
 
 use std::collections::HashSet;
 use std::time::Instant;
@@ -15,12 +19,25 @@ use lightyear::prelude::ClientReceiveMessage;
 use mareforge_domain_ships::ShipKind;
 use mareforge_protocol::{ProjectileState, ShipState, WorldSnapshot};
 
-use crate::assets::{frames, image_failed, layers, GameAssets};
+use crate::assets::{deco, fort, layers, parts, GameAssets, HullSize};
+use crate::vfx::{spawn_animation, spawn_particle, Particle, VfxHandles};
+use crate::world::WavingFlag;
 
 /// Quanto tempo um visual sobrevive sem aparecer no snapshot (ADR-0009:
 /// last-known-state até expirar). Curto de propósito: é máscara de pop do
 /// AOI, não verdade sobre o mundo.
 pub const STALE_VISUAL_TTL: f32 = 2.0;
+
+/// Distância que só um portal explica (nenhum casco anda isso num snapshot).
+const TELEPORT_SNAP: f32 = 150.0;
+
+/// Metros por pixel do atlas. O casco médio (80 px) vira 40 m.
+pub const WORLD_PER_PX: f32 = 0.5;
+
+/// A proa dos cascos do atlas aponta para BAIXO na imagem (o gurupés fica
+/// embaixo e a vela enfunada abre para baixo). `heading` 0 = +X, então o
+/// sprite gira +90°: -Y local vira +X.
+const SHIP_HEADING_OFFSET: f32 = std::f32::consts::FRAC_PI_2;
 
 /// Entidade visual de um navio autoritativo. `target` é o último estado
 /// autoritativo conhecido (alvo do lerp visual).
@@ -30,34 +47,217 @@ pub struct ShipVisual {
     pub last_seen: Instant,
 }
 
-const SHIP_HEADING_OFFSET: f32 = -std::f32::consts::FRAC_PI_2;
+#[derive(Component)]
+pub struct ShipHull {
+    size: HullSize,
+    color: usize,
+}
 
-fn ship_frame_and_scale(kind: ShipKind) -> (usize, Vec3) {
-    match kind {
-        ShipKind::SmallMerchant => (frames::SMALL_MERCHANT, Vec3::splat(0.42)),
-        ShipKind::Patrol => (frames::PATROL, Vec3::splat(0.36)),
-        ShipKind::Corsair => (frames::CORSAIR, Vec3::splat(0.25)),
+#[derive(Component)]
+pub struct ShipSail {
+    size: HullSize,
+    color: usize,
+}
+
+#[derive(Component)]
+pub struct BowWave;
+
+/// Casco afundando depois do `ShipDestroyed`: aderna, afunda e some.
+#[derive(Component, Default)]
+pub struct Sinking {
+    age: f32,
+    /// O `ShipVisual` sai no mesmo comando; o id fica para o juice.
+    pub ship_id: u32,
+}
+
+impl Sinking {
+    pub fn of(ship_id: u32) -> Self {
+        Self { age: 0.0, ship_id }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// Acumulador de espuma de popa por navio.
+#[derive(Component, Default)]
+pub struct FoamEmitter(f32);
 
-    #[test]
-    fn each_ship_kind_has_a_distinct_visual_frame() {
-        let merchant = ship_frame_and_scale(ShipKind::SmallMerchant).0;
-        let patrol = ship_frame_and_scale(ShipKind::Patrol).0;
-        let corsair = ship_frame_and_scale(ShipKind::Corsair).0;
-        assert_ne!(merchant, patrol);
-        assert_ne!(merchant, corsair);
-        assert_ne!(patrol, corsair);
+/// Aparência de cada tipo: casco, cores e posição dos mastros (px locais,
+/// +Y = popa).
+struct ShipLook {
+    hull: HullSize,
+    hull_color: usize,
+    sail_color: usize,
+    trim_color: usize,
+    masts: &'static [f32],
+}
+
+fn ship_look(kind: ShipKind, is_npc: bool) -> ShipLook {
+    // NPC é sempre vela vermelha: pirata se reconhece de longe.
+    let npc_sail = |color| if is_npc { 5 } else { color };
+    match kind {
+        // Cargueiro bojudo: casco médio claro, vela creme, dois mastros.
+        ShipKind::SmallMerchant => ShipLook {
+            hull: HullSize::Medium,
+            hull_color: 1,
+            sail_color: npc_sail(1),
+            trim_color: 1,
+            masts: &[14.0, -12.0],
+        },
+        // Escolta: casco grande azul-marinho, três mastros, velas brancas.
+        ShipKind::Patrol => ShipLook {
+            hull: HullSize::Large,
+            hull_color: 3,
+            sail_color: npc_sail(0),
+            trim_color: 4,
+            masts: &[30.0, 0.0, -30.0],
+        },
+        // Interceptador: casco pequeno escuro, um mastro, rápido.
+        ShipKind::Corsair => ShipLook {
+            hull: HullSize::Small,
+            hull_color: if is_npc { 0 } else { 2 },
+            sail_color: npc_sail(2),
+            trim_color: 1,
+            masts: &[2.0],
+        },
     }
+}
+
+fn hull_px(size: HullSize) -> Vec2 {
+    match size {
+        HullSize::Small => Vec2::new(30.0, 64.0),
+        HullSize::Medium => Vec2::new(44.0, 80.0),
+        HullSize::Large => Vec2::new(46.0, 128.0),
+    }
+}
+
+/// Comprimento do casco em metros (usado por VFX e HUD).
+pub fn hull_length(kind: ShipKind) -> f32 {
+    hull_px(ship_look(kind, false).hull).y * WORLD_PER_PX
+}
+
+fn part_sprite(assets: &GameAssets, index: usize) -> Sprite {
+    Sprite::from_atlas_image(
+        assets.ships.clone(),
+        TextureAtlas {
+            layout: assets.ship_parts.clone(),
+            index,
+        },
+    )
+}
+
+fn damaged(state: &ShipState) -> bool {
+    state.max_hp > 0 && state.hp * 2 < state.max_hp
+}
+
+fn sail_full(state: &ShipState) -> bool {
+    state.speed > state.max_speed.max(1.0) * 0.25
 }
 
 /// Navios que já afundaram: snapshots em voo não podem ressuscitá-los.
 #[derive(Resource, Debug, Default)]
 pub struct DestroyedShips(pub HashSet<u32>);
+
+fn spawn_ship(commands: &mut Commands, assets: &GameAssets, state: &ShipState, mine: bool) {
+    let look = ship_look(state.kind, state.is_npc);
+    let size = hull_px(look.hull);
+    let mut entity = commands.spawn((
+        ShipVisual {
+            target: *state,
+            last_seen: Instant::now(),
+        },
+        FoamEmitter::default(),
+        Transform {
+            translation: Vec3::new(state.x, state.y, layers::SHIPS),
+            rotation: Quat::from_rotation_z(state.heading + SHIP_HEADING_OFFSET),
+            scale: Vec3::splat(WORLD_PER_PX),
+        },
+        Visibility::default(),
+    ));
+    entity.with_children(|ship| {
+        // Sombra: silhueta do próprio casco, escura e deslocada — dá
+        // altura ao navio sobre a água.
+        ship.spawn((
+            Sprite {
+                color: Color::srgba(0.0, 0.04, 0.1, 0.3),
+                ..part_sprite(assets, parts::hull(look.hull, look.hull_color, false))
+            },
+            Transform::from_xyz(4.0, -5.0, -0.3),
+        ));
+        ship.spawn((
+            part_sprite(
+                assets,
+                parts::hull(look.hull, look.hull_color, damaged(state)),
+            ),
+            Transform::from_xyz(0.0, 0.0, 0.0),
+            ShipHull {
+                size: look.hull,
+                color: look.hull_color,
+            },
+        ));
+        for (i, mast_y) in look.masts.iter().enumerate() {
+            let z = 0.1 + i as f32 * 0.05;
+            ship.spawn((
+                part_sprite(assets, parts::yard(look.hull, look.trim_color)),
+                Transform::from_xyz(0.0, *mast_y + 3.0, z),
+            ));
+            ship.spawn((
+                part_sprite(
+                    assets,
+                    parts::sail(look.hull, look.sail_color, sail_full(state)),
+                ),
+                Transform::from_xyz(0.0, *mast_y - 2.0, z + 0.01),
+                ShipSail {
+                    size: look.hull,
+                    color: look.sail_color,
+                },
+            ));
+        }
+        // Cesto de gávea no mastro principal dos cascos maiores.
+        let main_mast = look.masts[look.masts.len() / 2];
+        if look.hull != HullSize::Small {
+            ship.spawn((
+                part_sprite(assets, parts::nest(look.trim_color)),
+                Transform::from_xyz(0.0, main_mast + 4.0, 0.4).with_scale(Vec3::splat(0.6)),
+            ));
+        }
+        // Bandeira: dourada no próprio navio, vermelha no pirata, branca
+        // nos demais jogadores.
+        let flag_color = if state.is_npc {
+            4
+        } else if mine {
+            2
+        } else {
+            5
+        };
+        ship.spawn((
+            Sprite::from_atlas_image(
+                assets.fort.clone(),
+                TextureAtlas {
+                    layout: assets.fort_parts.clone(),
+                    index: fort::FLAG + flag_color * 3,
+                },
+            ),
+            Transform::from_xyz(7.0, main_mast + 8.0, 0.5).with_scale(Vec3::splat(1.6)),
+            WavingFlag {
+                color: flag_color,
+                phase: state.ship_id as usize,
+            },
+        ));
+        // Onda de proa, um sprite por bordo (o outro espelhado).
+        for flip in [false, true] {
+            let side = if flip { 1.0 } else { -1.0 };
+            ship.spawn((
+                Sprite {
+                    flip_x: flip,
+                    color: Color::srgba(1.0, 1.0, 1.0, 0.0),
+                    ..part_sprite(assets, parts::BOW_WAVE)
+                },
+                Transform::from_xyz(side * (size.x * 0.5 - 2.0), -size.y * 0.5 + 22.0, -0.2),
+                BowWave,
+            ));
+        }
+    });
+    info!(ship_id = state.ship_id, kind = ?state.kind, "navio visível no horizonte");
+}
 
 #[allow(clippy::too_many_arguments)]
 pub fn upsert_ship_visuals(
@@ -67,12 +267,9 @@ pub fn upsert_ship_visuals(
     mut snapshot_events: EventReader<ClientReceiveMessage<WorldSnapshot>>,
     mut existing: Query<(Entity, &mut ShipVisual)>,
     assets: Res<GameAssets>,
-    asset_server: Res<AssetServer>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     // Antes do AssignShip não sabemos qual navio é nosso; processar snapshot
-    // agora pintaria o próprio navio com a cor errada (cor decide no spawn).
+    // agora pintaria o próprio navio com a bandeira errada (decide no spawn).
     if my_ship.0.is_none() {
         return;
     }
@@ -85,66 +282,106 @@ pub fn upsert_ship_visuals(
     for state in &event.message().ships {
         // `Commands` aplica spawns depois do sistema: sem este filtro, uma
         // repetição do mesmo estado no snapshot agenda vários visuais.
-        if !seen_ship_ids.insert(state.ship_id) {
+        if !seen_ship_ids.insert(state.ship_id) || destroyed.0.contains(&state.ship_id) {
             continue;
         }
-        if destroyed.0.contains(&state.ship_id) {
-            continue;
-        }
-        let mut updated = false;
-        for (_, mut visual) in existing.iter_mut() {
-            if visual.target.ship_id == state.ship_id {
-                visual.target = *state;
-                visual.last_seen = Instant::now();
-                updated = true;
-                break;
+        if let Some((_, mut visual)) = existing
+            .iter_mut()
+            .find(|(_, visual)| visual.target.ship_id == state.ship_id)
+        {
+            // Tomou dano desde o último snapshot: fogo e lascas no casco.
+            if state.hp < visual.target.hp {
+                let at = Vec2::new(state.x, state.y);
+                spawn_animation(&mut commands, &assets, parts::FIRE, 4, at, 1.3);
+                for i in 0..6 {
+                    let angle = i as f32 * 1.05 + state.heading;
+                    spawn_particle(
+                        &mut commands,
+                        at,
+                        Particle::debris(Vec2::from_angle(angle) * 14.0),
+                    );
+                }
             }
-        }
-        if updated {
+            visual.target = *state;
+            visual.last_seen = Instant::now();
             continue;
         }
-
-        let (frame, scale) = ship_frame_and_scale(state.kind);
-        let mut entity = commands.spawn((
-            ShipVisual {
-                target: *state,
-                last_seen: Instant::now(),
-            },
-            Transform {
-                translation: Vec3::new(state.x, state.y, layers::SHIPS),
-                rotation: Quat::from_rotation_z(state.heading + SHIP_HEADING_OFFSET),
-                scale,
-            },
-        ));
-        if image_failed(&asset_server, &assets.ships) {
-            let color = if state.is_npc {
-                Color::srgb(0.85, 0.2, 0.2)
-            } else {
-                Color::srgb(0.55, 0.62, 0.7)
-            };
-            entity.insert((
-                Mesh2d(meshes.add(Triangle2d::new(
-                    Vec2::new(16.0, 0.0),
-                    Vec2::new(-10.0, 8.0),
-                    Vec2::new(-10.0, -8.0),
-                ))),
-                MeshMaterial2d(materials.add(color)),
-            ));
-        } else {
-            entity.insert(Sprite::from_atlas_image(
-                assets.ships.clone(),
-                TextureAtlas {
-                    layout: assets.ships_layout.clone(),
-                    index: frame,
-                },
-            ));
-        }
-        info!(
-            ship_id = state.ship_id,
-            kind = ?state.kind,
-            "navio visível no horizonte"
+        spawn_ship(
+            &mut commands,
+            &assets,
+            state,
+            my_ship.0 == Some(state.ship_id),
         );
     }
+}
+
+/// Casco, vela, bandeira e ondas acompanham o estado autoritativo.
+#[allow(clippy::type_complexity)]
+pub fn animate_ship_parts(
+    time: Res<Time>,
+    ships: Query<(&ShipVisual, &Children)>,
+    mut hulls: Query<(&ShipHull, &mut Sprite), (Without<ShipSail>, Without<BowWave>)>,
+    mut sails: Query<(&ShipSail, &mut Sprite), (Without<ShipHull>, Without<BowWave>)>,
+    mut waves: Query<&mut Sprite, (With<BowWave>, Without<ShipHull>, Without<ShipSail>)>,
+) {
+    let t = time.elapsed_secs();
+    for (visual, children) in &ships {
+        let state = &visual.target;
+        let speed_ratio = (state.speed / state.max_speed.max(1.0)).clamp(0.0, 1.0);
+        for child in children.iter() {
+            if let Ok((hull, mut sprite)) = hulls.get_mut(*child) {
+                set_index(
+                    &mut sprite,
+                    parts::hull(hull.size, hull.color, damaged(state)),
+                );
+            } else if let Ok((sail, mut sprite)) = sails.get_mut(*child) {
+                set_index(
+                    &mut sprite,
+                    parts::sail(sail.size, sail.color, sail_full(state)),
+                );
+            } else if let Ok(mut sprite) = waves.get_mut(*child) {
+                let frame = ((t * 7.0) as usize + state.ship_id as usize) % 3;
+                set_index(&mut sprite, parts::BOW_WAVE + frame);
+                sprite.color = Color::srgba(1.0, 1.0, 1.0, (speed_ratio * 1.4).min(0.9));
+            }
+        }
+    }
+}
+
+fn set_index(sprite: &mut Sprite, index: usize) {
+    if let Some(atlas) = sprite.texture_atlas.as_mut() {
+        if atlas.index != index {
+            atlas.index = index;
+        }
+    }
+}
+
+/// Espuma de popa: partículas brancas que abrem e somem atrás do casco.
+pub fn emit_foam(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut ships: Query<(&ShipVisual, &Transform, &mut FoamEmitter)>,
+) {
+    let dt = time.delta_secs();
+    for (visual, transform, mut emitter) in &mut ships {
+        let state = &visual.target;
+        if state.speed < 1.5 {
+            continue;
+        }
+        emitter.0 += dt * (4.0 + state.speed * 0.5);
+        let back = -Vec2::from_angle(state.heading);
+        let stern = transform.translation.truncate() + back * hull_length(state.kind) * 0.45;
+        while emitter.0 >= 1.0 {
+            emitter.0 -= 1.0;
+            let jitter = Vec2::new(rand_unit(emitter.0 + stern.x), rand_unit(stern.y)) * 2.0;
+            spawn_particle(&mut commands, stern + jitter, Particle::foam(back * 3.0));
+        }
+    }
+}
+
+/// Pseudo-aleatório barato e determinístico em [-1, 1] (só para jitter).
+fn rand_unit(seed: f32) -> f32 {
+    ((seed * 12.9898).sin() * 43_758.547).fract() * 2.0 - 1.0
 }
 
 /// Last-known-state (MF-031): visual que parou de aparecer no snapshot
@@ -156,12 +393,44 @@ pub fn expire_stale_visuals(
 ) {
     for (entity, visual) in &ships {
         if visual.last_seen.elapsed().as_secs_f32() > STALE_VISUAL_TTL {
-            commands.entity(entity).despawn();
+            commands.entity(entity).despawn_recursive();
         }
     }
     for (entity, visual) in &wrecks {
         if visual.last_seen.elapsed().as_secs_f32() > STALE_VISUAL_TTL {
-            commands.entity(entity).despawn();
+            commands.entity(entity).despawn_recursive();
+        }
+    }
+}
+
+/// Naufrágio: aderna, afunda (encolhe e escurece) e sai de cena.
+pub fn animate_sinking(
+    mut commands: Commands,
+    time: Res<Time>,
+    assets: Res<GameAssets>,
+    mut ships: Query<(Entity, &mut Sinking, &mut Transform, &Children)>,
+    mut sprites: Query<&mut Sprite>,
+) {
+    const DURATION: f32 = 2.6;
+    let dt = time.delta_secs();
+    for (entity, mut sinking, mut transform, children) in &mut ships {
+        if sinking.age == 0.0 {
+            let at = transform.translation.truncate();
+            spawn_animation(&mut commands, &assets, parts::FIRE, 4, at, 2.0);
+            spawn_animation(&mut commands, &assets, parts::SMOKE, 4, at, 2.4);
+        }
+        sinking.age += dt;
+        let k = (sinking.age / DURATION).min(1.0);
+        transform.rotate_z(dt * 0.35);
+        transform.scale = Vec3::splat(WORLD_PER_PX * (1.0 - 0.35 * k));
+        for child in children.iter() {
+            if let Ok(mut sprite) = sprites.get_mut(*child) {
+                let alpha = sprite.color.alpha().min(1.0 - k);
+                sprite.color = Color::srgba(0.55, 0.62, 0.75, alpha);
+            }
+        }
+        if k >= 1.0 {
+            commands.entity(entity).despawn_recursive();
         }
     }
 }
@@ -171,14 +440,60 @@ pub fn lerp_ship_visuals(time: Res<Time>, mut ships: Query<(&mut Transform, &Shi
     // desaparece em ~0.15s, o bastante para disfarçar 30 Hz sem atrasar.
     let factor = 1.0 - (-20.0 * time.delta_secs()).exp();
     for (mut transform, visual) in &mut ships {
+        // Salto de portal (MF-059): reaparece do outro lado, sem deslizar
+        // pelo mapa.
+        let target = Vec2::new(visual.target.x, visual.target.y);
+        if transform.translation.truncate().distance(target) > TELEPORT_SNAP {
+            transform.translation = target.extend(transform.translation.z);
+        }
         apply_lerp(
             &mut transform,
-            &visual.target.x,
-            &visual.target.y,
-            &visual.target.heading,
+            visual.target.x,
+            visual.target.y,
+            visual.target.heading,
             factor,
             SHIP_HEADING_OFFSET,
         );
+    }
+}
+
+/// Faixa de tiro dos bordos do próprio navio (MF-058): mostra por onde a
+/// salva vai passar e se o canhão daquele lado está pronto.
+pub fn draw_broadside_lanes(
+    mut gizmos: Gizmos,
+    my_ship: Res<crate::net::MyShip>,
+    docked: Res<crate::net::MyDocked>,
+    ships: Query<(&ShipVisual, &Transform)>,
+) {
+    if docked.0 {
+        return;
+    }
+    let Some((visual, transform)) = ships
+        .iter()
+        .find(|(visual, _)| Some(visual.target.ship_id) == my_ship.0)
+    else {
+        return;
+    };
+    let state = &visual.target;
+    let center = transform.translation.truncate();
+    let forward = Vec2::from_angle(state.heading);
+    let half_len = hull_length(state.kind) * 0.3;
+    for (normal, cooldown) in [
+        (forward.perp(), state.port_cooldown_secs),
+        (-forward.perp(), state.starboard_cooldown_secs),
+    ] {
+        let ready = cooldown <= 0.0;
+        let color = if ready {
+            Color::srgba(1.0, 0.86, 0.45, 0.55)
+        } else {
+            Color::srgba(0.8, 0.85, 0.95, 0.15)
+        };
+        let near = center + normal * 10.0;
+        let far = center + normal * state.weapon_range;
+        for offset in [-half_len, half_len] {
+            gizmos.line_2d(near + forward * offset, far + forward * offset, color);
+        }
+        gizmos.line_2d(far - forward * half_len, far + forward * half_len, color);
     }
 }
 
@@ -188,14 +503,14 @@ pub struct ProjectileVisual {
     pub target: ProjectileState,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn upsert_projectile_visuals(
     mut commands: Commands,
     mut snapshot_events: EventReader<ClientReceiveMessage<WorldSnapshot>>,
     mut existing: Query<(Entity, &mut ProjectileVisual)>,
+    ships: Query<&ShipVisual>,
     assets: Res<GameAssets>,
-    asset_server: Res<AssetServer>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
+    vfx: Option<Res<VfxHandles>>,
 ) {
     let Some(event) = snapshot_events.read().last() else {
         return;
@@ -207,45 +522,45 @@ pub fn upsert_projectile_visuals(
         .map(|p| p.projectile_id)
         .collect();
 
-    // Projéteis que saíram do snapshot (impacto ou expiração) somem.
+    // Projéteis que saíram do snapshot (impacto ou expiração) somem. Perto de
+    // um casco = acerto (o fogo vem do dano); senão, borrifo na água.
     for (entity, visual) in existing.iter() {
-        if !seen.contains(&visual.target.projectile_id) {
-            commands.entity(entity).despawn();
+        if seen.contains(&visual.target.projectile_id) {
+            continue;
+        }
+        commands.entity(entity).despawn_recursive();
+        let at = Vec2::new(visual.target.x, visual.target.y);
+        let hit = ships
+            .iter()
+            .any(|ship| Vec2::new(ship.target.x, ship.target.y).distance(at) < 24.0);
+        if !hit {
+            for i in 0..7 {
+                let dir = Vec2::from_angle(i as f32 * 0.9 + visual.target.heading);
+                spawn_particle(&mut commands, at, Particle::splash(dir * 9.0));
+            }
         }
     }
 
     for state in &message.projectiles {
-        let mut updated = false;
-        for (_, mut visual) in existing.iter_mut() {
-            if visual.target.projectile_id == state.projectile_id {
-                visual.target = *state;
-                updated = true;
-                break;
-            }
-        }
-        if updated {
+        if let Some((_, mut visual)) = existing
+            .iter_mut()
+            .find(|(_, visual)| visual.target.projectile_id == state.projectile_id)
+        {
+            visual.target = *state;
             continue;
         }
+        // Projétil novo: fumaça de boca de canhão onde ele nasceu.
+        let at = Vec2::new(state.x, state.y);
+        spawn_animation(&mut commands, &assets, parts::SMOKE, 4, at, 0.7);
         let mut entity = commands.spawn((
             ProjectileVisual { target: *state },
-            Transform {
-                translation: Vec3::new(state.x, state.y, layers::PROJECTILES),
-                rotation: Quat::from_rotation_z(state.heading),
-                scale: Vec3::splat(0.3),
-            },
+            Transform::from_xyz(state.x, state.y, layers::PROJECTILES),
+            Visibility::default(),
         ));
-        if image_failed(&asset_server, &assets.ships) {
+        if let Some(vfx) = &vfx {
             entity.insert((
-                Mesh2d(meshes.add(Circle::new(2.5))),
-                MeshMaterial2d(materials.add(Color::srgb(0.15, 0.15, 0.18))),
-            ));
-        } else {
-            entity.insert(Sprite::from_atlas_image(
-                assets.ships.clone(),
-                TextureAtlas {
-                    layout: assets.ships_detail_layout.clone(),
-                    index: frames::PROJECTILE,
-                },
+                Mesh2d(vfx.ball_mesh.clone()),
+                MeshMaterial2d(vfx.ball_material.clone()),
             ));
         }
     }
@@ -260,9 +575,9 @@ pub fn lerp_projectile_visuals(
     for (mut transform, projectile) in &mut projectiles {
         apply_lerp(
             &mut transform,
-            &projectile.target.x,
-            &projectile.target.y,
-            &projectile.target.heading,
+            projectile.target.x,
+            projectile.target.y,
+            projectile.target.heading,
             factor,
             0.0,
         );
@@ -271,16 +586,16 @@ pub fn lerp_projectile_visuals(
 
 fn apply_lerp(
     transform: &mut Transform,
-    x: &f32,
-    y: &f32,
-    heading: &f32,
+    x: f32,
+    y: f32,
+    heading: f32,
     factor: f32,
     heading_offset: f32,
 ) {
     transform.translation = transform
         .translation
-        .lerp(Vec3::new(*x, *y, transform.translation.z), factor);
-    let target_rotation = Quat::from_rotation_z(*heading + heading_offset);
+        .lerp(Vec3::new(x, y, transform.translation.z), factor);
+    let target_rotation = Quat::from_rotation_z(heading + heading_offset);
     transform.rotation = transform.rotation.slerp(target_rotation, factor);
 }
 
@@ -292,18 +607,24 @@ pub struct WreckVisual {
     pub last_seen: Instant,
 }
 
+fn deco_sprite(assets: &GameAssets, index: usize) -> Sprite {
+    Sprite::from_atlas_image(
+        assets.water_and_islands.clone(),
+        TextureAtlas {
+            layout: assets.deco.clone(),
+            index,
+        },
+    )
+}
+
 /// Wrecks vindos do snapshot do destinatário (MF-031): upsert de visuais e
 /// reconstrução do `KnownWrecks` (o saque do client usa as posições).
-#[allow(clippy::too_many_arguments)]
 pub fn upsert_wreck_visuals(
     mut commands: Commands,
     mut snapshot_events: EventReader<ClientReceiveMessage<WorldSnapshot>>,
     mut known: ResMut<crate::net::KnownWrecks>,
-    mut existing: Query<(Entity, &mut WreckVisual)>,
+    mut existing: Query<&mut WreckVisual>,
     assets: Res<GameAssets>,
-    asset_server: Res<AssetServer>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     let Some(event) = snapshot_events.read().last() else {
         return;
@@ -311,61 +632,71 @@ pub fn upsert_wreck_visuals(
     known.0.clear();
     for wreck in &event.message().wrecks {
         known.0.insert(wreck.wreck_id, Vec2::new(wreck.x, wreck.y));
-        let mut updated = false;
-        for (_, mut visual) in existing.iter_mut() {
-            if visual.wreck_num == wreck.wreck_id {
-                visual.last_seen = Instant::now();
-                updated = true;
-                break;
-            }
-        }
-        if updated {
+        if let Some(mut visual) = existing
+            .iter_mut()
+            .find(|visual| visual.wreck_num == wreck.wreck_id)
+        {
+            visual.last_seen = Instant::now();
             continue;
         }
-        let mut entity = commands.spawn((
-            WreckVisual {
-                wreck_num: wreck.wreck_id,
-                last_seen: Instant::now(),
-            },
-            Transform::from_xyz(wreck.x, wreck.y, layers::WRECKS),
-        ));
-        if image_failed(&asset_server, &assets.wreck) {
-            entity.insert((
-                Mesh2d(meshes.add(Rectangle::new(14.0, 14.0))),
-                MeshMaterial2d(materials.add(Color::srgb(0.38, 0.27, 0.16))),
-            ));
-        } else {
-            entity.insert(Sprite::from_atlas_image(
-                assets.wreck.clone(),
-                TextureAtlas {
-                    layout: assets.water_and_islands_layout.clone(),
-                    index: frames::WRECK,
+        // Destroço = tábuas à deriva em volta de um baú de carga.
+        commands
+            .spawn((
+                WreckVisual {
+                    wreck_num: wreck.wreck_id,
+                    last_seen: Instant::now(),
                 },
-            ));
-        }
+                Transform::from_xyz(wreck.x, wreck.y, layers::WRECKS).with_scale(Vec3::splat(0.9)),
+                Visibility::default(),
+            ))
+            .with_children(|parent| {
+                for (index, offset, angle) in [
+                    (deco::PLANK, Vec2::new(-12.0, 6.0), 0.4),
+                    (deco::PLANK_B, Vec2::new(11.0, -7.0), -0.7),
+                    (deco::PLANK_DIAG, Vec2::new(-4.0, -12.0), 0.0),
+                    (deco::PLANK, Vec2::new(8.0, 12.0), 2.2),
+                ] {
+                    parent.spawn((
+                        deco_sprite(&assets, index),
+                        Transform::from_translation(offset.extend(0.0))
+                            .with_rotation(Quat::from_rotation_z(angle)),
+                    ));
+                }
+                parent.spawn((
+                    deco_sprite(&assets, deco::CHEST_GOLD),
+                    Transform::from_xyz(0.0, 0.0, 0.1),
+                ));
+            });
         info!(wreck_id = wreck.wreck_id, "destroço visível no mar");
     }
 }
 
-/// A câmera segue o próprio navio: o mar é grande e o HUD é filho da
-/// câmera — navegar sem isso é assistir o casco sumir do quadro.
-pub fn follow_camera(
-    time: Res<Time>,
-    my_ship: Res<crate::net::MyShip>,
-    visuals: Query<&ShipVisual>,
-    mut camera: Query<&mut Transform, With<Camera2d>>,
-) {
-    let Ok(mut transform) = camera.get_single_mut() else {
-        return;
-    };
-    let Some(my_id) = my_ship.0 else { return };
-    let Some(visual) = visuals.iter().find(|visual| visual.target.ship_id == my_id) else {
-        return;
-    };
-    // Perseguição suave: o lerp mais lento que o dos navios dá sensação de
-    // câmera de mastro, não de Railcam colada no casco.
-    let factor = 1.0 - (-6.0 * time.delta_secs()).exp();
-    transform.translation = transform
-        .translation
-        .lerp(Vec3::new(visual.target.x, visual.target.y, 0.0), factor);
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_ship_kind_looks_distinct() {
+        let kinds = [ShipKind::SmallMerchant, ShipKind::Patrol, ShipKind::Corsair];
+        let hulls: HashSet<_> = kinds
+            .iter()
+            .map(|kind| format!("{:?}", ship_look(*kind, false).hull))
+            .collect();
+        assert_eq!(hulls.len(), 3);
+    }
+
+    #[test]
+    fn npc_always_flies_red_sails() {
+        for kind in [ShipKind::SmallMerchant, ShipKind::Patrol, ShipKind::Corsair] {
+            assert_eq!(ship_look(kind, true).sail_color, 5);
+            assert_ne!(ship_look(kind, false).sail_color, 5);
+        }
+    }
+
+    #[test]
+    fn bow_of_the_atlas_hull_points_along_heading() {
+        // Proa do sprite = -Y local. Com heading 0 ela precisa apontar +X.
+        let bow = Quat::from_rotation_z(SHIP_HEADING_OFFSET) * Vec3::NEG_Y;
+        assert!((bow - Vec3::X).length() < 1e-5);
+    }
 }

@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::sailing::{wind_speed_factor, Wind};
 use crate::stats::ShipStats;
 
 /// Estado cinemático do navio no mundo. `heading` é em radianos, 0 apontando
@@ -53,10 +54,13 @@ impl Default for MotionTuning {
 
 /// Avança o movimento do navio um passo de simulação (`dt` em segundos).
 /// `dt <= 0` é ignorado (defensivo: o loop de simulação nunca deveria passar).
+/// O vento local define quanto o pano rende na proa ATUAL (MF-059): a
+/// velocidade-alvo é `throttle * speed * polar(θ) * (0.75 + 0.35 * força)`.
 pub fn step_motion(
     motion: &mut ShipMotion,
     stats: &ShipStats,
     input: MotionInput,
+    wind: Wind,
     tuning: &MotionTuning,
     dt: f32,
 ) {
@@ -69,7 +73,7 @@ pub fn step_motion(
 
     // Velocidade persegue a posição da manche com taxas finitas — o navio
     // nunca instancia velocidade nem freia na hora.
-    let target_speed = throttle * stats.speed;
+    let target_speed = throttle * stats.speed * wind_speed_factor(motion.heading, wind);
     if motion.speed < target_speed {
         motion.speed = (motion.speed + tuning.max_accel * dt).min(target_speed);
     } else if motion.speed > target_speed {
@@ -125,6 +129,17 @@ mod tests {
         MotionInput { throttle, turn }
     }
 
+    /// Vento de través para quem aponta para +X (heading 0): o fator é
+    /// fixo e conhecido, então os testes de regra continuam exatos.
+    const WIND: Wind = Wind {
+        direction: std::f32::consts::FRAC_PI_2,
+        strength: 0.5,
+    };
+
+    fn cruise() -> f32 {
+        stats().speed * wind_speed_factor(0.0, WIND)
+    }
+
     fn steps(
         n: usize,
         motion: &mut ShipMotion,
@@ -133,7 +148,7 @@ mod tests {
         t: &MotionTuning,
     ) {
         for _ in 0..n {
-            step_motion(motion, stats, i, t, 0.1);
+            step_motion(motion, stats, i, WIND, t, 0.1);
         }
     }
 
@@ -165,7 +180,7 @@ mod tests {
         let mut motion = ShipMotion::default();
         steps(600, &mut motion, &stats(), input(1.0, 0.0), &tuning());
 
-        assert!((motion.speed - stats().speed).abs() < f32::EPSILON);
+        assert!((motion.speed - cruise()).abs() < 1e-4);
     }
 
     #[test]
@@ -174,7 +189,7 @@ mod tests {
         steps(600, &mut motion, &stats(), input(1.0, 0.0), &tuning());
         let speed_before = motion.speed;
 
-        step_motion(&mut motion, &stats(), input(0.0, 0.0), &tuning(), 0.1);
+        step_motion(&mut motion, &stats(), input(0.0, 0.0), WIND, &tuning(), 0.1);
 
         let lost = speed_before - motion.speed;
         assert!(lost > 0.0 && lost <= tuning().max_decel * 0.1 + f32::EPSILON);
@@ -192,15 +207,22 @@ mod tests {
     fn slow_ship_turns_with_reduced_rudder() {
         let t = tuning();
         // Meio da referência (0.3 * 6.0 = 1.8 m/s) → leme com metade do efeito.
-        // Throttle 0.15 mantém exatamente 0.9 m/s (sem frear no passo).
+        // Throttle calibrado mantém exatamente 0.9 m/s com o vento do teste.
         let mut motion = ShipMotion {
             speed: 0.9,
             ..ShipMotion::default()
         };
-        step_motion(&mut motion, &stats(), input(0.15, 1.0), &t, 0.1);
+        step_motion(
+            &mut motion,
+            &stats(),
+            input(0.9 / cruise(), 1.0),
+            WIND,
+            &t,
+            0.1,
+        );
 
         let expected_delta = 1.0 * stats().turn_rate * (0.9 / 1.8) * 0.1;
-        assert!((motion.heading - expected_delta).abs() < 1e-6);
+        assert!((motion.heading - expected_delta).abs() < 1e-5);
     }
 
     #[test]
@@ -209,7 +231,7 @@ mod tests {
         steps(600, &mut motion, &stats(), input(1.0, 0.0), &tuning());
 
         let heading_before = motion.heading;
-        step_motion(&mut motion, &stats(), input(1.0, 1.0), &tuning(), 0.1);
+        step_motion(&mut motion, &stats(), input(1.0, 1.0), WIND, &tuning(), 0.1);
 
         let delta = motion.heading - heading_before;
         assert!((delta - stats().turn_rate * 0.1).abs() < 1e-5);
@@ -221,7 +243,14 @@ mod tests {
             speed: stats().speed,
             ..ShipMotion::default()
         };
-        step_motion(&mut motion, &stats(), input(1.0, 50.0), &tuning(), 0.1);
+        step_motion(
+            &mut motion,
+            &stats(),
+            input(1.0, 50.0),
+            WIND,
+            &tuning(),
+            0.1,
+        );
 
         let delta = motion.heading;
         assert!(delta <= stats().turn_rate * 0.1 + 1e-5);
@@ -234,7 +263,7 @@ mod tests {
             speed: stats().speed,
             ..ShipMotion::default()
         };
-        step_motion(&mut motion, &stats(), input(1.0, 1.0), &tuning(), 0.1);
+        step_motion(&mut motion, &stats(), input(1.0, 1.0), WIND, &tuning(), 0.1);
 
         assert!((0.0..std::f32::consts::TAU).contains(&motion.heading));
     }
@@ -242,8 +271,15 @@ mod tests {
     #[test]
     fn negative_or_zero_dt_is_ignored() {
         let mut motion = ShipMotion::default();
-        step_motion(&mut motion, &stats(), input(1.0, 1.0), &tuning(), 0.0);
-        step_motion(&mut motion, &stats(), input(1.0, 1.0), &tuning(), -1.0);
+        step_motion(&mut motion, &stats(), input(1.0, 1.0), WIND, &tuning(), 0.0);
+        step_motion(
+            &mut motion,
+            &stats(),
+            input(1.0, 1.0),
+            WIND,
+            &tuning(),
+            -1.0,
+        );
 
         assert_eq!(motion, ShipMotion::default());
     }

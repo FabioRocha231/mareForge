@@ -160,6 +160,9 @@ pub struct ServerMarket {
     /// periódico; `Some(Postgres)` = persistência por operação crítica;
     /// `None` = dev puro, mundo descartável.
     store: Option<std::sync::Arc<dyn crate::persist::StateStore>>,
+    /// Abates de NPC do tick (killer), drenados pelos contratos de Caça.
+    /// Transitório: não entra no snapshot.
+    pub(crate) npc_kills: Vec<CharacterId>,
 }
 
 impl Default for ServerMarket {
@@ -185,6 +188,7 @@ impl ServerMarket {
             policy: FeePolicy::default(),
             ledger: Ledger::default(),
             store,
+            npc_kills: Vec::new(),
         }
     }
 
@@ -278,6 +282,7 @@ impl ServerMarket {
             policy: FeePolicy::default(),
             ledger: snapshot.ledger,
             store,
+            npc_kills: Vec::new(),
         }
     }
 
@@ -471,6 +476,32 @@ impl ServerMarket {
         // Consumido: regrava a localização e descarta as pilhas retiradas.
         let _consumed =
             take_from_storage(storage, item, quantity, ItemLocation::PortStorage(region));
+        self.persist();
+        Ok(())
+    }
+
+    /// Venda à Guilda Mercante: destrói `quantity` do storage (sink) e credita
+    /// `total` como faucet `GuildPurchase` — tudo ou nada, um único persist.
+    pub fn sell_to_guild(
+        &mut self,
+        character: CharacterId,
+        region: RegionId,
+        item: ItemDefinitionId,
+        quantity: u32,
+        total: Money,
+        memo: String,
+    ) -> Result<(), MarketError> {
+        let storage = self
+            .storage
+            .get_mut(&(character, region))
+            .ok_or(MarketError::NotInStorage)?;
+        if quantity == 0 || storage_quantity(storage, item) < quantity {
+            return Err(MarketError::NotInStorage);
+        }
+        let _destroyed =
+            take_from_storage(storage, item, quantity, ItemLocation::PortStorage(region));
+        self.credit(character, total);
+        self.ledger.record(LedgerKind::GuildPurchase, total, memo);
         self.persist();
         Ok(())
     }
@@ -769,7 +800,7 @@ fn take_from_storage(
     taken
 }
 
-fn market_result(
+pub(crate) fn market_result(
     connection_manager: &mut ConnectionManager,
     client_id: ClientId,
     success: bool,
@@ -784,7 +815,7 @@ fn market_result(
     );
 }
 
-fn region_name(map: &WorldMap, region: RegionId) -> &'static str {
+pub(crate) fn region_name(map: &WorldMap, region: RegionId) -> &'static str {
     map.regions()
         .iter()
         .find(|candidate| candidate.id == region)
@@ -1315,6 +1346,34 @@ mod tests {
         market
             .deposit_all(character, region, &mut hold, catalog)
             .expect("teste deposita no storage");
+    }
+
+    #[test]
+    fn sell_to_guild_destroys_items_and_mints_audited_gold() {
+        let mut market = ServerMarket::new();
+        let character = market.character("seller");
+        let region = RegionId::new();
+        let (catalog, item) = catalog_with_item();
+        put_in_storage(&mut market, character, region, item, &catalog, 10);
+        let before = market.balance(character);
+
+        // Fail-closed: mais do que há no storage não move nada.
+        assert_eq!(
+            market.sell_to_guild(character, region, item, 11, Money(99), String::new()),
+            Err(MarketError::NotInStorage)
+        );
+        assert_eq!(market.balance(character), before);
+
+        market
+            .sell_to_guild(character, region, item, 4, Money(40), String::from("guild"))
+            .expect("estoque suficiente");
+        assert_eq!(market.storage_quantity(character, region, item), 6);
+        assert_eq!(market.balance(character), Money(before.0 + 40));
+        assert!(market
+            .ledger
+            .entries()
+            .iter()
+            .any(|entry| entry.kind == LedgerKind::GuildPurchase && entry.amount == Money(40)));
     }
 
     #[test]

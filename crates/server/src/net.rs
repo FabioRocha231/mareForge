@@ -20,8 +20,8 @@ use chrono::Utc;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 use mareforge_domain_combat::{
-    apply_damage, can_loot, is_expired, resolve_ship_destruction, BroadsideBattery, DamageOutcome,
-    LootPolicy, Projectile, WeaponParams, WreckChest, WreckPolicy,
+    apply_damage, can_loot, is_expired, resolve_ship_destruction, sail_points, Ammo,
+    BroadsideBattery, DamageOutcome, LootPolicy, Projectile, WeaponParams, WreckChest, WreckPolicy,
 };
 use mareforge_domain_economy::MarketPriceIndex;
 use mareforge_domain_items::{
@@ -31,7 +31,7 @@ use mareforge_domain_items::{
 use mareforge_domain_ships::{
     compute_ship_stats, dock as dock_vessel, step_motion, undock as undock_vessel, DockPolicy,
     EquippedComponents, MotionInput, MotionTuning, ShipKind, ShipLoadout, ShipMotion, ShipStats,
-    VesselPresence,
+    VesselPresence, SAIL_HP_MAX,
 };
 use mareforge_domain_world::{GatheringPolicy, RiskPolicy, WorldMap};
 use mareforge_protocol::{
@@ -39,7 +39,7 @@ use mareforge_protocol::{
     CraftResult, CreateSellOrder, Dock, DockResult, EquipItem, FireBroadside, GatherNode,
     GatherResult, LoadoutResult, LoadoutSnapshot, LootResult, LootWreck, MarketResult, NodeUpdated,
     NodesSnapshot, OrdersSnapshot, PortStorageSnapshot, ProjectileState, RecipesSnapshot,
-    ServerWelcome, ShipDestroyed, ShipInput, ShipState, StorageDepositAll, StorageLine,
+    SelectAmmo, ServerWelcome, ShipDestroyed, ShipInput, ShipState, StorageDepositAll, StorageLine,
     StorageWithdrawAll, Undock, UnequipItem, WalletUpdated, WorldSnapshot, WreckState, ZoneChanged,
     PROTOCOL_VERSION,
 };
@@ -104,16 +104,24 @@ pub struct CombatTuning {
     pub hit_radius: f32,
     /// Distância máxima para interagir com um wreck, em metros (PRD §27).
     pub interact_radius: f32,
+    /// Balas por salva de bordo e espaçamento entre elas ao longo do casco.
+    pub salvo_balls: u32,
+    pub salvo_spacing: f32,
 }
 
 impl Default for CombatTuning {
     fn default() -> Self {
         Self {
-            cooldown_secs: 4.0,
-            projectile_speed: 40.0,
-            muzzle_offset: 5.0,
-            hit_radius: 10.0,
-            interact_radius: 30.0,
+            // MF-058: bala 4-5x mais rápida que o navio e alcance de ~7
+            // cascos — dá para mirar com antecedência e errar por pouco,
+            // em vez de só acertar encostado.
+            cooldown_secs: 3.0,
+            projectile_speed: 150.0,
+            muzzle_offset: 9.0,
+            hit_radius: 16.0,
+            interact_radius: 40.0,
+            salvo_balls: 3,
+            salvo_spacing: 9.0,
         }
     }
 }
@@ -131,6 +139,46 @@ pub struct DevItems {
     pub hull_plate: ItemDefinitionId,
     pub racing_sails: ItemDefinitionId,
     pub bronze_cannon: ItemDefinitionId,
+    // MF-059: recursos raros das zonas de alto risco e o tier 2 que eles
+    // viram na Forja Pirata.
+    pub abyssal_pearl: ItemDefinitionId,
+    pub fog_essence: ItemDefinitionId,
+    pub abyssal_amber: ItemDefinitionId,
+    pub black_hull: ItemDefinitionId,
+    pub fog_sails: ItemDefinitionId,
+    pub abyssal_cannons: ItemDefinitionId,
+}
+
+/// Recurso raro (sem slot) para o catálogo dev.
+fn rare_resource(id: ItemDefinitionId, name: &str, weight: u32) -> ItemDefinition {
+    ItemDefinition {
+        id,
+        kind: ItemKind::Resource,
+        equipment: None,
+        max_stack: 20,
+        base_weight: weight,
+        tags: SmallVec::new(),
+        display_name: String::from(name),
+    }
+}
+
+/// Equipamento dev de um slot com os stats dados.
+fn equipment_item(
+    id: ItemDefinitionId,
+    name: &str,
+    slot: EquipmentSlot,
+    stats: EquipmentStats,
+    weight: u32,
+) -> ItemDefinition {
+    ItemDefinition {
+        id,
+        kind: ItemKind::Equipment,
+        equipment: Some(EquipmentDefinition { slot, stats }),
+        max_stack: 1,
+        base_weight: weight,
+        tags: SmallVec::new(),
+        display_name: String::from(name),
+    }
 }
 
 impl DevItems {
@@ -231,6 +279,57 @@ impl DevItems {
             tags: SmallVec::new(),
             display_name: String::from("Canhão de Bronze"),
         });
+        let abyssal_pearl = ItemDefinitionId::new();
+        let fog_essence = ItemDefinitionId::new();
+        let abyssal_amber = ItemDefinitionId::new();
+        let black_hull = ItemDefinitionId::new();
+        let fog_sails = ItemDefinitionId::new();
+        let abyssal_cannons = ItemDefinitionId::new();
+        let no_stats = EquipmentStats {
+            damage: 0,
+            speed: 0,
+            cargo: 0,
+            hp: 0,
+            range: 0,
+        };
+        for definition in [
+            rare_resource(abyssal_pearl, "Pérola Abissal", 1),
+            rare_resource(fog_essence, "Essência da Cerração", 1),
+            rare_resource(abyssal_amber, "Âmbar Abissal", 2),
+            equipment_item(
+                black_hull,
+                "Casco Negro",
+                EquipmentSlot::Hull,
+                EquipmentStats {
+                    hp: 100,
+                    ..no_stats
+                },
+                10,
+            ),
+            equipment_item(
+                fog_sails,
+                "Velas de Cerração",
+                EquipmentSlot::Sail,
+                EquipmentStats {
+                    speed: 1000,
+                    ..no_stats
+                },
+                5,
+            ),
+            equipment_item(
+                abyssal_cannons,
+                "Canhões Abissais",
+                EquipmentSlot::Weapon,
+                EquipmentStats {
+                    damage: 20,
+                    range: 3000,
+                    ..no_stats
+                },
+                12,
+            ),
+        ] {
+            register(definition);
+        }
         Self {
             catalog,
             timber,
@@ -239,6 +338,12 @@ impl DevItems {
             hull_plate,
             racing_sails,
             bronze_cannon,
+            abyssal_pearl,
+            fog_essence,
+            abyssal_amber,
+            black_hull,
+            fog_sails,
+            abyssal_cannons,
         }
     }
 }
@@ -273,6 +378,17 @@ pub struct ServerDockPolicy(pub DockPolicy);
 /// protegidas. Jogadores nascem em segurança e escolhem quando se arriscar
 /// (Pilar 3). O mapa fixa em teste que este ponto é Protected.
 pub const DEV_SPAWN: (f32, f32) = (-560.0, 0.0);
+
+/// Dev tooling (MF-059): `MAREFORGE_DEV_SPAWN=x,y` faz o navio novo nascer
+/// em outro ponto — revisar zonas distantes sem navegar até lá.
+fn dev_spawn_point() -> (f32, f32) {
+    parse_spawn(std::env::var("MAREFORGE_DEV_SPAWN").ok().as_deref()).unwrap_or(DEV_SPAWN)
+}
+
+fn parse_spawn(value: Option<&str>) -> Option<(f32, f32)> {
+    let (x, y) = value?.split_once(',')?;
+    Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
+}
 
 /// Relógio do snapshot de rede (ADR-0008, MF-032): acumula o tempo simulado
 /// e dispara o envio na cadência de [`SNAPSHOT_HZ`] (20 Hz), independente do
@@ -359,6 +475,7 @@ impl Plugin for ServerNetPlugin {
         app.insert_resource(crate::crafting::DevRecipes::new(&dev_items));
         app.insert_resource(dev_items);
         app.add_plugins(crate::loadout::LoadoutPlugin);
+        app.add_plugins(crate::portals::PortalPlugin);
         app.add_channel::<ReliableChannel>(ChannelSettings {
             mode: ChannelMode::OrderedReliable(ReliableSettings::default()),
             ..default()
@@ -374,6 +491,7 @@ impl Plugin for ServerNetPlugin {
         app.register_message::<EquipItem>(ChannelDirection::ClientToServer);
         app.register_message::<UnequipItem>(ChannelDirection::ClientToServer);
         app.register_message::<FireBroadside>(ChannelDirection::ClientToServer);
+        app.register_message::<SelectAmmo>(ChannelDirection::ClientToServer);
         app.register_message::<LootWreck>(ChannelDirection::ClientToServer);
         app.register_message::<GatherNode>(ChannelDirection::ClientToServer);
         app.register_message::<CraftItem>(ChannelDirection::ClientToServer);
@@ -388,6 +506,7 @@ impl Plugin for ServerNetPlugin {
         app.register_message::<LoadoutSnapshot>(ChannelDirection::ServerToClient);
         app.register_message::<LoadoutResult>(ChannelDirection::ServerToClient);
         app.register_message::<WorldSnapshot>(ChannelDirection::ServerToClient);
+        app.register_message::<mareforge_protocol::PortalsUpdate>(ChannelDirection::ServerToClient);
         app.register_message::<ShipDestroyed>(ChannelDirection::ServerToClient);
         app.register_message::<LootResult>(ChannelDirection::ServerToClient);
         app.register_message::<ZoneChanged>(ChannelDirection::ServerToClient);
@@ -401,6 +520,23 @@ impl Plugin for ServerNetPlugin {
         app.register_message::<OrdersSnapshot>(ChannelDirection::ServerToClient);
         app.register_message::<PortStorageSnapshot>(ChannelDirection::ServerToClient);
         app.register_message::<MarketResult>(ChannelDirection::ServerToClient);
+        app.register_message::<mareforge_protocol::SellToGuild>(ChannelDirection::ClientToServer);
+        app.register_message::<mareforge_protocol::AcceptContract>(
+            ChannelDirection::ClientToServer,
+        );
+        app.register_message::<mareforge_protocol::AbandonContract>(
+            ChannelDirection::ClientToServer,
+        );
+        app.register_message::<mareforge_protocol::GuildPrices>(ChannelDirection::ServerToClient);
+        app.register_message::<mareforge_protocol::ContractsSnapshot>(
+            ChannelDirection::ServerToClient,
+        );
+        app.register_message::<mareforge_protocol::ContractResult>(
+            ChannelDirection::ServerToClient,
+        );
+        app.add_plugins(crate::guild::GuildPlugin);
+        app.register_message::<mareforge_protocol::WeatherUpdate>(ChannelDirection::ServerToClient);
+        crate::weather::install(app);
         app.add_systems(Startup, start_server);
         app.add_systems(Startup, crate::nodes::spawn_dev_nodes.after(start_server));
         app.add_systems(Startup, crate::npc::setup_npcs.after(start_server));
@@ -510,6 +646,10 @@ pub struct ServerShip {
     /// Restore AtSea abre apenas medição operacional de duração; origem e
     /// preço de marcação não são inventados (alpha não persiste telemetria).
     pub restored_trip_started_at: Option<f32>,
+    /// MF-059: integridade do pano (0..100). Não persiste: atracar remenda.
+    pub sail_hp: f32,
+    /// MF-059: munição carregada (tecla C).
+    pub ammo: Ammo,
 }
 
 /// Dono desconectado; o navio fica no mar por [`DISCONNECT_GRACE_SECS`],
@@ -566,7 +706,8 @@ pub struct LiveWreckRecords(pub Vec<crate::persist::WreckRecord>);
 ///
 /// Tupla: (entidade do projétil, alvo ship_id, dano, dono do projétil ship_id).
 #[derive(Resource, Default)]
-pub struct CombatImpacts(pub Vec<(Entity, u32, u32, u32)>);
+/// (projétil, alvo, dano ao casco, dono do projétil, dano bruto ao pano).
+pub struct CombatImpacts(pub Vec<(Entity, u32, u32, u32, f32)>);
 
 /// Naufrágio decidido em `apply_combat_damage` (MF-054): só marca e despawna
 /// o navio. `resolve_destructions` materializa wreck + mensagem;
@@ -812,7 +953,8 @@ pub(crate) fn spawn_ship_for(
 
     // Nasce na doca do Porto da Serra, em águas protegidas (Pilar 3: o
     // risco é escolha do jogador, não condição de nascimento).
-    let zone = map.zone_at(DEV_SPAWN.0, DEV_SPAWN.1).ok().map(|z| z.id);
+    let spawn = dev_spawn_point();
+    let zone = map.zone_at(spawn.0, spawn.1).ok().map(|z| z.id);
 
     commands.spawn((ServerShip {
         ship_id,
@@ -831,8 +973,8 @@ pub(crate) fn spawn_ship_for(
         battery: BroadsideBattery::default(),
         stats,
         motion: ShipMotion {
-            x: DEV_SPAWN.0,
-            y: DEV_SPAWN.1,
+            x: spawn.0,
+            y: spawn.1,
             ..ShipMotion::default()
         },
         tuning: MotionTuning::default(),
@@ -843,6 +985,8 @@ pub(crate) fn spawn_ship_for(
         // sair novamente.
         trip: None,
         restored_trip_started_at: None,
+        sail_hp: SAIL_HP_MAX,
+        ammo: Ammo::Round,
     },));
     ship_id
 }
@@ -927,6 +1071,8 @@ pub(crate) fn restore_ship_from_record(
         zone,
         trip: None,
         restored_trip_started_at,
+        sail_hp: SAIL_HP_MAX,
+        ammo: Ammo::Round,
     },));
     ship_id
 }
@@ -1143,7 +1289,12 @@ fn handle_hello(
                     character,
                     Vec::new(),
                 );
-                (ship_id, DEV_SPAWN, Vec::new(), ShipKind::SmallMerchant)
+                (
+                    ship_id,
+                    dev_spawn_point(),
+                    Vec::new(),
+                    ShipKind::SmallMerchant,
+                )
             }
         };
         let _ = connection_manager.send_message::<ReliableChannel, _>(
@@ -1229,6 +1380,11 @@ fn handle_input(
 ) {
     for event in input_events.read() {
         let client_id = event.from();
+        let message = event.message();
+        // NaN passa pelo clamp e contamina a posição (navio imune a tudo).
+        if !message.throttle.is_finite() || !message.turn.is_finite() {
+            continue;
+        }
         for mut ship in &mut ships {
             if ship.client_id == Some(client_id) {
                 let incoming = *event.message();
@@ -1298,29 +1454,36 @@ fn handle_fire(
             continue; // recarregando: clique ignorado, sem spam de projétil
         }
         let projectile_id = projectile_ids.0;
-        projectile_ids.0 += 1;
-        let weapon = WeaponParams {
+        projectile_ids.0 += tuning.salvo_balls.max(1);
+        // MF-059: a munição carregada muda alcance/velocidade e o dano.
+        let ammo = ship.ammo;
+        let weapon = ammo.load(WeaponParams {
             damage: ship.stats.weapon_damage,
             speed: tuning.projectile_speed,
             range: ship.stats.weapon_range,
             muzzle_offset: tuning.muzzle_offset,
-        };
-        let projectile = Projectile::from_broadside(
+        });
+        let salvo = Projectile::broadside_salvo(
             projectile_id,
             ship.ship_id,
             side,
             ship.motion.x,
             ship.motion.y,
             ship.motion.heading,
+            ship.motion.speed,
             weapon,
+            tuning.salvo_balls,
+            tuning.salvo_spacing,
+            ammo,
         );
         info!(
             ship_id = ship.ship_id,
             ?side,
+            ?ammo,
             projectile_id,
             "broadside disparada"
         );
-        commands.spawn((ServerProjectile(projectile),));
+        commands.spawn_batch(salvo.into_iter().map(|p| (ServerProjectile(p),)));
     }
 }
 
@@ -1501,7 +1664,12 @@ fn simulate_world(app: &mut App) {
 
 /// Avança física dos navios (MF-017): casco atracado fica imóvel com recarga
 /// de canhão; os demais aplicam o input ao `step_motion`.
-fn simulate_movement(time: Res<Time>, mut ships: Query<&mut ServerShip>) {
+fn simulate_movement(
+    time: Res<Time>,
+    map: Res<ServerWorldMap>,
+    weather: Res<crate::weather::ServerWeather>,
+    mut ships: Query<&mut ServerShip>,
+) {
     let dt = time.delta_secs();
 
     for mut ship in &mut ships {
@@ -1512,6 +1680,7 @@ fn simulate_movement(time: Res<Time>, mut ships: Query<&mut ServerShip>) {
             motion,
             tuning,
             battery,
+            sail_hp,
             ..
         } = ship.as_mut();
         if matches!(presence, VesselPresence::Docked(_)) {
@@ -1521,17 +1690,36 @@ fn simulate_movement(time: Res<Time>, mut ships: Query<&mut ServerShip>) {
             battery.advance(dt);
             continue;
         }
+        // MF-059: pano rasgado rende menos — é o pano que sobra que
+        // recebe o comando de velas.
+        let wind = weather.0.wind_at(motion.x, motion.y);
         step_motion(
             motion,
             stats,
             MotionInput {
-                throttle: input.throttle,
+                throttle: input.throttle.clamp(0.0, 1.0)
+                    * mareforge_domain_ships::sail_speed_multiplier(*sail_hp),
                 turn: input.turn,
             },
+            wind,
             tuning,
             dt,
         );
+        ground_on_land(&map.0, motion);
         battery.advance(dt);
+    }
+}
+
+/// Meia boca do casco (m): folga mínima entre o centro do navio e a terra.
+pub(crate) const HULL_CLEARANCE: f32 = 12.0;
+
+/// Encalhe (MF-058): casco que entra na terra volta para a linha d'água e
+/// perde quase todo o seguimento — raspar na costa custa a fuga.
+pub(crate) fn ground_on_land(map: &WorldMap, motion: &mut ShipMotion) {
+    if let Some((x, y)) = map.push_out_of_land(motion.x, motion.y, HULL_CLEARANCE) {
+        motion.x = x;
+        motion.y = y;
+        motion.speed *= 0.3;
     }
 }
 
@@ -1588,6 +1776,7 @@ fn simulate_zones(
 fn simulate_combat(
     mut commands: Commands,
     time: Res<Time>,
+    map: Res<ServerWorldMap>,
     tuning: Res<CombatTuning>,
     ships: Query<&ServerShip>,
     mut projectiles: Query<(Entity, &mut ServerProjectile)>,
@@ -1603,7 +1792,8 @@ fn simulate_combat(
     impacts.0.clear();
     for (projectile_entity, mut projectile) in &mut projectiles {
         projectile.0.advance(dt);
-        if projectile.0.expired() {
+        // Bala que bate na pedra morre ali: a costa é cobertura (MF-058).
+        if projectile.0.expired() || map.0.is_land(projectile.0.x, projectile.0.y) {
             commands.entity(projectile_entity).despawn();
             continue;
         }
@@ -1618,6 +1808,7 @@ fn simulate_combat(
                     *ship_id,
                     projectile.0.damage,
                     projectile.0.owner_ship_id,
+                    projectile.0.sail_damage,
                 ));
                 break; // um projétil atinge um navio só
             }
@@ -1642,7 +1833,7 @@ fn apply_combat_damage(
     pending.0.clear();
     let impacts = std::mem::take(&mut impacts.0);
 
-    for (projectile_entity, target_ship_id, damage, killer_ship_id) in impacts {
+    for (projectile_entity, target_ship_id, damage, killer_ship_id, sail_damage) in impacts {
         commands.entity(projectile_entity).despawn();
 
         // §72 pvp_engagements: projétil entre players. Calculado ANTES do
@@ -1687,6 +1878,8 @@ fn apply_combat_damage(
                 );
                 continue;
             }
+            // MF-059: parte do golpe vai ao pano (proporcional ao casco).
+            ship.sail_hp = (ship.sail_hp - sail_points(sail_damage, ship.stats.max_hp)).max(0.0);
             match apply_damage(ship.hp, damage) {
                 DamageOutcome::Survived { remaining_hp } => {
                     ship.hp = remaining_hp;
@@ -1694,6 +1887,7 @@ fn apply_combat_damage(
                         ship_id = target_ship_id,
                         damage,
                         hp = remaining_hp,
+                        sail_hp = ship.sail_hp,
                         "impacto no casco"
                     );
                     None
@@ -1905,7 +2099,8 @@ fn respawn_destroyed_ships(
                 kind: ShipKind::SmallMerchant,
             },
         );
-        if let Some(zone) = zone_changed_for(&map.0, new_ship_id, DEV_SPAWN.0, DEV_SPAWN.1) {
+        let spawn = dev_spawn_point();
+        if let Some(zone) = zone_changed_for(&map.0, new_ship_id, spawn.0, spawn.1) {
             let _ = connection_manager.send_message::<ReliableChannel, _>(victim_client_id, &zone);
         }
         info!(
@@ -1941,6 +2136,8 @@ fn to_ship_state(ship: &ServerShip, catalog: &ItemCatalog) -> ShipState {
         starboard_cooldown_secs: ship.battery.starboard_cooldown,
         is_npc: false,
         cargo_capacity: ship.stats.cargo_capacity,
+        sail_hp: ship.sail_hp,
+        ammo: ship.ammo,
     }
 }
 
@@ -2355,7 +2552,7 @@ fn handle_dock(
 
 /// Linhas de storage para a UI, agregando pilhas por item e omitindo itens
 /// desconhecidos do catálogo (fail-closed: UI não inventa nome).
-fn port_storage_snapshot(
+pub(crate) fn port_storage_snapshot(
     catalog: &ItemCatalog,
     region: &str,
     storage: &[Custody],
@@ -2449,6 +2646,13 @@ mod tests {
     use mareforge_shared::ids::RegionId;
 
     use super::*;
+
+    #[test]
+    fn dev_spawn_parses_x_comma_y_and_rejects_garbage() {
+        assert_eq!(parse_spawn(Some("10, -20.5")), Some((10.0, -20.5)));
+        assert_eq!(parse_spawn(Some("oops")), None);
+        assert_eq!(parse_spawn(None), None);
+    }
 
     #[test]
     fn port_defaults_to_5000() {
@@ -2572,6 +2776,8 @@ mod tests {
             zone: None,
             trip: None,
             restored_trip_started_at: None,
+            sail_hp: SAIL_HP_MAX,
+            ammo: Ammo::Round,
         };
 
         let state = to_ship_state(&ship, &ItemCatalog::default());
