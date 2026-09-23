@@ -10,11 +10,12 @@ use crate::nodes::NodePlugin;
 use crate::port_screen::PortPlugin;
 use crate::ship::{
     animate_ship_parts, animate_sinking, draw_broadside_lanes, emit_foam, expire_stale_visuals,
-    lerp_projectile_visuals, lerp_ship_visuals, upsert_projectile_visuals, upsert_ship_visuals,
-    upsert_wreck_visuals,
+    lerp_projectile_visuals, lerp_ship_visuals, update_wanted_markers, upsert_projectile_visuals,
+    upsert_ship_visuals, upsert_wreck_visuals,
 };
 use crate::ui::UiThemePlugin;
 use crate::vfx::VfxPlugin;
+use crate::wanted_hud::WantedHudPlugin;
 use crate::world::WorldVisualPlugin;
 use crate::zone::ZonePlugin;
 
@@ -37,6 +38,8 @@ impl Plugin for ClientPlugin {
             .add_plugins(HudPlugin)
             .add_plugins(VfxPlugin)
             .add_plugins(UiThemePlugin)
+            .add_plugins(WantedHudPlugin)
+            .add_systems(Update, update_wanted_markers.after(lerp_ship_visuals))
             .add_systems(Startup, setup_camera)
             .add_systems(
                 Update,

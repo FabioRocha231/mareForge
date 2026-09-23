@@ -622,7 +622,7 @@ pub fn toggle_sea_hud(
     }
 }
 
-fn spawn_faded_panel(
+pub(crate) fn spawn_faded_panel(
     commands: &mut Commands,
     parent: Entity,
     fade: (f32, f32, f32),
@@ -738,6 +738,8 @@ mod tests {
             starboard_cooldown_secs: starboard_cooldown,
             is_npc: false,
             cargo_capacity: 100,
+            faction: mareforge_protocol::Faction::Player,
+            notoriety_tier: 0,
         }
     }
 

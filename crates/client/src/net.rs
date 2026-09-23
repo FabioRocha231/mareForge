@@ -170,6 +170,10 @@ impl Plugin for ClientNetPlugin {
         app.register_message::<OrdersSnapshot>(ChannelDirection::ServerToClient);
         app.register_message::<PortStorageSnapshot>(ChannelDirection::ServerToClient);
         app.register_message::<MarketResult>(ChannelDirection::ServerToClient);
+        app.register_message::<mareforge_protocol::ReputationUpdate>(
+            ChannelDirection::ServerToClient,
+        );
+        app.register_message::<mareforge_protocol::WorldEvent>(ChannelDirection::ServerToClient);
         app.init_resource::<crate::ship::DestroyedShips>();
         app.init_resource::<KnownWrecks>();
         app.init_resource::<MyDocked>();

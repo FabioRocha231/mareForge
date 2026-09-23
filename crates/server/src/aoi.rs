@@ -90,6 +90,8 @@ mod tests {
             starboard_cooldown_secs: 0.0,
             is_npc: false,
             cargo_capacity: 100,
+            faction: mareforge_protocol::Faction::Player,
+            notoriety_tier: 0,
         }
     }
 

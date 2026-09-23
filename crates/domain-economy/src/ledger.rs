@@ -19,6 +19,11 @@ pub enum LedgerKind {
     /// bootstrap dev. Auditar NpcBounty ≠ Mint quando a telemetria medir a
     /// economia (§71).
     NpcBounty,
+    /// Carga de caravana NPC saqueada: pago em ouro direto ao killer
+    /// (faucet). Pilar 1: NPC nunca fabrica item — a carga vira ouro.
+    CaravanPlunder,
+    /// Cabeça de capitão Procurado cobrada: a coroa paga (faucet).
+    BountyClaim,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -128,6 +128,57 @@ pub struct ShipState {
     /// default 0 (cliente antigo não quebra).
     #[serde(default)]
     pub cargo_capacity: u32,
+    /// Bandeira do navio (jogador, pirata, marinha, mercador NPC). Aditivo;
+    /// só apresentação e HUD — regras de facção vivem no servidor.
+    #[serde(default)]
+    pub faction: Faction,
+    /// Faixa de notoriedade do capitão (0 Honrado, 1 Suspeito, 2 Procurado).
+    /// Todos veem quem é procurado. Aditivo, default 0.
+    #[serde(default)]
+    pub notoriety_tier: u8,
+}
+
+/// Facção de um navio no mar. `Player` é o default de wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum Faction {
+    #[default]
+    Player,
+    Pirate,
+    Navy,
+    Merchant,
+}
+
+/// Faixas de notoriedade no wire (`ShipState.notoriety_tier`).
+pub const TIER_HONRADO: u8 = 0;
+pub const TIER_SUSPEITO: u8 = 1;
+pub const TIER_PROCURADO: u8 = 2;
+
+/// Reputação do PRÓPRIO capitão (só para o dono): notoriedade 0..1000,
+/// faixa e cabeça a prêmio em ouro (0 fora de Procurado).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReputationUpdate {
+    pub notoriety: u32,
+    pub tier: u8,
+    pub bounty: u64,
+}
+
+/// Tipo de evento do feed (cor/ícone no client).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WorldEventKind {
+    /// Afundamento, saque, recompensa recebida.
+    Kill,
+    /// Alarme: mercador atacado, marinha a caminho.
+    Alert,
+    /// Cabeça a prêmio / mudança de faixa de notoriedade.
+    Bounty,
+}
+
+/// Linha do feed de eventos, só para jogadores envolvidos ou por perto.
+/// Texto ASCII (a fonte padrão do client não tem acentos).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorldEvent {
+    pub text: String,
+    pub kind: WorldEventKind,
 }
 
 /// Instala um item do storage regional no slot dele (MF-039). Só atracado;
@@ -475,6 +526,8 @@ mod tests {
             starboard_cooldown_secs: 1.25,
             is_npc: false,
             cargo_capacity: 100,
+            faction: Faction::Player,
+            notoriety_tier: 0,
         };
         let bytes = bincode::serialize(&state).unwrap();
         let decoded = bincode::deserialize::<ShipState>(&bytes).unwrap();
@@ -504,6 +557,8 @@ mod tests {
                 starboard_cooldown_secs: 0.0,
                 is_npc,
                 cargo_capacity: 70,
+                faction: Faction::Navy,
+                notoriety_tier: 0,
             };
             let bytes = bincode::serialize(&state).unwrap();
             let decoded = bincode::deserialize::<ShipState>(&bytes).unwrap();
@@ -511,6 +566,26 @@ mod tests {
             assert_eq!(decoded.is_npc, is_npc);
             assert_eq!(decoded.cargo_capacity, 70);
         }
+    }
+
+    #[test]
+    fn reputation_and_world_event_roundtrip() {
+        let update = ReputationUpdate {
+            notoriety: 320,
+            tier: TIER_PROCURADO,
+            bounty: 640,
+        };
+        let bytes = bincode::serialize(&update).unwrap();
+        assert_eq!(
+            bincode::deserialize::<ReputationUpdate>(&bytes).unwrap(),
+            update
+        );
+        let event = WorldEvent {
+            text: String::from("CABECA A PRECO: 640g"),
+            kind: WorldEventKind::Bounty,
+        };
+        let bytes = bincode::serialize(&event).unwrap();
+        assert_eq!(bincode::deserialize::<WorldEvent>(&bytes).unwrap(), event);
     }
 
     #[test]
@@ -621,6 +696,8 @@ mod tests {
             starboard_cooldown_secs: 1.5,
             is_npc: false,
             cargo_capacity: 100,
+            faction: Faction::Player,
+            notoriety_tier: 0,
         };
         let bytes = bincode::serialize(&full).expect("encode");
         // Trunca 8 bytes (dois f32): simula cliente novo lendo servidor antigo.
@@ -686,6 +763,8 @@ mod tests {
                     starboard_cooldown_secs: 2.0,
                     is_npc: false,
                     cargo_capacity: 100,
+                    faction: Faction::Player,
+                    notoriety_tier: 2,
                 },
                 ShipState {
                     ship_id: 2,
@@ -704,6 +783,8 @@ mod tests {
                     starboard_cooldown_secs: 0.0,
                     is_npc: false,
                     cargo_capacity: 40,
+                    faction: Faction::Pirate,
+                    notoriety_tier: 0,
                 },
             ],
             projectiles: vec![ProjectileState {
