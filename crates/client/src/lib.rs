@@ -15,6 +15,7 @@ pub mod portals;
 pub mod ship;
 pub mod ui;
 pub mod vfx;
+pub mod weather;
 pub mod world;
 pub mod zone;
 

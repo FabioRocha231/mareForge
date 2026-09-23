@@ -4,6 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::ammo::{Ammo, HULL_SHARE, SAIL_SHARE};
 use crate::weapon::BroadsideSide;
 
 /// Parâmetros da arma no momento do disparo (vêm de `ShipStats` + tuning do
@@ -23,7 +24,12 @@ pub struct WeaponParams {
 pub struct Projectile {
     pub projectile_id: u32,
     pub owner_ship_id: u32,
+    /// Dano ao casco (já repartido entre casco e pano, MF-059).
     pub damage: u32,
+    /// Dano bruto ao pano; o alvo converte para pontos de vela pelo casco
+    /// dele ([`crate::ammo::sail_points`]).
+    #[serde(default)]
+    pub sail_damage: f32,
     pub x: f32,
     pub y: f32,
     /// Direção de voo em radianos (0 = +X, anti-horário).
@@ -36,7 +42,8 @@ pub struct Projectile {
 
 impl Projectile {
     /// Cria o projétil de uma borda: nasce na lateral do casco e voa
-    /// perpendicular ao heading (PRD §19).
+    /// perpendicular ao heading (PRD §19). Sai carregado de bala redonda:
+    /// 80% do dano no casco, 20% no pano (MF-059).
     pub fn from_broadside(
         projectile_id: u32,
         owner_ship_id: u32,
@@ -48,10 +55,12 @@ impl Projectile {
     ) -> Self {
         let direction = ship_heading + side.angle_offset();
         let (dir_x, dir_y) = (direction.cos(), direction.sin());
+        let (damage, sail_damage) = split_round(weapon.damage);
         Self {
             projectile_id,
             owner_ship_id,
-            damage: weapon.damage,
+            damage,
+            sail_damage,
             x: ship_x + dir_x * weapon.muzzle_offset,
             y: ship_y + dir_y * weapon.muzzle_offset,
             heading: normalize(direction),
@@ -94,7 +103,8 @@ impl Projectile {
                     ship_heading,
                     weapon,
                 );
-                p.damage = base_damage + if i == balls / 2 { remainder } else { 0 };
+                (p.damage, p.sail_damage) =
+                    split_round(base_damage + if i == balls / 2 { remainder } else { 0 });
                 let vx = p.heading.cos() * p.speed + hx * ship_speed;
                 let vy = p.heading.sin() * p.speed + hy * ship_speed;
                 p.heading = normalize(vy.atan2(vx));
@@ -102,6 +112,14 @@ impl Projectile {
                 p
             })
             .collect()
+    }
+
+    /// Troca a munição (MF-059): fatores relativos à bala redonda. Alcance e
+    /// velocidade vêm de [`Ammo::load`] aplicado à arma antes do disparo.
+    pub fn with_ammo(mut self, ammo: Ammo) -> Self {
+        self.damage = (self.damage as f32 * ammo.hull_factor()).round() as u32;
+        self.sail_damage *= ammo.sail_factor();
+        self
     }
 
     /// Movimento retilíneo por um passo de simulação.
@@ -122,6 +140,12 @@ impl Projectile {
         let dy = self.y - ship_y;
         dx * dx + dy * dy <= ship_radius * ship_radius
     }
+}
+
+/// Bala redonda: dano bruto → (casco, pano).
+fn split_round(raw: u32) -> (u32, f32) {
+    let raw = raw as f32;
+    ((raw * HULL_SHARE).round() as u32, raw * SAIL_SHARE)
 }
 
 fn normalize(angle: f32) -> f32 {
@@ -149,7 +173,8 @@ mod tests {
         assert!((p.heading - std::f32::consts::FRAC_PI_2).abs() < 1e-5);
         assert!((p.x - (-0.0)).abs() < 1e-5 || p.x.abs() < 1e-5);
         assert!((p.y - 5.0).abs() < 1e-5);
-        assert_eq!(p.damage, 20);
+        assert_eq!(p.damage, 16, "80% no casco");
+        assert!((p.sail_damage - 4.0).abs() < 1e-5, "20% no pano");
     }
 
     #[test]
@@ -208,8 +233,11 @@ mod tests {
             8.0,
         );
         assert_eq!(salvo.len(), 3);
-        assert_eq!(salvo.iter().map(|p| p.damage).sum::<u32>(), 20);
-        assert_eq!(salvo[1].damage, 8);
+        // 6/8/6 brutos → casco 5/6/5 (80% arredondado), pano 20%.
+        assert_eq!(salvo.iter().map(|p| p.damage).sum::<u32>(), 16);
+        assert_eq!(salvo[1].damage, 6);
+        let sail: f32 = salvo.iter().map(|p| p.sail_damage).sum();
+        assert!((sail - 4.0).abs() < 1e-4);
         let ids: Vec<u32> = salvo.iter().map(|p| p.projectile_id).collect();
         assert_eq!(ids, vec![7, 8, 9]);
         assert!((salvo[0].x + 8.0).abs() < 1e-4 && (salvo[2].x - 8.0).abs() < 1e-4);

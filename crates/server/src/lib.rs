@@ -11,6 +11,7 @@ mod playtest;
 pub mod plugin;
 pub mod portals;
 pub mod sets;
+pub mod weather;
 
 pub use plugin::ServerPlugin;
 

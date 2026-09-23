@@ -17,6 +17,7 @@ use crate::ship::{
 };
 use crate::ui::UiThemePlugin;
 use crate::vfx::VfxPlugin;
+use crate::weather::WeatherPlugin;
 use crate::world::WorldVisualPlugin;
 use crate::zone::ZonePlugin;
 
@@ -38,6 +39,7 @@ impl Plugin for ClientPlugin {
             .add_plugins(PortPlugin)
             .add_plugins(HudPlugin)
             .add_plugins(VfxPlugin)
+            .add_plugins(WeatherPlugin)
             .add_plugins(UiThemePlugin)
             .add_plugins(crate::portals::PortalClientPlugin)
             .add_plugins(JuicePlugin)

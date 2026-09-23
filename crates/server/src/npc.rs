@@ -251,6 +251,7 @@ pub fn simulate_npcs(
     mut metrics: ResMut<crate::net::Metrics>,
     mut npc_respawns: ResMut<NpcRespawnQueue>,
     time: Res<Time>,
+    weather: Res<crate::weather::ServerWeather>,
 ) {
     let dt = time.delta_secs();
     let players: Vec<(u32, ShipMotion)> = ships
@@ -277,6 +278,7 @@ pub fn simulate_npcs(
             continue;
         }
         npc.battery.advance(dt);
+        let wind = weather.0.wind_at(npc.motion.x, npc.motion.y);
         let protected = in_protected_area(&map.0, npc.motion.x, npc.motion.y);
         if protected {
             npc.ai.state = NpcState::Patrol {
@@ -308,7 +310,7 @@ pub fn simulate_npcs(
                         tuning,
                         ..
                     } = &mut *npc;
-                    step_motion(motion, stats, input, tuning, dt);
+                    step_motion(motion, stats, input, wind, tuning, dt);
                     ground_on_land(&map.0, motion);
                 }
             }
@@ -327,7 +329,7 @@ pub fn simulate_npcs(
                             tuning,
                             ..
                         } = &mut *npc;
-                        step_motion(motion, stats, input, tuning, dt);
+                        step_motion(motion, stats, input, wind, tuning, dt);
                         ground_on_land(&map.0, motion);
                     }
                 } else {
@@ -366,7 +368,7 @@ pub fn simulate_npcs(
                             tuning,
                             ..
                         } = &mut *npc;
-                        step_motion(motion, stats, input, tuning, dt);
+                        step_motion(motion, stats, input, wind, tuning, dt);
                         ground_on_land(&map.0, motion);
                     }
                     let (dx, dy) = (
@@ -561,6 +563,8 @@ pub(crate) fn to_npc_ship_state(npc: &NpcShip, catalog: &ItemCatalog) -> ShipSta
         starboard_cooldown_secs: npc.battery.starboard_cooldown,
         is_npc: true,
         cargo_capacity: npc.stats.cargo_capacity,
+        sail_hp: 100.0,
+        ammo: Default::default(),
     }
 }
 
@@ -689,6 +693,12 @@ fn spawn_projectile(
 mod tests {
     use super::*;
 
+    /// Vento de través para quem aponta +X (MF-059).
+    const WIND: mareforge_domain_ships::Wind = mareforge_domain_ships::Wind {
+        direction: std::f32::consts::FRAC_PI_2,
+        strength: 0.7,
+    };
+
     fn npc_at(position: (f32, f32)) -> NpcShip {
         let mut ids = NpcIdCounter::default();
         build_npc(
@@ -730,7 +740,14 @@ mod tests {
                 panic!("NPC deveria estar em Patrol");
             };
             let input = patrol_input(npc.motion, origin, radius);
-            step_motion(&mut npc.motion, &npc.stats, input, &npc.tuning, 1.0 / 30.0);
+            step_motion(
+                &mut npc.motion,
+                &npc.stats,
+                input,
+                WIND,
+                &npc.tuning,
+                1.0 / 30.0,
+            );
         }
 
         assert!(
@@ -783,7 +800,14 @@ mod tests {
         let target = (150.0, 0.0);
         for _ in 0..(30 * 6) {
             let input = broadside_input(npc.motion, target.0, target.1);
-            step_motion(&mut npc.motion, &npc.stats, input, &npc.tuning, 1.0 / 30.0);
+            step_motion(
+                &mut npc.motion,
+                &npc.stats,
+                input,
+                WIND,
+                &npc.tuning,
+                1.0 / 30.0,
+            );
         }
         let (dx, dy) = (target.0 - npc.motion.x, target.1 - npc.motion.y);
         let side = side_for_target(npc.motion.heading, dx, dy);

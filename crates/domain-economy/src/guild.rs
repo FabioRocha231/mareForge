@@ -16,6 +16,14 @@ pub const GUILD_BASE_VALUES: &[(&str, u64)] = &[
     ("Casco Reforçado", 180),
     ("Velas de Corrida", 160),
     ("Canhão de Bronze", 220),
+    // MF-059: raros das zonas de alto risco e o tier 2 da Forja Pirata.
+    // Tier 2 vale um pouco mais que os insumos pela guilda.
+    ("Pérola Abissal", 90),
+    ("Essência da Cerração", 110),
+    ("Âmbar Abissal", 100),
+    ("Casco Negro", 850),
+    ("Velas de Cerração", 1050),
+    ("Canhões Abissais", 900),
 ];
 
 /// Multiplicadores de portos sem tabela própria (ex.: um porto pirata novo).

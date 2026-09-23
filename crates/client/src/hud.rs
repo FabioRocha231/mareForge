@@ -90,7 +90,7 @@ pub enum HudContext {
 const BROADSIDE_RELOAD_SECS: f32 = 3.0;
 
 pub const CONTROLS_HINT: &str =
-    "W/S velas | A/D leme | Q/R canhoes | E atracar | G coletar | F saquear | roda do mouse: zoom";
+    "W/S velas | A/D leme | Q/R canhoes | C municao | E atracar | G coletar | F saquear | roda do mouse: zoom";
 
 pub struct HudPlugin;
 
@@ -531,17 +531,15 @@ pub fn update_zone_panel(
 
 fn short_zone_name(full: &str) -> String {
     // Servidor manda "Águas do Porto da Serra" etc. — encurtamos para caber
-    // no painel do HUD.
+    // no painel do HUD. Sem acento: a fonte padrão só desenha ASCII.
+    let full = crate::guild::ascii(full);
     if let Some(rest) = full.strip_prefix("Aguas do Porto ") {
         return format!("P. {rest}");
     }
-    if let Some(rest) = full.strip_prefix("Águas do Porto ") {
-        return format!("P. {rest}");
-    }
-    if let Some(rest) = full.strip_prefix("Águas da Ilha do ") {
+    if let Some(rest) = full.strip_prefix("Aguas da Ilha do ") {
         return rest.to_owned();
     }
-    full.to_owned()
+    full
 }
 
 pub fn update_cooldown_panel(
@@ -738,6 +736,8 @@ mod tests {
             starboard_cooldown_secs: starboard_cooldown,
             is_npc: false,
             cargo_capacity: 100,
+            sail_hp: 100.0,
+            ammo: Default::default(),
         }
     }
 
@@ -778,6 +778,7 @@ mod tests {
             "Coral Negro"
         );
         assert_eq!(short_zone_name("Rota da Costa"), "Rota da Costa");
+        assert_eq!(short_zone_name("Cerração"), "Cerracao");
     }
 
     #[test]

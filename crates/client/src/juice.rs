@@ -453,6 +453,8 @@ mod tests {
             starboard_cooldown_secs: 0.0,
             is_npc: false,
             cargo_capacity: 0,
+            sail_hp: 100.0,
+            ammo: mareforge_domain_combat::Ammo::Round,
         }
     }
 
