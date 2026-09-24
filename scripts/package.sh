@@ -9,7 +9,7 @@
 #        dist/Marvyr-v<versão>-<plataforma>-<arquitetura>.<zip|tar.gz>.
 #
 # O cliente procura `assets/` e `marvyr.toml` na pasta do executável; no
-# macOS essa pasta é Marvyr.app/Contents/MacOS.
+# macOS os assets ficam em Marvyr.app/Contents/Resources.
 #
 # assets/dev NÃO entra no pacote: `grep '"dev/' crates/client/src` não acha
 # nenhuma referência em runtime (a pasta só tem .gitkeep). Se o cliente passar
@@ -44,6 +44,7 @@ case "$PLATFORM" in
         TARGETS=(x86_64-pc-windows-msvc)
         ARCH="x86_64"
         BIN_DIR="$OUT"
+        RES_DIR="$OUT"
         EXE_NAME="Marvyr.exe"
         ARCHIVE="dist/Marvyr-v${VERSION}-windows-${ARCH}.zip"
         ;;
@@ -51,6 +52,7 @@ case "$PLATFORM" in
         TARGETS=(x86_64-unknown-linux-gnu)
         ARCH="x86_64"
         BIN_DIR="$OUT"
+        RES_DIR="$OUT"
         EXE_NAME="Marvyr"
         ARCHIVE="dist/Marvyr-v${VERSION}-linux-${ARCH}.tar.gz"
         ;;
@@ -59,6 +61,9 @@ case "$PLATFORM" in
         TARGETS=(aarch64-apple-darwin x86_64-apple-darwin)
         ARCH="universal"
         BIN_DIR="$OUT/Marvyr.app/Contents/MacOS"
+        # Assets em Resources: o selo da assinatura cobre arquivos lá sem
+        # xattrs; em MacOS/ eles viram "código" e o zip quebra a assinatura.
+        RES_DIR="$OUT/Marvyr.app/Contents/Resources"
         EXE_NAME="Marvyr"
         ARCHIVE="dist/Marvyr-v${VERSION}-macos-${ARCH}.zip"
         ;;
@@ -104,7 +109,7 @@ for target in "${TARGETS[@]}"; do
 done
 
 rm -rf "$OUT" "$ARCHIVE"
-mkdir -p "$BIN_DIR/assets"
+mkdir -p "$BIN_DIR" "$RES_DIR/assets"
 
 if [[ "$PLATFORM" == macos ]]; then
     lipo -create -output "$BIN_DIR/$EXE_NAME" \
@@ -115,14 +120,14 @@ fi
 chmod +x "$BIN_DIR/$EXE_NAME"
 
 for dir in "${ASSET_DIRS[@]}"; do
-    cp -R "assets/$dir" "$BIN_DIR/assets/$dir"
+    cp -R "assets/$dir" "$RES_DIR/assets/$dir"
 done
-find "$BIN_DIR/assets" -name .gitkeep -delete
+find "$RES_DIR/assets" -name .gitkeep -delete
 cp LICENSE "$OUT/LICENSE"
 cp docs/assets/ATTRIBUTION.md "$OUT/ATTRIBUTION.md"
 
 printf 'Marvyr %s\nbuild %s\nprotocol %s\nplatform %s %s\n' \
-    "$VERSION" "$MARVYR_BUILD_SHA" "$PROTOCOL" "$PLATFORM" "$ARCH" > "$BIN_DIR/VERSION"
+    "$VERSION" "$MARVYR_BUILD_SHA" "$PROTOCOL" "$PLATFORM" "$ARCH" > "$RES_DIR/VERSION"
 
 if [[ -z "${MARVYR_DEFAULT_SERVER:-}" && -n "${PACKAGE_SERVER:-}" ]]; then
     printf 'server = "%s"\n' "$PACKAGE_SERVER" > "$BIN_DIR/marvyr.toml"
