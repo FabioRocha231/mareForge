@@ -149,16 +149,29 @@ Nunca use `docker kill` / `SIGKILL` em produção: perde o que não foi persisti
    git tag v0.1.0-alpha.1
    git push origin v0.1.0-alpha.1
    ```
-4. O workflow `Release` roda `checks` → `windows` (executa
-   `scripts/package_windows.sh`, publica o artefato `Marvyr-windows` e anexa o
-   zip a um GitHub Release) → `itch` (após aprovação, `butler push` do
-   `dist/windows` no canal `windows`).
-5. Sem tag: *Actions → Release → Run workflow* com `version` gera só o artefato.
+4. O workflow `Release` roda `checks` → `package` em matriz (executa
+   `scripts/package.sh` em Windows, Linux e macOS e publica os artefatos
+   `Marvyr-windows`, `Marvyr-linux` e `Marvyr-macos`) → `publish` (um único
+   GitHub Release com os três arquivos) e `itch` (após aprovação, `butler push`
+   de cada plataforma nos canais `windows`, `linux` e `mac`).
+5. Sem tag: *Actions → Release → Run workflow* com `version` gera só os artefatos.
 
-Empacotar localmente (Windows com Git Bash): `bash scripts/package_windows.sh`.
-O script é a fonte única do conteúdo do zip: `Marvyr.exe`, `assets/`
+| Plataforma | Runner | Arquivo |
+|---|---|---|
+| Windows | `windows-latest` | `Marvyr-v<versão>-windows-x86_64.zip` (`Marvyr.exe` + `assets/`) |
+| Linux | `ubuntu-22.04` (glibc antiga, roda em mais distros) | `Marvyr-v<versão>-linux-x86_64.tar.gz` (`Marvyr` + `assets/`) |
+| macOS | `macos-latest` | `Marvyr-v<versão>-macos-universal.zip` (`Marvyr.app`, Apple Silicon + Intel) |
+
+O `.app` do macOS tem assinatura ad-hoc, sem notarização: na primeira abertura
+o jogador usa *botão direito → Abrir* (o `README.txt` explica). Notarizar exige
+conta de desenvolvedor da Apple.
+
+Empacotar localmente: `bash scripts/package.sh <windows|linux|macos>` (Windows
+com Git Bash; o macOS precisa do alvo `x86_64-apple-darwin` para o universal).
+O script é a fonte única do conteúdo do pacote: executável, `assets/`
 (`marvyr`, `external`, `shaders`; `dev` fica fora), `LICENSE`,
-`ATTRIBUTION.md`, `VERSION` e `README.txt`.
+`ATTRIBUTION.md`, `VERSION` e `README.txt`. O cliente procura `assets/` e
+`marvyr.toml` ao lado do executável; no macOS, em `Marvyr.app/Contents/MacOS`.
 
 Ferramenta de playtest em dev (não distribuída): `cargo run --bin marvyr_playtest --release`.
 
@@ -171,6 +184,6 @@ Antes de anunciar uma versão:
 - [ ] **Internet**: cliente fora da rede conecta em `play.marvyr.game:5000` com o build público, sem argumentos.
 - [ ] **3 clientes** simultâneos se veem e interagem sem desync visível.
 - [ ] **Persistência no reinício**: jogar, fazer *Stop/Start* do servidor, reconectar e encontrar navio/inventário/ouro como antes.
-- [ ] **Máquina limpa**: extrair o zip num Windows sem Rust/VS instalados, abrir `Marvyr.exe`, criar conta e jogar.
+- [ ] **Máquina limpa**: em Windows, Linux e macOS sem Rust instalado, extrair o pacote, abrir o jogo, criar conta e jogar.
 - [ ] **Versão incompatível**: cliente com `PROTOCOL_VERSION` diferente recebe mensagem clara, sem crash.
 - [ ] **Servidor offline**: com o servidor parado, o cliente mostra erro de conexão legível e não trava.

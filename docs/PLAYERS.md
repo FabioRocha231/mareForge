@@ -2,12 +2,21 @@
 
 ## Instalar
 
-1. Baixe o zip do Marvyr para Windows na página do jogo no itch.io
-   (ou pelo app do itch, que já atualiza sozinho).
+1. Baixe o pacote do Marvyr para o seu sistema (Windows, Linux ou macOS) na
+   página do jogo no itch.io (ou pelo app do itch, que já atualiza sozinho).
+   Os passos abaixo são do Windows; Linux e macOS logo em seguida.
 2. Extraia o zip **inteiro** para uma pasta. Não rode de dentro do zip: o jogo
    precisa da pasta `assets` ao lado do executável.
 3. Abra `Marvyr.exe`. Se o SmartScreen avisar, clique em
    **Mais informações → Executar assim mesmo** (o alpha ainda não é assinado).
+
+**Linux**: extraia o `.tar.gz` e rode `./Marvyr` na pasta. Precisa de driver
+de vídeo com Vulkan.
+
+**macOS** (Apple Silicon ou Intel): extraia o zip e arraste `Marvyr.app` para
+Aplicativos. Na primeira vez, clique com o botão direito → **Abrir** (o alpha
+ainda não é notarizado). Se aparecer "está danificado", rode no Terminal
+`xattr -dr com.apple.quarantine /Applications/Marvyr.app`.
 
 ## Conta
 

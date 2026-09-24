@@ -366,7 +366,7 @@ const TABLE: &[(&str, &str)] = &[
     ("Esta versão do Marvyr está desatualizada.\n\nAtualize o jogo pelo itch.io.", "This version of Marvyr is out of date.\n\nUpdate the game on itch.io."),
     ("Conexão recusada.", "Connection refused."),
     ("Servidor do Marvyr não configurado.", "Marvyr server not configured."),
-    ("Crie marvyr.toml ao lado do Marvyr.exe com:", "Create marvyr.toml next to Marvyr.exe with:"),
+    ("Crie marvyr.toml ao lado do executável do jogo com:", "Create marvyr.toml next to the game executable with:"),
     ("Sem resposta em 10 s. Confira a internet ou tente mais tarde.", "No answer in 10 s. Check your internet or try again later."),
     ("Nenhum servidor foi informado nesta build.", "No server was set in this build."),
     ("Sessão ausente. Faça login novamente.", "No session. Please log in again."),

@@ -119,7 +119,7 @@ impl ConnectionStatus {
                     "{}\n{}\n\n{}\nserver = \"host:porta\"\n\n{quit}",
                     tr("Servidor do Marvyr não configurado."),
                     tr(reason),
-                    tr("Crie marvyr.toml ao lado do Marvyr.exe com:")
+                    tr("Crie marvyr.toml ao lado do executável do jogo com:")
                 ),
                 ui::DANGER,
             ),
