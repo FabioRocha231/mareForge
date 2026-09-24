@@ -391,12 +391,19 @@ pub struct ServerDockPolicy(pub DockPolicy);
 /// O mapa-base é fixo por servidor: trocar a seed é trocar o mundo (wipe).
 pub const DEFAULT_WORLD_SEED: u64 = 0x4D41_5256_5952_0001;
 
-/// `MARVYR_WORLD_SEED`: número (0 = mapa clássico feito à mão).
+/// `MARVYR_WORLD_SEED`: número (0 = mapa clássico feito à mão). Valor
+/// inválido derruba o boot — seed errada é outro mundo, nunca em silêncio.
 pub fn world_seed() -> u64 {
-    std::env::var("MARVYR_WORLD_SEED")
-        .ok()
-        .and_then(|value| value.trim().parse().ok())
-        .unwrap_or(DEFAULT_WORLD_SEED)
+    parse_world_seed(std::env::var("MARVYR_WORLD_SEED").ok().as_deref())
+}
+
+fn parse_world_seed(value: Option<&str>) -> u64 {
+    value.map_or(DEFAULT_WORLD_SEED, |value| {
+        value
+            .trim()
+            .parse()
+            .unwrap_or_else(|_| panic!("MARVYR_WORLD_SEED must be an integer from 0 to 2^64-1"))
+    })
 }
 
 /// Doca do Porto da Serra: dentro das águas protegidas. Jogadores nascem em
@@ -3061,6 +3068,29 @@ mod tests {
         assert_eq!(parse_spawn(Some("10, -20.5")), Some((10.0, -20.5)));
         assert_eq!(parse_spawn(Some("oops")), None);
         assert_eq!(parse_spawn(None), None);
+    }
+
+    #[test]
+    fn world_seed_defaults_and_rejects_garbage() {
+        assert_eq!(parse_world_seed(None), DEFAULT_WORLD_SEED);
+        assert_eq!(parse_world_seed(Some(" 42 ")), 42);
+        assert!(std::panic::catch_unwind(|| parse_world_seed(Some("mar"))).is_err());
+    }
+
+    /// O mundo que vai ao ar: conteúdo completo (a varredura de seeds do
+    /// domain-world cobre o resto dos invariantes).
+    #[test]
+    fn default_world_has_every_piece_of_content() {
+        let map = WorldMap::from_seed(DEFAULT_WORLD_SEED);
+        let features = map.features();
+        assert_eq!(features.hidden_islands.len(), 4);
+        assert_eq!(features.nodes.len(), 26);
+        assert_eq!(map.regions().len(), 3);
+        let spawn = features.spawn;
+        assert_eq!(
+            map.zone_at(spawn.0, spawn.1).unwrap().tier,
+            marvyr_domain_world::RiskTier::Protected
+        );
     }
 
     #[test]
