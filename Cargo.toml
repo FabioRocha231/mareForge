@@ -11,6 +11,7 @@ members = [
     "crates/domain-world",
     "crates/server",
     "crates/client",
+    "crates/auth-token",
     "crates/tools/db-migrate",
     "crates/tools/marvyr-playtest",
 ]

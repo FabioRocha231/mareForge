@@ -22,6 +22,15 @@ macro_rules! id_type {
             pub fn new() -> Self {
                 Self(Uuid::new_v4())
             }
+
+            /// Id estável derivado do nome (UUID v5 com namespace do tipo):
+            /// conteúdo declarado em código (catálogo, regiões) mantém o
+            /// mesmo id entre boots — estado persistido continua apontando
+            /// para ele.
+            pub fn stable(name: &str) -> Self {
+                let namespace = Uuid::new_v5(&Uuid::NAMESPACE_OID, stringify!($name).as_bytes());
+                Self(Uuid::new_v5(&namespace, name.as_bytes()))
+            }
         }
 
         impl EntityId for $name {
@@ -270,5 +279,22 @@ mod tests {
         ids.insert(id);
         ids.insert(id);
         assert_eq!(ids.len(), 1);
+    }
+
+    #[test]
+    fn stable_ids_survive_reboot_and_differ_by_type() {
+        assert_eq!(
+            ItemDefinitionId::stable("Madeira"),
+            ItemDefinitionId::stable("Madeira")
+        );
+        assert_ne!(
+            ItemDefinitionId::stable("Madeira"),
+            ItemDefinitionId::stable("Minério")
+        );
+        assert_ne!(
+            ItemDefinitionId::stable("x").0,
+            RegionId::stable("x").0,
+            "namespaces por tipo"
+        );
     }
 }

@@ -183,12 +183,12 @@ fn equipment_item(
 
 impl DevItems {
     fn new() -> Self {
-        let timber = ItemDefinitionId::new();
-        let ore = ItemDefinitionId::new();
-        let coral = ItemDefinitionId::new();
-        let hull_plate = ItemDefinitionId::new();
-        let racing_sails = ItemDefinitionId::new();
-        let bronze_cannon = ItemDefinitionId::new();
+        let timber = ItemDefinitionId::stable("Madeira");
+        let ore = ItemDefinitionId::stable("Minério");
+        let coral = ItemDefinitionId::stable("Coral Negro");
+        let hull_plate = ItemDefinitionId::stable("Casco Reforçado");
+        let racing_sails = ItemDefinitionId::stable("Velas de Corrida");
+        let bronze_cannon = ItemDefinitionId::stable("Canhão de Bronze");
         let mut catalog = ItemCatalog::default();
         let mut register = |definition: ItemDefinition| {
             catalog
@@ -279,12 +279,12 @@ impl DevItems {
             tags: SmallVec::new(),
             display_name: String::from("Canhão de Bronze"),
         });
-        let abyssal_pearl = ItemDefinitionId::new();
-        let fog_essence = ItemDefinitionId::new();
-        let abyssal_amber = ItemDefinitionId::new();
-        let black_hull = ItemDefinitionId::new();
-        let fog_sails = ItemDefinitionId::new();
-        let abyssal_cannons = ItemDefinitionId::new();
+        let abyssal_pearl = ItemDefinitionId::stable("Pérola Abissal");
+        let fog_essence = ItemDefinitionId::stable("Essência da Cerração");
+        let abyssal_amber = ItemDefinitionId::stable("Âmbar Abissal");
+        let black_hull = ItemDefinitionId::stable("Casco Negro");
+        let fog_sails = ItemDefinitionId::stable("Velas de Cerração");
+        let abyssal_cannons = ItemDefinitionId::stable("Canhões Abissais");
         let no_stats = EquipmentStats {
             damage: 0,
             speed: 0,

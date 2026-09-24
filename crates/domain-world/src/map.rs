@@ -254,7 +254,7 @@ impl WorldMap {
 
         let regions = vec![
             Region {
-                id: RegionId::new(),
+                id: RegionId::stable("Porto da Serra"),
                 name: "Porto da Serra",
                 port: Some(Port {
                     name: "Porto da Serra",
@@ -264,7 +264,7 @@ impl WorldMap {
                 }),
             },
             Region {
-                id: RegionId::new(),
+                id: RegionId::stable("Porto da Mina"),
                 name: "Porto da Mina",
                 port: Some(Port {
                     name: "Porto da Mina",
@@ -274,7 +274,7 @@ impl WorldMap {
                 }),
             },
             Region {
-                id: RegionId::new(),
+                id: RegionId::stable("Ilha do Coral Negro"),
                 name: "Ilha do Coral Negro",
                 // Porto pirata: atraca qualquer um, até
                 // procurado, mas a porta dele é água sem lei.
