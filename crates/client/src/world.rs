@@ -54,6 +54,26 @@ struct Sea {
     streamed_at: Vec3,
 }
 
+/// Anel do portão: do tamanho do vão no paredão.
+const GATE_RING_INNER: f32 = 200.0;
+const GATE_RING_OUTER: f32 = 215.0;
+
+/// O quadro do oceano anda com a câmera (MV-066): as zonas moram longe
+/// umas das outras no plano, e o shader desenha pela posição de mundo.
+#[derive(Component)]
+struct OceanQuad;
+
+fn follow_ocean(
+    camera: Query<&Transform, (With<Camera2d>, Without<OceanQuad>)>,
+    mut ocean: Query<&mut Transform, With<OceanQuad>>,
+) {
+    let (Ok(camera), Ok(mut ocean)) = (camera.get_single(), ocean.get_single_mut()) else {
+        return;
+    };
+    ocean.translation.x = camera.translation.x;
+    ocean.translation.y = camera.translation.y;
+}
+
 /// Mundo do servidor (MV-065): montado da seed que chega no handshake.
 /// Ausente até a conexão — nada de geografia antes disso.
 #[derive(Resource)]
@@ -74,22 +94,30 @@ impl Plugin for WorldVisualPlugin {
             // O oceano já anima atrás do login; a terra vem com a seed.
             .add_systems(Startup, spawn_ocean)
             .add_systems(Update, spawn_world.run_if(resource_added::<ClientWorld>))
-            .add_systems(Update, (tint_sea_by_zone, stream_land, animate_flags));
+            .add_systems(
+                Update,
+                (tint_sea_by_zone, stream_land, animate_flags, follow_ocean),
+            );
     }
 }
 
-/// Parede de instância (cerração/Sorvedouro) é penhasco, não ilha com palmeira.
+/// Paredão (borda de zona ou de instância) é penhasco, não ilha com palmeira.
 fn is_cliff(mass: &LandMass) -> bool {
-    mass.x.abs() > 3000.0
+    mass.cliff
 }
 
 /// Parâmetros do shader com a terra que cabe na vista em `center`.
 pub fn sea_params(map: &WorldMap, center: Vec2, view_radius: f32) -> SeaParams {
     let mut land = [Vec4::ZERO; MAX_LAND];
-    let visible = map
+    // Mais perto primeiro: com paredão em volta da zona, a vista pode ter
+    // mais discos que o shader comporta — os de longe ficam de fora.
+    let gap = |mass: &&LandMass| center.distance(Vec2::new(mass.x, mass.y)) - mass.radius;
+    let mut visible: Vec<&LandMass> = map
         .land()
         .iter()
-        .filter(|mass| center.distance(Vec2::new(mass.x, mass.y)) < view_radius + mass.radius);
+        .filter(|mass| gap(mass) < view_radius)
+        .collect();
+    visible.sort_by(|a, b| gap(a).total_cmp(&gap(b)));
     let mut count = 0;
     for (slot, mass) in land.iter_mut().zip(visible) {
         *slot = Vec4::new(mass.x, mass.y, mass.radius, is_cliff(mass) as u8 as f32);
@@ -169,6 +197,7 @@ fn spawn_ocean(
         Mesh2d(meshes.add(Rectangle::new(11000.0, 6400.0))),
         MeshMaterial2d(sea.clone()),
         Transform::from_xyz(0.0, 300.0, layers::OCEAN),
+        OceanQuad,
     ));
     commands.insert_resource(Sea {
         material: sea,
@@ -181,6 +210,8 @@ fn spawn_world(
     assets: Res<GameAssets>,
     world: Res<ClientWorld>,
     sea: Option<ResMut<Sea>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut colors: ResMut<Assets<ColorMaterial>>,
 ) {
     let map = &world.0;
     // O shader recebe a terra nova no próximo quadro.
@@ -204,6 +235,42 @@ fn spawn_world(
     let danger = Color::srgb(1.0, 0.82, 0.78);
     for &(text, x, y) in &map.features().labels {
         label(&mut commands, text, Vec2::new(x, y), 16.0, danger);
+    }
+    spawn_gates(&mut commands, map, &mut meshes, &mut colors);
+}
+
+/// Portões de zona (MV-066): anel no vão do paredão e, do lado de dentro,
+/// o nome da zona para onde ele leva.
+fn spawn_gates(
+    commands: &mut Commands,
+    map: &WorldMap,
+    meshes: &mut Assets<Mesh>,
+    colors: &mut Assets<ColorMaterial>,
+) {
+    let features = map.features();
+    let ring = meshes.add(Annulus::new(GATE_RING_INNER, GATE_RING_OUTER));
+    let glow = colors.add(ColorMaterial::from(Color::srgba(0.85, 0.95, 1.0, 0.35)));
+    for exit in &features.exits {
+        let (from, to) = (&features.areas[exit.from], &features.areas[exit.to]);
+        let gate = Vec2::new(exit.x, exit.y);
+        let inward = (Vec2::new(from.x, from.y) - gate).normalize_or_zero();
+        commands.spawn((
+            Mesh2d(ring.clone()),
+            MeshMaterial2d(glow.clone()),
+            Transform::from_translation(gate.extend(layers::PROPS)),
+        ));
+        let text = format!("→ {}", crate::i18n::tr(to.name));
+        commands.spawn((
+            Text2d::new(text),
+            TextLayout::new_with_no_wrap(),
+            TextFont {
+                font_size: 18.0,
+                ..default()
+            },
+            TextColor(Color::srgb(0.95, 0.97, 1.0)),
+            Anchor::Center,
+            Transform::from_translation((gate + inward * 420.0).extend(layers::LABELS)),
+        ));
     }
 }
 

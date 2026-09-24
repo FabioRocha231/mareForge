@@ -230,7 +230,12 @@ impl PortalDirector {
         let Some(slot) = self.arenas.iter().position(Option::is_none) else {
             return;
         };
-        let Some(origin) = self.sample_open_sea(map, map.features().bounds) else {
+        let sectors = &map.features().sea_sectors;
+        let pick = (self.rng.next_f32() * sectors.len() as f32) as usize;
+        let Some(&sector) = sectors.get(pick.min(sectors.len().saturating_sub(1))) else {
+            return;
+        };
+        let Some(origin) = self.sample_open_sea(map, sector) else {
             return;
         };
         let center = FOG_SLOTS[slot];

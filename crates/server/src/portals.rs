@@ -50,6 +50,7 @@ fn advance_portals(
     map: Res<ServerWorldMap>,
     mut portals: ResMut<ServerPortals>,
     mut ships: Query<&mut ServerShip>,
+    mut npcs: Query<&mut crate::npc::NpcShip>,
 ) {
     let now = time.elapsed_secs_f64();
     let closed = portals.0.tick(now, &map.0);
@@ -81,6 +82,14 @@ fn advance_portals(
             (ship.motion.x, ship.motion.y) = dev_spawn_point(&map.0);
             continue;
         }
+        // MV-066: portão de zona. Estático e sem carência — a chegada fica
+        // fora do portão de volta.
+        if let Some(exit) = map.0.exit_at(x, y) {
+            let to = map.0.features().areas[exit.to].name;
+            info!(ship_id = ship.ship_id, to, "navio cruzou para outra zona");
+            (ship.motion.x, ship.motion.y) = exit.dest;
+            continue;
+        }
         if let Some((dest_x, dest_y)) = portals.0.transit(ship.ship_id, x, y, now) {
             let zone = map.0.zone_at(dest_x, dest_y).map(|z| z.name).unwrap_or("?");
             info!(ship_id = ship.ship_id, zone, "navio atravessou um portal");
@@ -88,6 +97,28 @@ fn advance_portals(
             ship.motion.y = dest_y;
         }
     }
+    for mut npc in &mut npcs {
+        cross_npc(&map.0, &mut npc);
+    }
+}
+
+/// NPC num portão de zona: quem tem o outro lado na rota (caravana)
+/// atravessa e segue a rota; o resto (patrulha, perseguição) bate no
+/// paredão e volta para dentro da própria zona.
+fn cross_npc(map: &marvyr_domain_world::WorldMap, npc: &mut crate::npc::NpcShip) {
+    let Some(exit) = map.exit_at(npc.motion.x, npc.motion.y).copied() else {
+        return;
+    };
+    if let Some(index) = npc.ai.route.iter().position(|point| *point == exit.dest) {
+        (npc.motion.x, npc.motion.y) = exit.dest;
+        npc.ai.next_waypoint = index + 1;
+        return;
+    }
+    let area = &map.features().areas[exit.from];
+    let (dx, dy) = (exit.x - area.x, exit.y - area.y);
+    let len = dx.hypot(dy).max(f32::EPSILON);
+    let inside = area.radius - 150.0;
+    (npc.motion.x, npc.motion.y) = (area.x + dx / len * inside, area.y + dy / len * inside);
 }
 
 fn wire_kind(kind: PortalKind) -> PortalKindWire {

@@ -35,6 +35,9 @@ pub struct NodeIdCounter(pub u32);
 /// resto segue a região do slice (MF-020: disponibilidade distinta).
 fn resource_of_node(name: &str, region: &str, dev: &DevItems) -> Option<ItemDefinitionId> {
     match name {
+        // MV-066: portos livres têm madeira e minério na mesma baía.
+        "Mata Costeira" => return Some(dev.timber),
+        "Jazida Costeira" => return Some(dev.ore),
         "Recife Abissal" => return Some(dev.abyssal_pearl),
         "Coração da Cerração" => return Some(dev.fog_essence),
         "Veio Abissal" => return Some(dev.abyssal_amber),

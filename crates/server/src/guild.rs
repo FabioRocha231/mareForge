@@ -68,17 +68,20 @@ pub struct ServerGuild {
 }
 
 /// Portos do mapa como (região, sítio) — nome da região = nome do porto.
+/// Posição na carta de zonas (MV-066): a distância do contrato é a de
+/// viagem, não a do plano onde as zonas moram longe umas das outras.
 fn port_sites(map: &WorldMap) -> Vec<(RegionId, PortSite<'static>)> {
     map.regions()
         .iter()
         .filter_map(|region| {
             let port = region.port.as_ref()?;
+            let (x, y) = map.chart_position(port.x, port.y);
             Some((
                 region.id,
                 PortSite {
                     name: region.name,
-                    x: port.x,
-                    y: port.y,
+                    x,
+                    y,
                 },
             ))
         })

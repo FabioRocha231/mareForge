@@ -1116,7 +1116,8 @@ pub(crate) fn spawn_ship_for(
 
 /// Onde um navio salvo reaparece (MV-065): o mundo pode ter trocado de seed
 /// desde o save — atracado volta ao cais do seu porto; no mar, sai de dentro
-/// da terra.
+/// da terra; fora de qualquer mar declarado (o mundo antigo), volta à doca
+/// inicial.
 pub(crate) fn restored_position(
     map: &WorldMap,
     presence: VesselPresence,
@@ -1132,6 +1133,9 @@ pub(crate) fn restored_position(
         {
             return (port.x, port.y);
         }
+    }
+    if map.zone_at(x, y).is_err() {
+        return map.features().spawn;
     }
     map.push_out_of_land(x, y, HULL_CLEARANCE).unwrap_or((x, y))
 }
@@ -3084,8 +3088,10 @@ mod tests {
         let map = WorldMap::from_seed(DEFAULT_WORLD_SEED);
         let features = map.features();
         assert_eq!(features.hidden_islands.len(), 4);
-        assert_eq!(features.nodes.len(), 26);
-        assert_eq!(map.regions().len(), 3);
+        // 3 portos fixos + 1-2 portos livres, cada um com sua baía de nós.
+        assert!(features.nodes.len() >= 31);
+        assert!(map.regions().len() >= 4);
+        assert!(features.areas.len() >= 8);
         let spawn = features.spawn;
         assert_eq!(
             map.zone_at(spawn.0, spawn.1).unwrap().tier,
@@ -3101,9 +3107,19 @@ mod tests {
         // Coordenada do porto no mapa antigo: no mundo novo é outro lugar.
         let docked = restored_position(&map, VesselPresence::Docked(mina.id), 600.0, 0.0);
         assert_eq!(docked, (port.x, port.y));
-        let coast = map.land()[0];
+        let coast = map
+            .land()
+            .iter()
+            .find(|m| !m.cliff && m.radius < 40.0)
+            .copied()
+            .unwrap();
         let (x, y) = restored_position(&map, VesselPresence::AtSea, coast.x, coast.y);
         assert!(map.push_out_of_land(x, y, HULL_CLEARANCE - 0.1).is_none());
+        // Coordenada do mapa antigo, hoje fora de qualquer zona: doca inicial.
+        assert_eq!(
+            restored_position(&map, VesselPresence::AtSea, -300.0, 0.0),
+            map.features().spawn
+        );
     }
 
     #[test]

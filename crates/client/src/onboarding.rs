@@ -757,13 +757,24 @@ fn step_target(
             .filter(|node| node.stock > 0)
             .min_by(|a, b| me.distance(a.pos).total_cmp(&me.distance(b.pos)))
             .map(|node| (node.resource_name.clone(), node.pos)),
-        Step::Dock | Step::Voyage => map?
-            .regions()
-            .iter()
-            .filter_map(|region| region.port.as_ref())
-            .filter(|port| step == Step::Dock || Some(port.name) != first_port)
-            .map(|port| (port.name.to_owned(), Vec2::new(port.x, port.y)))
-            .min_by(|a, b| me.distance(a.1).total_cmp(&me.distance(b.1))),
+        Step::Dock | Step::Voyage => {
+            // MV-066: "mais perto" é na carta de zonas, e a linha aponta para
+            // o próximo portão do caminho até o porto.
+            let map = map?;
+            let chart = |x: f32, y: f32| Vec2::from(map.chart_position(x, y));
+            let here = chart(me.x, me.y);
+            let port = map
+                .regions()
+                .iter()
+                .filter_map(|region| region.port.as_ref())
+                .filter(|port| step == Step::Dock || Some(port.name) != first_port)
+                .min_by(|a, b| {
+                    here.distance(chart(a.x, a.y))
+                        .total_cmp(&here.distance(chart(b.x, b.y)))
+                })?;
+            let hop = map.next_hop((me.x, me.y), (port.x, port.y))?;
+            Some((port.name.to_owned(), Vec2::from(hop)))
+        }
         _ => None,
     }
 }

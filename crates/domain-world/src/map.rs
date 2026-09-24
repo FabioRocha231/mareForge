@@ -50,6 +50,10 @@ pub const MAELSTROM_POINTS: [(f32, f32); 3] = [
 ];
 
 const WALL_RADIUS: f32 = 170.0;
+/// Faixa do paredão além do raio navegável de uma zona.
+pub(crate) const AREA_WALL_BAND: f32 = 2.0 * WALL_RADIUS;
+/// Distância, na carta, entre zonas vizinhas (≈ viagem de portão a portão).
+pub const CHART_CELL: f32 = 2800.0;
 
 /// Terra das instâncias: anel de parede em cada cerração, corredor de Sorvedouro
 /// e rochedos de dentro. Determinístico (mesma geometria no servidor e no
@@ -61,53 +65,45 @@ pub(crate) fn instance_land() -> Vec<LandMass> {
         let count = (std::f32::consts::TAU * ring / 200.0).ceil() as usize;
         for k in 0..count {
             let a = k as f32 / count as f32 * std::f32::consts::TAU;
-            land.push(LandMass {
-                x: cx + a.cos() * ring,
-                y: cy + a.sin() * ring,
-                radius: WALL_RADIUS,
-            });
+            land.push(LandMass::cliff(
+                cx + a.cos() * ring,
+                cy + a.sin() * ring,
+                WALL_RADIUS,
+            ));
         }
         for k in 0..5 {
             let a = k as f32 * 1.3 + slot as f32;
             let r = 190.0 + (k % 3) as f32 * 90.0;
-            land.push(LandMass {
-                x: cx + a.cos() * r,
-                y: cy + a.sin() * r,
-                radius: 22.0 + (k % 3) as f32 * 8.0,
-            });
+            land.push(LandMass::cliff(
+                cx + a.cos() * r,
+                cy + a.sin() * r,
+                22.0 + (k % 3) as f32 * 8.0,
+            ));
         }
     }
     let wall_x = MAELSTROM_HALF_WIDTH + WALL_RADIUS;
     let mut y = -MAELSTROM_HALF_LENGTH - WALL_RADIUS;
     while y <= MAELSTROM_HALF_LENGTH + WALL_RADIUS {
         for side in [-1.0, 1.0] {
-            land.push(LandMass {
-                x: MAELSTROM_X + side * wall_x,
-                y,
-                radius: WALL_RADIUS,
-            });
+            land.push(LandMass::cliff(MAELSTROM_X + side * wall_x, y, WALL_RADIUS));
         }
         y += 170.0;
     }
     for end in [-1.0, 1.0] {
         let mut x = -wall_x;
         while x <= wall_x {
-            land.push(LandMass {
-                x: MAELSTROM_X + x,
-                y: end * (MAELSTROM_HALF_LENGTH + WALL_RADIUS),
-                radius: WALL_RADIUS,
-            });
+            land.push(LandMass::cliff(
+                MAELSTROM_X + x,
+                end * (MAELSTROM_HALF_LENGTH + WALL_RADIUS),
+                WALL_RADIUS,
+            ));
             x += 170.0;
         }
     }
     // Slalom de rochedos no corredor, longe dos pontos de chegada.
     for (i, y) in [-1300.0, -500.0, 500.0, 1300.0].into_iter().enumerate() {
         let side = if i % 2 == 0 { -1.0 } else { 1.0 };
-        land.push(LandMass {
-            x: MAELSTROM_X + side * 110.0,
-            y,
-            radius: 34.0,
-        });
+        land.push(LandMass::cliff(MAELSTROM_X + side * 110.0, y, 34.0));
     }
     land
 }
@@ -121,9 +117,8 @@ pub(crate) fn zone(name: &'static str, tier: RiskTier, x: f32, y: f32, radius: f
     }
 }
 
-/// Zonas das instâncias e o alto-mar que cobre todo o resto — sempre as
-/// últimas declaradas (menor prioridade).
-pub(crate) fn instance_and_open_sea_zones() -> Vec<Zone> {
+/// Zonas das instâncias (Cerração e Sorvedouro) — declaradas por último.
+pub(crate) fn instance_zones() -> Vec<Zone> {
     let mut zones: Vec<Zone> = FOG_SLOTS
         .into_iter()
         .map(|(x, y)| zone(FOG_ZONE, RiskTier::Lawless, x, y, FOG_RADIUS + 40.0))
@@ -139,7 +134,6 @@ pub(crate) fn instance_and_open_sea_zones() -> Vec<Zone> {
         ));
         y += 280.0;
     }
-    zones.push(zone("Mar Sem Lei", RiskTier::Lawless, 0.0, 0.0, 8000.0));
     zones
 }
 
@@ -189,6 +183,62 @@ impl WorldMap {
 
     pub fn features(&self) -> &Features {
         &self.features
+    }
+
+    /// Zona (do grafo) que contém o ponto, contando a faixa do paredão.
+    pub fn area_at(&self, x: f32, y: f32) -> Option<usize> {
+        self.features.areas.iter().position(|area| {
+            (x - area.x).powi(2) + (y - area.y).powi(2) <= (area.radius + AREA_WALL_BAND).powi(2)
+        })
+    }
+
+    /// Portão de saída sob o ponto.
+    pub fn exit_at(&self, x: f32, y: f32) -> Option<&crate::features::ZoneExit> {
+        self.features.exits.iter().find(|exit| exit.catches(x, y))
+    }
+
+    /// Próximo ponto no caminho de `from` até `to`: o próprio destino na
+    /// mesma zona, senão o portão do primeiro salto (busca em largura no
+    /// grafo de zonas). `None` se não houver caminho.
+    pub fn next_hop(&self, from: (f32, f32), to: (f32, f32)) -> Option<(f32, f32)> {
+        let start = self.area_at(from.0, from.1)?;
+        let goal = self.area_at(to.0, to.1)?;
+        if start == goal {
+            return Some(to);
+        }
+        let exits = &self.features.exits;
+        let mut first_exit: Vec<Option<usize>> = vec![None; self.features.areas.len()];
+        let mut seen = vec![false; self.features.areas.len()];
+        let mut queue = std::collections::VecDeque::from([start]);
+        seen[start] = true;
+        while let Some(area) = queue.pop_front() {
+            for (index, exit) in exits.iter().enumerate().filter(|(_, e)| e.from == area) {
+                if seen[exit.to] {
+                    continue;
+                }
+                seen[exit.to] = true;
+                first_exit[exit.to] = first_exit[area].or(Some(index));
+                if exit.to == goal {
+                    let exit = &exits[first_exit[goal]?];
+                    return Some((exit.x, exit.y));
+                }
+                queue.push_back(exit.to);
+            }
+        }
+        None
+    }
+
+    /// Posição na carta de zonas: células a `CHART_CELL` m umas das outras,
+    /// cada zona desenhada em volta do seu centro. Distância na carta ≈
+    /// distância de viagem (contratos, "porto mais perto").
+    pub fn chart_position(&self, x: f32, y: f32) -> (f32, f32) {
+        match self.area_at(x, y).map(|index| &self.features.areas[index]) {
+            Some(area) => (
+                area.cell.0 as f32 * CHART_CELL + (x - area.x),
+                area.cell.1 as f32 * CHART_CELL + (y - area.y),
+            ),
+            None => (x, y),
+        }
     }
 
     /// Zona na posição. Primeira zona declarada que contém o ponto vence;
@@ -318,7 +368,15 @@ impl WorldMap {
             BLACK_WATERS_CENTER.1,
             560.0,
         );
-        zones.extend(instance_and_open_sea_zones());
+        zones.extend(instance_zones());
+        // O alto-mar clássico cobre todo o resto do mapa feito à mão.
+        zones.push(self::zone(
+            "Mar Sem Lei",
+            RiskTier::Lawless,
+            0.0,
+            0.0,
+            8000.0,
+        ));
 
         let regions = vec![
             Region {
@@ -368,11 +426,7 @@ impl WorldMap {
                 (950.0, -440.0, 250.0),
                 (1150.0, 0.0, 260.0),
             ] {
-                land.push(LandMass {
-                    x: side * x,
-                    y,
-                    radius,
-                });
+                land.push(LandMass::new(side * x, y, radius));
             }
         }
         for (x, y, radius) in [
@@ -395,7 +449,7 @@ impl WorldMap {
             (-300.0, 1960.0, 38.0),
             (60.0, 2110.0, 28.0),
         ] {
-            land.push(LandMass { x, y, radius });
+            land.push(LandMass::new(x, y, radius));
         }
         land.extend(instance_land());
 

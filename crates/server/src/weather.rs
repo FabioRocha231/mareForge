@@ -18,9 +18,12 @@ use crate::sets::SimulationSet;
 #[derive(Resource)]
 pub struct ServerWeather(pub Weather);
 
-/// Área onde tempestades nascem: a caixa do mar principal do mapa.
-fn storm_bounds(map: &WorldMap) -> WeatherBounds {
-    let (min_x, max_x, min_y, max_y) = map.features().bounds;
+/// Área onde a próxima tempestade pode nascer: um dos setores de mar aberto
+/// do mapa, em rodízio (MV-066: as zonas moram longe umas das outras, uma
+/// caixa só cobriria mais vazio que mar).
+fn storm_bounds(map: &WorldMap, turn: usize) -> WeatherBounds {
+    let sectors = &map.features().sea_sectors;
+    let (min_x, max_x, min_y, max_y) = sectors[turn % sectors.len().max(1)];
     WeatherBounds {
         min_x,
         min_y,
@@ -82,9 +85,11 @@ pub(crate) fn storm_allowed(map: &WorldMap, x: f32, y: f32) -> bool {
 }
 
 fn advance_weather(time: Res<Time>, map: Res<ServerWorldMap>, mut weather: ResMut<ServerWeather>) {
+    // Troca de setor a cada 7 s: tempestades nascem espalhadas pelas zonas.
+    let turn = (time.elapsed_secs() / 7.0) as usize;
     weather
         .0
-        .step(time.delta_secs(), storm_bounds(&map.0), |x, y| {
+        .step(time.delta_secs(), storm_bounds(&map.0, turn), |x, y| {
             storm_allowed(&map.0, x, y)
         });
 }
@@ -202,7 +207,7 @@ mod tests {
         let mut weather = Weather::new(99);
         let dt = 1.0 / 30.0;
         for _ in 0..(30 * 60 * 30) {
-            weather.step(dt, storm_bounds(&map), |x, y| storm_allowed(&map, x, y));
+            weather.step(dt, storm_bounds(&map, 0), |x, y| storm_allowed(&map, x, y));
             for storm in weather.storms().iter().filter(|s| s.age <= dt * 1.5) {
                 for (px, py) in [(-600.0_f32, 0.0_f32), (600.0, 0.0)] {
                     let d = ((storm.x - px).powi(2) + (storm.y - py).powi(2)).sqrt();

@@ -9,9 +9,29 @@ pub struct LandMass {
     pub x: f32,
     pub y: f32,
     pub radius: f32,
+    /// Paredão (borda de zona ou de instância): pedra, sem praia nem mata.
+    pub cliff: bool,
 }
 
 impl LandMass {
+    pub const fn new(x: f32, y: f32, radius: f32) -> Self {
+        Self {
+            x,
+            y,
+            radius,
+            cliff: false,
+        }
+    }
+
+    pub const fn cliff(x: f32, y: f32, radius: f32) -> Self {
+        Self {
+            x,
+            y,
+            radius,
+            cliff: true,
+        }
+    }
+
     pub fn contains(&self, x: f32, y: f32, clearance: f32) -> bool {
         let reach = self.radius + clearance;
         let (dx, dy) = (x - self.x, y - self.y);
@@ -51,11 +71,7 @@ pub fn push_out_of_land(masses: &[LandMass], x: f32, y: f32, clearance: f32) -> 
 mod tests {
     use super::*;
 
-    const ROCK: LandMass = LandMass {
-        x: 0.0,
-        y: 0.0,
-        radius: 10.0,
-    };
+    const ROCK: LandMass = LandMass::new(0.0, 0.0, 10.0);
 
     #[test]
     fn water_point_is_untouched() {
@@ -70,14 +86,7 @@ mod tests {
 
     #[test]
     fn overlapping_discs_push_out_of_both() {
-        let masses = [
-            ROCK,
-            LandMass {
-                x: 14.0,
-                y: 0.0,
-                radius: 10.0,
-            },
-        ];
+        let masses = [ROCK, LandMass::new(14.0, 0.0, 10.0)];
         let (x, y) = push_out_of_land(&masses, 7.0, 1.0, 2.0).unwrap();
         assert!(masses.iter().all(|m| !m.contains(x, y, 2.0 - 1e-3)));
     }
