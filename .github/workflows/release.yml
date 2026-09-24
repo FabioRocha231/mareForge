@@ -1,0 +1,103 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Versão sem o "v" (ex.: 0.1.0-alpha.1)'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux audio build dependencies
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y pkg-config libasound2-dev libudev-dev
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+  windows:
+    needs: checks
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # O script é bash: sem isto o checkout no Windows vira CRLF e quebra.
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+      - id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then v="$GITHUB_REF_NAME"; else v="$INPUT_VERSION"; fi
+          echo "version=${v#v}" >> "$GITHUB_OUTPUT"
+      - name: Package
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          MARVYR_DEFAULT_SERVER: ${{ vars.MARVYR_DEFAULT_SERVER }}
+          MARVYR_DEFAULT_AUTH_URL: ${{ vars.MARVYR_DEFAULT_AUTH_URL }}
+        run: bash scripts/package_windows.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Marvyr-windows
+          path: dist/Marvyr-v${{ steps.version.outputs.version }}-windows-x86_64.zip
+          if-no-files-found: error
+      - if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/Marvyr-v${{ steps.version.outputs.version }}-windows-x86_64.zip
+          prerelease: ${{ contains(steps.version.outputs.version, '-') }}
+
+  itch:
+    needs: windows
+    if: vars.ITCH_TARGET != ''
+    runs-on: ubuntu-latest
+    environment: itch
+    env:
+      VERSION: ${{ needs.windows.outputs.version }}
+    steps:
+      - id: gate
+        env:
+          BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}
+        run: |
+          if [ -n "$BUTLER_API_KEY" ]; then echo "ok=true" >> "$GITHUB_OUTPUT"
+          else echo "::notice::BUTLER_API_KEY ausente; pulando itch."; fi
+      - if: steps.gate.outputs.ok == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: Marvyr-windows
+          path: dist
+      - if: steps.gate.outputs.ok == 'true'
+        run: |
+          unzip -q "dist/Marvyr-v${VERSION}-windows-x86_64.zip" -d dist/windows
+          curl -fsSL -o butler.zip https://broth.itch.zone/butler/linux-amd64/LATEST/archive/default
+          unzip -q butler.zip -d butler
+          chmod +x butler/butler
+          butler/butler -V
+      - if: steps.gate.outputs.ok == 'true'
+        env:
+          BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}
+          ITCH_TARGET: ${{ vars.ITCH_TARGET }}
+        run: butler/butler push dist/windows "${ITCH_TARGET}:windows" --userversion "$VERSION"

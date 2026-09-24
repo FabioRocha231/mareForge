@@ -12,6 +12,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
       - name: Install Linux audio build dependencies
         run: sudo apt-get update && sudo apt-get install --no-install-recommends -y pkg-config libasound2-dev libudev-dev
       - run: cargo fmt --all -- --check

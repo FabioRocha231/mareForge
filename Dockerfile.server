@@ -1,0 +1,42 @@
+# syntax=docker/dockerfile:1.7
+# Servidor headless do Marvyr (UDP). Build: docker build -f Dockerfile.server .
+# O servidor usa bevy sem default-features: nenhuma lib gráfica/áudio é
+# necessária. As migrations entram no binário via sqlx::migrate!.
+
+FROM rust:1-bookworm AS builder
+WORKDIR /app
+# Só o que o build precisa (sem target/, dist/ nem rust-toolchain.toml: o
+# toolchain estável da imagem já serve e evita um download do rustup).
+COPY Cargo.toml Cargo.lock ./
+COPY crates crates
+COPY migrations migrations
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/app/target \
+    cargo build --release --locked -p marvyr-server \
+    && cp target/release/marvyr-server /usr/local/bin/marvyr-server
+
+FROM debian:bookworm-slim AS production
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system --gid 1001 marvyr \
+    && useradd --system --uid 1001 --gid marvyr --home-dir /data --no-create-home marvyr \
+    && mkdir -p /data/reports \
+    && chown -R marvyr:marvyr /data
+COPY --from=builder --chown=root:root /usr/local/bin/marvyr-server /usr/local/bin/marvyr-server
+
+ENV MARVYR_PORT=5000 \
+    MARVYR_ENV=production \
+    RUST_LOG=info,marvyr_server=info \
+    MARVYR_REPORT_DIR=/data/reports
+
+# WORKDIR no volume: qualquer arquivo relativo que o servidor grave cai em /data.
+WORKDIR /data
+VOLUME /data
+USER marvyr
+EXPOSE 5000/udp
+# ponytail: sem dumb-init — o servidor roda como PID 1 e precisa instalar
+# o próprio handler de SIGTERM (PID 1 ignora sinais sem handler; o Docker
+# então mata com SIGKILL após o grace period). Não cria processos filhos.
+STOPSIGNAL SIGTERM
+CMD ["marvyr-server"]
