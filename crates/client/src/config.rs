@@ -203,6 +203,12 @@ pub fn asset_root() -> PathBuf {
         if beside.join("marvyr").is_dir() {
             return beside;
         }
+        // macOS: Marvyr.app/Contents/MacOS/Marvyr lê de Contents/Resources,
+        // onde o selo da assinatura cobre os arquivos sem xattrs (que o zip perde).
+        let bundled = dir.join("..").join("Resources").join("assets");
+        if bundled.join("marvyr").is_dir() {
+            return bundled;
+        }
     }
     if !PUBLIC_BUILD {
         let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))

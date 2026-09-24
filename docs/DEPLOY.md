@@ -171,7 +171,7 @@ com Git Bash; o macOS precisa do alvo `x86_64-apple-darwin` para o universal).
 O script é a fonte única do conteúdo do pacote: executável, `assets/`
 (`marvyr`, `external`, `shaders`; `dev` fica fora), `LICENSE`,
 `ATTRIBUTION.md`, `VERSION` e `README.txt`. O cliente procura `assets/` e
-`marvyr.toml` ao lado do executável; no macOS, em `Marvyr.app/Contents/MacOS`.
+`marvyr.toml` ao lado do executável; no macOS os assets ficam em `Marvyr.app/Contents/Resources` (dentro do selo da assinatura).
 
 Ferramenta de playtest em dev (não distribuída): `cargo run --bin marvyr_playtest --release`.
 
