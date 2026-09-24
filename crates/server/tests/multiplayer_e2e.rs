@@ -22,8 +22,8 @@ use marvyr_client::net::{
 };
 use marvyr_domain_combat::{BroadsideBattery, BroadsideSide};
 use marvyr_protocol::{
-    AssignShip, FireBroadside, ServerWelcome, ShipDestroyed, ShipInput, ShipState, WalletUpdated,
-    WorldSnapshot,
+    AssignShip, FireBroadside, GatherNode, GatherResult, OnboardingProgress, ServerWelcome,
+    ShipDestroyed, ShipInput, ShipState, WalletUpdated, WorldSnapshot,
 };
 use marvyr_server::net::{ServerNetPlugin, ServerShip, ServerTransportOverride};
 use marvyr_server::plugin::ServerPlugin;
@@ -42,6 +42,7 @@ struct Recorded {
     snapshots: Vec<WorldSnapshot>,
     destroyed: Vec<ShipDestroyed>,
     wallets: Vec<WalletUpdated>,
+    gathers: Vec<GatherResult>,
 }
 
 impl Recorded {
@@ -78,6 +79,7 @@ impl Plugin for RecordPlugin {
                 record_snapshot,
                 record_destroyed,
                 record_wallet,
+                record_gather,
             ),
         );
     }
@@ -125,6 +127,15 @@ fn record_wallet(
 ) {
     for event in events.read() {
         recorded.wallets.push(*event.message());
+    }
+}
+
+fn record_gather(
+    mut events: EventReader<ClientReceiveMessage<GatherResult>>,
+    mut recorded: ResMut<Recorded>,
+) {
+    for event in events.read() {
+        recorded.gathers.push(event.message().clone());
     }
 }
 
@@ -739,4 +750,31 @@ fn sea_events_spawn_kraken_and_treasure_fleet() {
         .world()
         .resource::<marvyr_server::net::Metrics>();
     assert_eq!(metrics.sea_events_started, 2);
+}
+
+/// MV-062: recusa de coleta chega com motivo legível, e a mensagem v16
+/// anexada no fim do registro (`OnboardingProgress`) decodifica no servidor.
+#[test]
+fn failed_gather_carries_reason_and_onboarding_is_recorded() {
+    let mut harness = Harness::new();
+    harness.wait_for_handshake();
+
+    harness.send_a(&OnboardingProgress {
+        step: 0,
+        skipped: false,
+    });
+    harness.send_a(&GatherNode { node_id: 9_999 });
+    let answered = harness.run_until(120, |harness| !harness.recorded_a().gathers.is_empty());
+    assert!(answered, "server should answer the gather intent");
+
+    let result = &harness.recorded_a().gathers[0];
+    assert!(!result.success);
+    assert_eq!(result.gathered, 0);
+    assert!(!result.reason.is_empty(), "refusal must explain itself");
+
+    let metrics = harness
+        .server_app
+        .world()
+        .resource::<marvyr_server::net::Metrics>();
+    assert_eq!(metrics.onboarding.welcomed(), 1);
 }

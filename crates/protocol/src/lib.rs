@@ -58,7 +58,10 @@ use serde::{Deserialize, Serialize};
 ///      carrega o JWT do `marvyr-auth`. Gameplay: dano de leme, reparo no
 ///      mar, abordagem, tripulação, eventos de mundo, mapas do tesouro e
 ///      ilhas ocultas.
-pub const PROTOCOL_VERSION: u16 = 15;
+/// v16: MV-062 — onboarding. `LootResult`/`GatherResult`/`CraftResult`
+///      ganham `reason` (motivo PT-BR da recusa, vazio no sucesso) e o
+///      client reporta `OnboardingProgress` (telemetria, nunca concede nada).
+pub const PROTOCOL_VERSION: u16 = 16;
 
 /// Rótulo de versão da build (`MARVYR_VERSION_LABEL` no build de release,
 /// senão a versão do Cargo). Client e servidor mostram no log e no HUD.
@@ -328,6 +331,15 @@ pub struct IslandsInSight {
     pub islands: Vec<IslandState>,
 }
 
+/// v16: progresso do onboarding (telemetria de playtest). `step` 0 = boas-
+/// vindas exibidas, 1..=6 = passos do guia concluídos; `skipped` quando o
+/// jogador pula o guia. O servidor só registra — nunca concede nada.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OnboardingProgress {
+    pub step: u8,
+    pub skipped: bool,
+}
+
 /// Troca de munição do próprio navio (MF-059). O servidor guarda e aplica
 /// no próximo disparo; o veredito aparece em `ShipState.ammo`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -519,10 +531,12 @@ pub struct LootWreck {
 }
 
 /// Resultado da tentativa de saque (MF-015: atômico, capacity-aware).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LootResult {
     pub wreck_id: u32,
     pub success: bool,
+    /// v16: motivo da recusa para o jogador (vazio no sucesso).
+    pub reason: String,
 }
 
 /// A zona real do navio mudou (PRD §10, MF-017). O servidor define a zona;
@@ -571,12 +585,14 @@ pub struct GatherNode {
 }
 
 /// Resultado da tentativa de coleta (MF-019).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GatherResult {
     pub node_id: u32,
     pub success: bool,
     /// Unidades efetivamente coletadas (0 quando falha).
     pub gathered: u32,
+    /// v16: motivo da recusa para o jogador (vazio no sucesso).
+    pub reason: String,
 }
 
 /// Uma receita do catálogo do servidor, pronta para exibição (MF-021/022).
@@ -617,10 +633,12 @@ pub struct CraftItem {
 }
 
 /// Resultado da tentativa de fabricação/construção.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CraftResult {
     pub recipe_id: u32,
     pub success: bool,
+    /// v16: motivo da recusa para o jogador (vazio no sucesso).
+    pub reason: String,
 }
 
 /// Linha do catálogo de itens (MF-023): id real para os intents, nome e
@@ -815,8 +833,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn current_protocol_version_is_fifteen() {
-        assert_eq!(PROTOCOL_VERSION, 15);
+    fn current_protocol_version_is_sixteen() {
+        assert_eq!(PROTOCOL_VERSION, 16);
         assert_eq!(
             ClientHello::current("token").protocol_version,
             PROTOCOL_VERSION
@@ -1166,7 +1184,8 @@ mod tests {
 
         let result = LootResult {
             wreck_id: 9,
-            success: true,
+            success: false,
+            reason: String::from("Longe demais do destroço: chegue mais perto."),
         };
         let bytes = bincode::serialize(&result).unwrap();
         assert_eq!(bincode::deserialize::<LootResult>(&bytes).unwrap(), result);
@@ -1254,6 +1273,7 @@ mod tests {
             node_id: 4,
             success: true,
             gathered: 10,
+            reason: String::new(),
         };
         let bytes = bincode::serialize(&result).unwrap();
         assert_eq!(
@@ -1300,8 +1320,22 @@ mod tests {
         let result = CraftResult {
             recipe_id: 3,
             success: false,
+            reason: String::from("Faltam materiais: 5 Minério."),
         };
         let bytes = bincode::serialize(&result).unwrap();
         assert_eq!(bincode::deserialize::<CraftResult>(&bytes).unwrap(), result);
+    }
+
+    #[test]
+    fn onboarding_progress_roundtrips() {
+        let progress = OnboardingProgress {
+            step: 3,
+            skipped: true,
+        };
+        let bytes = bincode::serialize(&progress).unwrap();
+        assert_eq!(
+            bincode::deserialize::<OnboardingProgress>(&bytes).unwrap(),
+            progress
+        );
     }
 }

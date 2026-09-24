@@ -211,7 +211,12 @@ pub fn handle_gather(
             marvyr_domain_ships::VesselPresence::Docked(_)
         ) {
             info!(node_num, "coleta recusada: atracado (MF-036)");
-            send_failure(&mut connection_manager, client_id, node_num);
+            send_failure(
+                &mut connection_manager,
+                client_id,
+                node_num,
+                "Atracado: desatraque para coletar no mar.",
+            );
             continue;
         };
         let Some(mut server_node) = nodes
@@ -219,13 +224,11 @@ pub fn handle_gather(
             .find(|server_node| server_node.node_num == node_num)
         else {
             warn!(node_num, "coleta de nó inexistente");
-            let _ = connection_manager.send_message::<ReliableChannel, _>(
+            send_failure(
+                &mut connection_manager,
                 client_id,
-                &GatherResult {
-                    node_id: node_num,
-                    success: false,
-                    gathered: 0,
-                },
+                node_num,
+                "Recurso não encontrado: procure outro no mapa.",
             );
             continue;
         };
@@ -235,19 +238,34 @@ pub fn handle_gather(
             .in_range(ship.motion.x, ship.motion.y, policy.0.interact_radius)
         {
             info!(node_num, "longe demais do nó para coletar");
-            send_failure(&mut connection_manager, client_id, node_num);
+            send_failure(
+                &mut connection_manager,
+                client_id,
+                node_num,
+                "Longe demais do recurso: chegue mais perto.",
+            );
             continue;
         }
         if server_node.node.is_depleted() {
             info!(node_num, "nó esgotado; aguarde o respawn");
-            send_failure(&mut connection_manager, client_id, node_num);
+            send_failure(
+                &mut connection_manager,
+                client_id,
+                node_num,
+                "Recurso esgotado: volte mais tarde.",
+            );
             continue;
         }
 
         // Quanto cabe no porão? (fail-closed pelo catálogo — ADR-0006)
         let Some(definition) = dev.catalog.get(server_node.node.resource) else {
             warn!(node_num, "recurso do nó fora do catálogo; recusado");
-            send_failure(&mut connection_manager, client_id, node_num);
+            send_failure(
+                &mut connection_manager,
+                client_id,
+                node_num,
+                "Recurso indisponível: tente outro.",
+            );
             continue;
         };
         let free = ship
@@ -262,7 +280,12 @@ pub fn handle_gather(
             .min(affordable);
         if amount == 0 {
             info!(node_num, "porão cheio: coleta rejeitada");
-            send_failure(&mut connection_manager, client_id, node_num);
+            send_failure(
+                &mut connection_manager,
+                client_id,
+                node_num,
+                "Porão cheio: venda ou guarde carga no porto.",
+            );
             continue;
         }
 
@@ -291,6 +314,7 @@ pub fn handle_gather(
                 node_id: node_num,
                 success: true,
                 gathered: taken,
+                reason: String::new(),
             },
         );
         // MV-061: às vezes a rede traz um mapa do tesouro junto.
@@ -312,13 +336,19 @@ pub fn handle_gather(
     }
 }
 
-fn send_failure(connection_manager: &mut ConnectionManager, client_id: ClientId, node_id: u32) {
+fn send_failure(
+    connection_manager: &mut ConnectionManager,
+    client_id: ClientId,
+    node_id: u32,
+    reason: &str,
+) {
     let _ = connection_manager.send_message::<ReliableChannel, _>(
         client_id,
         &GatherResult {
             node_id,
             success: false,
             gathered: 0,
+            reason: reason.to_owned(),
         },
     );
 }

@@ -25,8 +25,8 @@ use marvyr_domain_combat::{
 };
 use marvyr_domain_economy::MarketPriceIndex;
 use marvyr_domain_items::{
-    CargoHold, Custody, EquipmentDefinition, EquipmentSlot, EquipmentStats, ItemCatalog,
-    ItemDefinition, ItemInstance, ItemKind,
+    CargoError, CargoHold, Custody, EquipmentDefinition, EquipmentSlot, EquipmentStats,
+    ItemCatalog, ItemDefinition, ItemInstance, ItemKind,
 };
 use marvyr_domain_ships::{
     compute_ship_stats, dock as dock_vessel, step_motion, undock as undock_vessel, DockPolicy,
@@ -569,6 +569,10 @@ impl Plugin for ServerNetPlugin {
         app.register_message::<marvyr_protocol::SeaEventsUpdate>(ChannelDirection::ServerToClient);
         app.register_message::<marvyr_protocol::TreasureHints>(ChannelDirection::ServerToClient);
         app.register_message::<marvyr_protocol::IslandsInSight>(ChannelDirection::ServerToClient);
+        // v16 (MV-062): SEMPRE no fim — ordem espelhada no client.
+        app.register_message::<marvyr_protocol::OnboardingProgress>(
+            ChannelDirection::ClientToServer,
+        );
         app.add_systems(Startup, start_server);
         app.add_systems(Startup, crate::nodes::spawn_dev_nodes.after(start_server));
         app.add_systems(Startup, crate::npc::setup_npcs.after(start_server));
@@ -607,6 +611,7 @@ impl Plugin for ServerNetPlugin {
                 crate::nodes::handle_gather,
                 crate::crafting::handle_craft,
                 crate::market::handle_storage,
+                crate::playtest::handle_onboarding,
             )
                 .in_set(SimulationSet::Input),
         );
@@ -883,6 +888,8 @@ pub struct Metrics {
     pub treasures_dug: u64,
     /// MV-061: eventos de mundo iniciados.
     pub sea_events_started: u64,
+    /// MV-062: funil do onboarding por personagem (telemetria pura).
+    pub onboarding: crate::playtest::OnboardingTelemetry,
 }
 
 pub enum TripOutcome {
@@ -1699,12 +1706,11 @@ fn handle_loot(
             .find(|(_, wreck)| wreck.wreck_num == wreck_num)
         else {
             warn!(wreck_num, "loot de wreck inexistente");
-            let _ = connection_manager.send_message::<ReliableChannel, _>(
+            send_loot_failure(
+                &mut connection_manager,
                 client_id,
-                &LootResult {
-                    wreck_id: wreck_num,
-                    success: false,
-                },
+                wreck_num,
+                "Destroço não existe mais: procure outro.",
             );
             continue;
         };
@@ -1717,12 +1723,11 @@ fn handle_loot(
             wreck.exclusive_looter,
         ) {
             info!(wreck_num, "janela exclusiva do killer ainda ativa");
-            let _ = connection_manager.send_message::<ReliableChannel, _>(
+            send_loot_failure(
+                &mut connection_manager,
                 client_id,
-                &LootResult {
-                    wreck_id: wreck_num,
-                    success: false,
-                },
+                wreck_num,
+                "Saque reservado ao vencedor do combate: aguarde alguns segundos.",
             );
             continue;
         }
@@ -1731,12 +1736,11 @@ fn handle_loot(
         let dy = ship.motion.y - wreck.y;
         if dx * dx + dy * dy > tuning.interact_radius * tuning.interact_radius {
             info!(wreck_num, "longe demais do wreck para saquear");
-            let _ = connection_manager.send_message::<ReliableChannel, _>(
+            send_loot_failure(
+                &mut connection_manager,
                 client_id,
-                &LootResult {
-                    wreck_id: wreck_num,
-                    success: false,
-                },
+                wreck_num,
+                "Longe demais do destroço: chegue mais perto.",
             );
             continue;
         }
@@ -1749,12 +1753,11 @@ fn handle_loot(
                 wreck_num,
                 "wreck já saqueado neste tick (double loot barrado)"
             );
-            let _ = connection_manager.send_message::<ReliableChannel, _>(
+            send_loot_failure(
+                &mut connection_manager,
                 client_id,
-                &LootResult {
-                    wreck_id: wreck_num,
-                    success: false,
-                },
+                wreck_num,
+                "Destroço já saqueado: procure outro.",
             );
             continue;
         }
@@ -1784,6 +1787,7 @@ fn handle_loot(
                     &LootResult {
                         wreck_id: wreck_num,
                         success: true,
+                        reason: String::new(),
                     },
                 );
                 info!(
@@ -1793,16 +1797,32 @@ fn handle_loot(
             }
             Err(e) => {
                 warn!(wreck_num, error = %e, "porão sem espaço: loot rejeitado");
-                let _ = connection_manager.send_message::<ReliableChannel, _>(
-                    client_id,
-                    &LootResult {
-                        wreck_id: wreck_num,
-                        success: false,
-                    },
-                );
+                let reason = match e {
+                    CargoError::CargoCapacityExceeded { needed, available } => format!(
+                        "Porão cheio (livre {available}, precisa {needed}): venda ou guarde carga no porto."
+                    ),
+                    _ => String::from("Carga do destroço inválida: procure outro."),
+                };
+                send_loot_failure(&mut connection_manager, client_id, wreck_num, &reason);
             }
         }
     }
+}
+
+fn send_loot_failure(
+    connection_manager: &mut ConnectionManager,
+    client_id: ClientId,
+    wreck_id: u32,
+    reason: &str,
+) {
+    let _ = connection_manager.send_message::<ReliableChannel, _>(
+        client_id,
+        &LootResult {
+            wreck_id,
+            success: false,
+            reason: reason.to_owned(),
+        },
+    );
 }
 
 /// Registra a cadeia que decompõe o antigo `simulate_world` (MF-054,
