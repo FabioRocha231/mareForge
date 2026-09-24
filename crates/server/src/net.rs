@@ -621,6 +621,7 @@ impl Plugin for ServerNetPlugin {
         crate::cosmetics::install(app);
         crate::flotsam::install(app);
         crate::renown::install(app);
+        crate::talents::install(app);
         app.register_message::<marvyr_protocol::ReputationUpdate>(ChannelDirection::ServerToClient);
         app.register_message::<marvyr_protocol::WorldEvent>(ChannelDirection::ServerToClient);
         // v15 (MV-061): combate profundo, tripulação, eventos e tesouro.
@@ -645,6 +646,9 @@ impl Plugin for ServerNetPlugin {
         app.register_message::<marvyr_protocol::WearCosmetic>(ChannelDirection::ClientToServer);
         // v19 (MV-067): SEMPRE no fim, espelhado no client.
         app.register_message::<marvyr_protocol::RenownUpdate>(ChannelDirection::ServerToClient);
+        app.register_message::<marvyr_protocol::TalentsSnapshot>(ChannelDirection::ServerToClient);
+        app.register_message::<marvyr_protocol::AllocateTalent>(ChannelDirection::ClientToServer);
+        app.register_message::<marvyr_protocol::RespecTalents>(ChannelDirection::ClientToServer);
         app.add_systems(Startup, start_server);
         app.add_systems(Startup, crate::nodes::spawn_dev_nodes.after(start_server));
         app.add_systems(Startup, crate::npc::setup_npcs.after(start_server));

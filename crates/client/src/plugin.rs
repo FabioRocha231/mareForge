@@ -49,6 +49,7 @@ impl Plugin for ClientPlugin {
             .add_plugins(crate::portals::PortalClientPlugin)
             .add_plugins(crate::chart::ChartPlugin)
             .add_plugins(crate::renown::RenownPlugin)
+            .add_plugins(crate::talents::TalentsPlugin)
             .add_plugins(JuicePlugin)
             .add_plugins(SoundPlugin)
             .add_plugins(WantedHudPlugin)

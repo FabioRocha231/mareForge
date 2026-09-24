@@ -118,6 +118,9 @@ pub trait StateStore: Send + Sync {
     fn load_renown(&self, character: CharacterId) -> Result<u64, String>;
     /// Grava o Renome de vários capitões numa transação.
     fn save_renown(&self, totals: &[(CharacterId, u64)]) -> Result<(), String>;
+    /// Talentos da Rosa dos Ventos (MV-067); vazio se nunca aprendeu.
+    fn load_talents(&self, character: CharacterId) -> Result<Vec<String>, String>;
+    fn save_talents(&self, character: CharacterId, talents: &[String]) -> Result<(), String>;
 }
 
 /// Snapshot JSON em arquivo (`MARVYR_STATE_PATH`), escrita atômica via
@@ -219,10 +222,23 @@ impl StateStore for FileStateStore {
 
     // Dev: Renome vive só na sessão (como os navios neste store).
     fn load_renown(&self, _character: CharacterId) -> Result<u64, String> {
-        Ok(0)
+        // Dev: `MARVYR_DEV_RENOWN=N` faz o capitão nascer com N de Renome
+        // (testar a Rosa dos Ventos sem jogar horas). Só no store de dev.
+        Ok(std::env::var("MARVYR_DEV_RENOWN")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0))
     }
 
     fn save_renown(&self, _totals: &[(CharacterId, u64)]) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn load_talents(&self, _character: CharacterId) -> Result<Vec<String>, String> {
+        Ok(Vec::new())
+    }
+
+    fn save_talents(&self, _character: CharacterId, _talents: &[String]) -> Result<(), String> {
         Ok(())
     }
 }
@@ -918,6 +934,33 @@ impl StateStore for PostgresStateStore {
                     .map_err(|error| error.to_string())?;
             }
             tx.commit().await.map_err(|error| error.to_string())
+        })
+    }
+
+    fn load_talents(&self, character: CharacterId) -> Result<Vec<String>, String> {
+        self.runtime.block_on(async {
+            let row: Option<(Vec<String>,)> =
+                sqlx::query_as("SELECT talents FROM characters WHERE id = $1")
+                    .bind(character.0)
+                    .fetch_optional(&self.pool)
+                    .await
+                    .map_err(|error| error.to_string())?;
+            Ok(row.map(|(talents,)| talents).unwrap_or_default())
+        })
+    }
+
+    fn save_talents(&self, character: CharacterId, talents: &[String]) -> Result<(), String> {
+        self.runtime.block_on(async {
+            let updated = sqlx::query("UPDATE characters SET talents = $2 WHERE id = $1")
+                .bind(character.0)
+                .bind(talents)
+                .execute(&self.pool)
+                .await
+                .map_err(|error| error.to_string())?;
+            if updated.rows_affected() == 0 {
+                return Err(String::from("personagem não existe no banco"));
+            }
+            Ok(())
         })
     }
 }

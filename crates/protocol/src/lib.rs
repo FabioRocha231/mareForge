@@ -67,7 +67,9 @@ use serde::{Deserialize, Serialize};
 ///      semente do miolo de cada cerração aberta. Cosméticos: `ShipState`
 ///      ganha `sail_cosmetic`/`flag_cosmetic`, `CosmeticsSnapshot` e
 ///      `WearCosmetic` (registradas no fim).
-/// v19: MV-067 — Renome (`RenownUpdate`), registrado no fim.
+/// v19: MV-067 — Renome (`RenownUpdate`) e Rosa dos Ventos
+///      (`TalentsSnapshot`, `AllocateTalent`, `RespecTalents`; `ActionKind`
+///      ganha `Talent`), registrados no fim.
 pub const PROTOCOL_VERSION: u16 = 19;
 
 /// Rótulo de versão da build (`MARVYR_VERSION_LABEL` no build de release,
@@ -157,6 +159,24 @@ pub struct RenownUpdate {
     pub gained: u32,
     pub reason: String,
 }
+
+/// Rosa dos Ventos (v19, MV-067): ids dos talentos aprendidos. Os pontos
+/// saem do nível de Renome (`points_for_level`). Chega ao conectar e a
+/// cada mudança.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TalentsSnapshot {
+    pub allocated: Vec<String>,
+}
+
+/// Aprender um talento (em qualquer lugar; o servidor valida pontos e pai).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AllocateTalent {
+    pub node: String,
+}
+
+/// Esquecer todos os talentos, pagando ouro (só atracado).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RespecTalents;
 
 /// Resposta do servidor. Conexão recusada (`accepted == false`) é encerrada
 /// logo em seguida; `reason` é texto para o jogador (vazio quando aceito).
@@ -311,6 +331,7 @@ pub enum ActionKind {
     Board,
     HireCrew,
     Dig,
+    Talent,
 }
 
 /// v15: veredito das ações novas (texto para o toast do HUD).

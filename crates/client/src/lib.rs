@@ -23,6 +23,7 @@ pub mod renown;
 pub mod seafaring;
 pub mod session;
 pub mod ship;
+pub mod talents;
 pub mod ui;
 pub mod vfx;
 pub mod wanted_hud;

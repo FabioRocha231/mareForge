@@ -948,7 +948,7 @@ pub fn spawn_zone_banner(commands: &mut Commands, anchor: Entity, name: &str) {
 /// Faixa de nível novo de Renome (MV-067), no mesmo lugar da faixa de zona.
 pub fn spawn_level_banner(commands: &mut Commands, anchor: Entity, level: u32) {
     let title = crate::i18n::trf("RENOME {0}", &[&level.to_string()]);
-    let hint = crate::i18n::tr("+1 ponto na Rosa dos Ventos");
+    let hint = crate::i18n::tr("+1 ponto na Rosa dos Ventos · tecla I");
     spawn_faded_panel(
         commands,
         anchor,

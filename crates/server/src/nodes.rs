@@ -133,6 +133,7 @@ pub fn handle_gather(
     mut ships: Query<&mut ServerShip>,
     mut nodes: Query<&mut ServerNode>,
     mut renown: EventWriter<crate::renown::RenownEarned>,
+    talents: Res<crate::talents::CaptainTalents>,
 ) {
     for event in gather_events.read() {
         let client_id = event.from();
@@ -229,10 +230,19 @@ pub fn handle_gather(
         }
 
         let taken = server_node.node.take(amount);
+        // Rosa dos Ventos: coletor treinado tira um pouco a mais (cabe no porão).
+        let extra = talents
+            .bonus(ship.character)
+            .gather_extra(taken)
+            .min(affordable - taken);
         ship.hold
             .insert(
                 &dev.catalog,
-                ItemInstance::new_resource(ItemInstanceId::new(), server_node.node.resource, taken),
+                ItemInstance::new_resource(
+                    ItemInstanceId::new(),
+                    server_node.node.resource,
+                    taken + extra,
+                ),
             )
             .expect("cabe: o espaço foi conferido acima");
         metrics.items_gathered += u64::from(taken);
@@ -257,7 +267,7 @@ pub fn handle_gather(
             &GatherResult {
                 node_id: node_num,
                 success: true,
-                gathered: taken,
+                gathered: taken + extra,
                 reason: String::new(),
             },
         );

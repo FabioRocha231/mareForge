@@ -17,6 +17,7 @@ pub mod reputation;
 pub mod seafaring;
 pub mod session;
 pub mod sets;
+pub mod talents;
 pub mod weather;
 
 pub use plugin::ServerPlugin;
