@@ -35,6 +35,7 @@ use bevy::prelude::*;
 
 /// Window app shared by `marvyr-client` and the playtest binary.
 pub fn windowed_app() -> App {
+    install_crash_log();
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins
@@ -75,4 +76,30 @@ fn dev_window_size() -> (f32, f32) {
 
 fn asset_root() -> String {
     config::asset_root().to_string_lossy().into_owned()
+}
+
+/// Panic no build de release some sem rastro (Finder não mostra stderr):
+/// grava mensagem + backtrace em `<data_dir>/crash.log` para o jogador
+/// anexar ao reportar. Mantém o hook padrão (stderr) em seguida.
+fn install_crash_log() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        use std::io::Write;
+        let dir = config::data_dir();
+        let _ = std::fs::create_dir_all(&dir);
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("crash.log"))
+        {
+            let _ = writeln!(
+                file,
+                "=== Marvyr {} ({}) ===\n{info}\n{}\n",
+                marvyr_protocol::VERSION_LABEL,
+                marvyr_protocol::BUILD_SHA,
+                std::backtrace::Backtrace::force_capture()
+            );
+        }
+        default_hook(info);
+    }));
 }

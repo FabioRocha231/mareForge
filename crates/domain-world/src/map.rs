@@ -10,6 +10,7 @@
 use marvyr_shared::ids::{RegionId, ZoneId};
 use thiserror::Error;
 
+use crate::features::Features;
 use crate::land::{push_out_of_land, LandMass};
 use crate::region::{Port, Region};
 use crate::risk::RiskTier;
@@ -53,7 +54,7 @@ const WALL_RADIUS: f32 = 170.0;
 /// Terra das instâncias: anel de parede em cada cerração, corredor de Sorvedouro
 /// e rochedos de dentro. Determinístico (mesma geometria no servidor e no
 /// client).
-fn instance_land() -> Vec<LandMass> {
+pub(crate) fn instance_land() -> Vec<LandMass> {
     let mut land = Vec::new();
     for (slot, (cx, cy)) in FOG_SLOTS.into_iter().enumerate() {
         let ring = FOG_RADIUS + WALL_RADIUS;
@@ -111,15 +112,85 @@ fn instance_land() -> Vec<LandMass> {
     land
 }
 
-/// O mundo: zonas de risco e regiões econômicas.
+pub(crate) fn zone(name: &'static str, tier: RiskTier, x: f32, y: f32, radius: f32) -> Zone {
+    Zone {
+        id: ZoneId::new(),
+        name,
+        tier,
+        shape: ZoneShape::Circle { x, y, radius },
+    }
+}
+
+/// Zonas das instâncias e o alto-mar que cobre todo o resto — sempre as
+/// últimas declaradas (menor prioridade).
+pub(crate) fn instance_and_open_sea_zones() -> Vec<Zone> {
+    let mut zones: Vec<Zone> = FOG_SLOTS
+        .into_iter()
+        .map(|(x, y)| zone(FOG_ZONE, RiskTier::Lawless, x, y, FOG_RADIUS + 40.0))
+        .collect();
+    let mut y = -MAELSTROM_HALF_LENGTH;
+    while y <= MAELSTROM_HALF_LENGTH {
+        zones.push(zone(
+            MAELSTROM_ZONE,
+            RiskTier::Lawless,
+            MAELSTROM_X,
+            y,
+            300.0,
+        ));
+        y += 280.0;
+    }
+    zones.push(zone("Mar Sem Lei", RiskTier::Lawless, 0.0, 0.0, 8000.0));
+    zones
+}
+
+pub(crate) fn region(name: &'static str, port: Port) -> Region {
+    Region {
+        id: RegionId::stable(name),
+        name,
+        port: Some(port),
+    }
+}
+
+/// O mundo: zonas de risco, regiões econômicas, terra e o conteúdo ancorado
+/// na geografia.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorldMap {
     zones: Vec<Zone>,
     regions: Vec<Region>,
     land: Vec<LandMass>,
+    features: Features,
 }
 
 impl WorldMap {
+    pub(crate) fn assemble(
+        zones: Vec<Zone>,
+        regions: Vec<Region>,
+        land: Vec<LandMass>,
+        features: Features,
+    ) -> Self {
+        Self {
+            zones,
+            regions,
+            land,
+            features,
+        }
+    }
+
+    /// Mundo da seed (MV-065): 0 é o mapa clássico feito à mão; qualquer
+    /// outra gera o mundo procedural — mesma seed, mesmo mundo, no servidor
+    /// e no client.
+    pub fn from_seed(seed: u64) -> Self {
+        if seed == 0 {
+            Self::vertical_slice()
+        } else {
+            crate::generate::generate(seed)
+        }
+    }
+
+    pub fn features(&self) -> &Features {
+        &self.features
+    }
+
     /// Zona na posição. Primeira zona declarada que contém o ponto vence;
     /// nenhuma contendo é `UnknownZone` (fail-closed, §69).
     pub fn zone_at(&self, x: f32, y: f32) -> Result<&Zone, WorldError> {
@@ -153,11 +224,13 @@ impl WorldMap {
     /// Mapa do servidor (MV-061): as ilhas ocultas são terra de verdade —
     /// o client não as recebe no mapa estático, só quando as avista.
     pub fn with_hidden_islands(mut self) -> Self {
-        self.land.extend(
-            crate::treasure::HIDDEN_ISLANDS
-                .iter()
-                .map(crate::treasure::HiddenIsland::land),
-        );
+        let hidden: Vec<LandMass> = self
+            .features
+            .hidden_islands
+            .iter()
+            .map(crate::treasure::HiddenIsland::land)
+            .collect();
+        self.land.extend(hidden);
         self
     }
 
@@ -184,14 +257,7 @@ impl WorldMap {
     /// jogável que não for porto nem rota é lawless. Fora dele, `UnknownZone`.
     pub fn vertical_slice() -> Self {
         let mut zones = Vec::new();
-        let mut zone = |name: &'static str, tier: RiskTier, x: f32, y: f32, radius: f32| {
-            zones.push(Zone {
-                id: ZoneId::new(),
-                name,
-                tier,
-                shape: ZoneShape::Circle { x, y, radius },
-            });
-        };
+        let mut zone = |name, tier, x, y, radius| zones.push(zone(name, tier, x, y, radius));
 
         // 1. Águas protegidas dos portos (prioridade máxima nas sobreposições).
         zone(
@@ -252,16 +318,7 @@ impl WorldMap {
             BLACK_WATERS_CENTER.1,
             560.0,
         );
-        for (x, y) in FOG_SLOTS {
-            zone(FOG_ZONE, RiskTier::Lawless, x, y, FOG_RADIUS + 40.0);
-        }
-        let mut y = -MAELSTROM_HALF_LENGTH;
-        while y <= MAELSTROM_HALF_LENGTH {
-            zone(MAELSTROM_ZONE, RiskTier::Lawless, MAELSTROM_X, y, 300.0);
-            y += 280.0;
-        }
-
-        zone("Mar Sem Lei", RiskTier::Lawless, 0.0, 0.0, 8000.0);
+        zones.extend(instance_and_open_sea_zones());
 
         let regions = vec![
             Region {
@@ -342,11 +399,7 @@ impl WorldMap {
         }
         land.extend(instance_land());
 
-        Self {
-            zones,
-            regions,
-            land,
-        }
+        Self::assemble(zones, regions, land, Features::classic())
     }
 }
 

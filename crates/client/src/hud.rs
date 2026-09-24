@@ -723,19 +723,21 @@ pub fn update_prompt_panel(
     mut slot: Query<&mut KeySlot, With<PromptKey>>,
     mut context_key_res: ResMut<ContextKey>,
     mut target_res: ResMut<PromptTarget>,
-    mut ports: Local<Vec<(String, Vec2)>>,
+    world: Option<Res<crate::world::ClientWorld>>,
 ) {
     let Some(state) = my_visual(&my_ship, &visuals) else {
         return;
     };
-    if ports.is_empty() {
-        *ports = marvyr_domain_world::WorldMap::vertical_slice()
+    let port_at = |name: &str| {
+        world
+            .as_ref()?
+            .0
             .regions()
             .iter()
             .filter_map(|region| region.port.as_ref())
-            .map(|port| (port.name.to_owned(), Vec2::new(port.x, port.y)))
-            .collect();
-    }
+            .find(|port| port.name == name)
+            .map(|port| Vec2::new(port.x, port.y))
+    };
     let pos = Vec2::new(state.x, state.y);
     let port = zone.0.as_ref().and_then(|zone| port_of_zone(&zone.name));
     let nearest = |points: &mut dyn Iterator<Item = Vec2>| {
@@ -753,11 +755,7 @@ pub fn update_prompt_panel(
         .filter(|target| target.hp * 100 <= target.max_hp * 35 || target.speed < 1.0)
         .map(|target| Vec2::new(target.x, target.y));
     let (context, target) = match hud_context(pos, &zone, &wrecks, &nodes, &catalog) {
-        HudContext::NearPort => (
-            HudContext::NearPort,
-            port.and_then(|name| ports.iter().find(|(port, _)| port == name))
-                .map(|(_, at)| *at),
-        ),
+        HudContext::NearPort => (HudContext::NearPort, port.and_then(port_at)),
         HudContext::NearWreck => (
             HudContext::NearWreck,
             nearest(&mut wrecks.0.values().copied()),

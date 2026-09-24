@@ -197,6 +197,11 @@ fn sail_full(state: &ShipState) -> bool {
     state.speed > state.max_speed.max(1.0) * 0.25
 }
 
+/// Altura do mastro principal (o do meio); `None` em casco sem mastro.
+fn main_mast(look: &ShipLook) -> Option<f32> {
+    look.masts.get(look.masts.len() / 2).copied()
+}
+
 /// Navios que já afundaram: snapshots em voo não podem ressuscitá-los.
 #[derive(Resource, Debug, Default)]
 pub struct DestroyedShips(pub HashSet<u32>);
@@ -257,13 +262,15 @@ fn spawn_ship(commands: &mut Commands, assets: &GameAssets, state: &ShipState, m
             ));
         }
         // Cesto de gávea no mastro principal dos cascos maiores.
-        let main_mast = look.masts[look.masts.len() / 2];
-        if look.hull != HullSize::Small {
+        // O Kraken não tem mastro: sem cesto, bandeira no centro do casco.
+        let main_mast = main_mast(&look);
+        if let Some(mast_y) = main_mast.filter(|_| look.hull != HullSize::Small) {
             ship.spawn((
                 part_sprite(assets, parts::nest(look.trim_color)),
-                Transform::from_xyz(0.0, main_mast + 4.0, 0.4).with_scale(Vec3::splat(0.6)),
+                Transform::from_xyz(0.0, mast_y + 4.0, 0.4).with_scale(Vec3::splat(0.6)),
             ));
         }
+        let main_mast = main_mast.unwrap_or(0.0);
         let flag_color = flag_color(state.faction, mine);
         ship.spawn((
             Sprite::from_atlas_image(
@@ -808,6 +815,14 @@ mod tests {
         assert_eq!(flag_color(Faction::Navy, false), 3);
         assert_eq!(flag_color(Faction::Merchant, false), 5);
         assert_eq!(flag_color(Faction::Player, true), 2);
+    }
+
+    #[test]
+    fn mastless_kraken_has_no_main_mast() {
+        for kind in [ShipKind::SmallMerchant, ShipKind::Patrol, ShipKind::Corsair] {
+            assert_eq!(main_mast(&ship_look(kind, Faction::Monster)), None);
+            assert!(main_mast(&ship_look(kind, Faction::Player)).is_some());
+        }
     }
 
     #[test]

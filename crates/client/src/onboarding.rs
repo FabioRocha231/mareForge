@@ -747,6 +747,7 @@ fn step_target(
     step: Step,
     me: Vec2,
     nodes: &KnownNodes,
+    map: Option<&marvyr_domain_world::WorldMap>,
     first_port: Option<&str>,
 ) -> Option<(String, Vec2)> {
     match step {
@@ -756,15 +757,13 @@ fn step_target(
             .filter(|node| node.stock > 0)
             .min_by(|a, b| me.distance(a.pos).total_cmp(&me.distance(b.pos)))
             .map(|node| (node.resource_name.clone(), node.pos)),
-        Step::Dock | Step::Voyage => {
-            let map = marvyr_domain_world::WorldMap::vertical_slice();
-            map.regions()
-                .iter()
-                .filter_map(|region| region.port.as_ref())
-                .filter(|port| step == Step::Dock || Some(port.name) != first_port)
-                .map(|port| (port.name.to_owned(), Vec2::new(port.x, port.y)))
-                .min_by(|a, b| me.distance(a.1).total_cmp(&me.distance(b.1)))
-        }
+        Step::Dock | Step::Voyage => map?
+            .regions()
+            .iter()
+            .filter_map(|region| region.port.as_ref())
+            .filter(|port| step == Step::Dock || Some(port.name) != first_port)
+            .map(|port| (port.name.to_owned(), Vec2::new(port.x, port.y)))
+            .min_by(|a, b| me.distance(a.1).total_cmp(&me.distance(b.1))),
         _ => None,
     }
 }
@@ -811,6 +810,7 @@ fn draw_guide(
     device: Res<InputDevice>,
     lang: Res<Lang>,
     nodes: Res<KnownNodes>,
+    world: Option<Res<crate::world::ClientWorld>>,
     my_ship: Res<MyShip>,
     visuals: Query<&ShipVisual>,
     docked: Res<MyDocked>,
@@ -878,8 +878,15 @@ fn draw_guide(
         return;
     };
     let me = my_state(&my_ship, &visuals).map(|state| Vec2::new(state.x, state.y));
-    let target =
-        me.and_then(|me| step_target(step, me, &nodes, onboarding.progress.first_port.as_deref()));
+    let target = me.and_then(|me| {
+        step_target(
+            step,
+            me,
+            &nodes,
+            world.as_ref().map(|world| &world.0),
+            onboarding.progress.first_port.as_deref(),
+        )
+    });
     // A dica (distância) muda todo quadro; o resto só quando o passo muda.
     for mut visibility in &mut hint_visibility {
         visibility.set_if_neq(if docked.0 {
@@ -974,6 +981,7 @@ fn draw_graduation(
 /// fio que liga o bilhete ao mundo.
 fn draw_leader_line(
     onboarding: Res<Onboarding>,
+    world: Option<Res<crate::world::ClientWorld>>,
     docked: Res<MyDocked>,
     nodes: Res<KnownNodes>,
     my_ship: Res<MyShip>,
@@ -989,9 +997,13 @@ fn draw_leader_line(
     let Some(me) = my_state(&my_ship, &visuals).map(|state| Vec2::new(state.x, state.y)) else {
         return;
     };
-    let Some((_, target)) =
-        step_target(step, me, &nodes, onboarding.progress.first_port.as_deref())
-    else {
+    let Some((_, target)) = step_target(
+        step,
+        me,
+        &nodes,
+        world.as_ref().map(|world| &world.0),
+        onboarding.progress.first_port.as_deref(),
+    ) else {
         return;
     };
     let ink = ui::VERMILION.with_alpha(0.85);
@@ -1054,6 +1066,7 @@ mod tests {
             Step::Voyage,
             Vec2::new(first.x, first.y),
             &KnownNodes::default(),
+            Some(&map),
             Some(first.name),
         )
         .expect("outro porto");

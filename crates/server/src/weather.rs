@@ -18,13 +18,16 @@ use crate::sets::SimulationSet;
 #[derive(Resource)]
 pub struct ServerWeather(pub Weather);
 
-/// Área onde tempestades nascem: o triângulo econômico e arredores.
-const STORM_BOUNDS: WeatherBounds = WeatherBounds {
-    min_x: -1400.0,
-    min_y: -700.0,
-    max_x: 1400.0,
-    max_y: 1500.0,
-};
+/// Área onde tempestades nascem: a caixa do mar principal do mapa.
+fn storm_bounds(map: &WorldMap) -> WeatherBounds {
+    let (min_x, max_x, min_y, max_y) = map.features().bounds;
+    WeatherBounds {
+        min_x,
+        min_y,
+        max_x,
+        max_y,
+    }
+}
 const BROADCAST_EVERY_SECS: f32 = 1.0;
 /// Casco perdido por segundo no olho da Tormenta.
 const TEMPEST_HULL_PER_SEC: f32 = 1.5;
@@ -79,9 +82,11 @@ pub(crate) fn storm_allowed(map: &WorldMap, x: f32, y: f32) -> bool {
 }
 
 fn advance_weather(time: Res<Time>, map: Res<ServerWorldMap>, mut weather: ResMut<ServerWeather>) {
-    weather.0.step(time.delta_secs(), STORM_BOUNDS, |x, y| {
-        storm_allowed(&map.0, x, y)
-    });
+    weather
+        .0
+        .step(time.delta_secs(), storm_bounds(&map.0), |x, y| {
+            storm_allowed(&map.0, x, y)
+        });
 }
 
 /// Atracado: velas remendadas. No mar: remendo lento, e a tempestade rasga.
@@ -197,7 +202,7 @@ mod tests {
         let mut weather = Weather::new(99);
         let dt = 1.0 / 30.0;
         for _ in 0..(30 * 60 * 30) {
-            weather.step(dt, STORM_BOUNDS, |x, y| storm_allowed(&map, x, y));
+            weather.step(dt, storm_bounds(&map), |x, y| storm_allowed(&map, x, y));
             for storm in weather.storms().iter().filter(|s| s.age <= dt * 1.5) {
                 for (px, py) in [(-600.0_f32, 0.0_f32), (600.0, 0.0)] {
                     let d = ((storm.x - px).powi(2) + (storm.y - py).powi(2)).sqrt();

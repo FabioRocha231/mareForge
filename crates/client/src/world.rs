@@ -6,7 +6,7 @@
 use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, ShaderRef};
 use bevy::sprite::{Anchor, Material2d, Material2dPlugin};
-use marvyr_domain_world::map::{MAELSTROM_POINTS, MAELSTROM_X, PIRATE_PORT};
+use marvyr_domain_world::map::PIRATE_PORT;
 use marvyr_domain_world::{LandMass, RiskTier, WorldMap, ZoneShape};
 
 use crate::assets::{deco, fort, layers, GameAssets};
@@ -46,14 +46,18 @@ impl Material2d for SeaMaterial {
     }
 }
 
-/// Material do mar + o mapa, para o tom de perigo acompanhar a zona e a
-/// terra acompanhar a câmera.
+/// Material do mar: o tom de perigo acompanha a zona e a terra (do
+/// `ClientWorld`, quando chegar) acompanha a câmera.
 #[derive(Resource)]
 struct Sea {
     material: Handle<SeaMaterial>,
-    map: WorldMap,
     streamed_at: Vec3,
 }
+
+/// Mundo do servidor (MV-065): montado da seed que chega no handshake.
+/// Ausente até a conexão — nada de geografia antes disso.
+#[derive(Resource)]
+pub struct ClientWorld(pub WorldMap);
 
 /// Bandeira animada (porto ou navio): cor do atlas + fase própria.
 #[derive(Component)]
@@ -67,8 +71,9 @@ pub struct WorldVisualPlugin;
 impl Plugin for WorldVisualPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(Material2dPlugin::<SeaMaterial>::default())
-            // PostStartup: `GameAssets` é inserido por comando no Startup.
-            .add_systems(PostStartup, spawn_vertical_slice_world)
+            // O oceano já anima atrás do login; a terra vem com a seed.
+            .add_systems(Startup, spawn_ocean)
+            .add_systems(Update, spawn_world.run_if(resource_added::<ClientWorld>))
             .add_systems(Update, (tint_sea_by_zone, stream_land, animate_flags));
     }
 }
@@ -144,16 +149,20 @@ fn land_distance(land: &[LandMass], p: Vec2) -> f32 {
         .fold(f32::MAX, f32::min)
 }
 
-fn spawn_vertical_slice_world(
+// ponytail: o mundo nasce uma vez por sessão; reconectar num servidor com
+// outra seed pede reiniciar o jogo (despawn do mundo se isso virar rotina).
+fn spawn_ocean(
     mut commands: Commands,
-    assets: Res<GameAssets>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<SeaMaterial>>,
 ) {
-    let map = WorldMap::vertical_slice();
-
+    // Mar aberto, sem terra, até o mapa chegar.
     let sea = materials.add(SeaMaterial {
-        params: sea_params(&map, Vec2::new(-560.0, 0.0), 1500.0),
+        params: SeaParams {
+            land: [Vec4::ZERO; MAX_LAND],
+            safe: [Vec4::ZERO; MAX_SAFE],
+            info: Vec4::ZERO,
+        },
     });
     // Cobre o mapa principal e as instâncias (cerrações a leste, Sorvedouro a oeste).
     commands.spawn((
@@ -161,6 +170,23 @@ fn spawn_vertical_slice_world(
         MeshMaterial2d(sea.clone()),
         Transform::from_xyz(0.0, 300.0, layers::OCEAN),
     ));
+    commands.insert_resource(Sea {
+        material: sea,
+        streamed_at: Vec3::splat(f32::MAX),
+    });
+}
+
+fn spawn_world(
+    mut commands: Commands,
+    assets: Res<GameAssets>,
+    world: Res<ClientWorld>,
+    sea: Option<ResMut<Sea>>,
+) {
+    let map = &world.0;
+    // O shader recebe a terra nova no próximo quadro.
+    if let Some(mut sea) = sea {
+        sea.streamed_at = Vec3::splat(f32::MAX);
+    }
 
     let ports: Vec<Vec2> = map
         .regions()
@@ -169,37 +195,30 @@ fn spawn_vertical_slice_world(
         .map(|p| Vec2::new(p.x, p.y))
         .collect();
     for port in map.regions().iter().filter_map(|r| r.port.as_ref()) {
-        spawn_port(&mut commands, &assets, port.name, Vec2::new(port.x, port.y));
+        let dock = Vec2::new(port.x, port.y);
+        let inland = inland_from(map.land(), dock);
+        spawn_port(&mut commands, &assets, port.name, dock, inland);
     }
     spawn_vegetation(&mut commands, &assets, map.land(), &ports);
 
     let danger = Color::srgb(1.0, 0.82, 0.78);
-    for (text, at) in [
-        ("Ilha do Coral Negro", Vec2::new(0.0, 900.0)),
-        ("ÁGUAS NEGRAS", Vec2::new(0.0, 1400.0)),
-        (
-            "PASSAGEM DO SORVEDOURO",
-            Vec2::new(MAELSTROM_X, MAELSTROM_POINTS[0].1 - 180.0),
-        ),
-    ] {
-        label(&mut commands, text, at, 16.0, danger);
+    for &(text, x, y) in &map.features().labels {
+        label(&mut commands, text, Vec2::new(x, y), 16.0, danger);
     }
-    commands.insert_resource(Sea {
-        material: sea,
-        map,
-        streamed_at: Vec3::splat(f32::MAX),
-    });
 }
 
 /// Envia ao shader só a terra perto da câmera; refaz quando a câmera anda
 /// ou o zoom muda o bastante.
 fn stream_land(
     sea: Option<ResMut<Sea>>,
+    world: Option<Res<ClientWorld>>,
     camera: Query<(&Transform, &OrthographicProjection), With<Camera2d>>,
     windows: Query<&Window>,
     mut materials: ResMut<Assets<SeaMaterial>>,
 ) {
-    let (Some(mut sea), Ok((transform, projection))) = (sea, camera.get_single()) else {
+    let (Some(mut sea), Some(world), Ok((transform, projection))) =
+        (sea, world, camera.get_single())
+    else {
         return;
     };
     let window = windows
@@ -217,7 +236,7 @@ fn stream_land(
     }
     sea.streamed_at = Vec3::new(view.0, view.1, view.2);
     let view_radius = window.length() * 0.5 * projection.scale + 200.0;
-    let fresh = sea_params(&sea.map, Vec2::new(view.0, view.1), view_radius);
+    let fresh = sea_params(&world.0, Vec2::new(view.0, view.1), view_radius);
     if let Some(material) = materials.get_mut(&sea.material) {
         let danger = material.params.info.z;
         material.params = fresh;
@@ -225,20 +244,24 @@ fn stream_land(
     }
 }
 
+/// Direção da terra a partir do cais: rumo ao disco de terra mais próximo
+/// (a costa atrás da capital, o corpo da ilha atrás do porto pirata).
+fn inland_from(land: &[LandMass], dock: Vec2) -> Vec2 {
+    land.iter()
+        .map(|m| Vec2::new(m.x, m.y))
+        .min_by(|a, b| {
+            dock.distance_squared(*a)
+                .total_cmp(&dock.distance_squared(*b))
+        })
+        .map(|nearest| (nearest - dock).normalize_or(Vec2::NEG_X))
+        .unwrap_or(Vec2::NEG_X)
+}
+
 /// Porto sobre a costa: cais de tábuas até a água, torres com bandeira,
 /// carga no píer e lanternas. Serra é madeira e verde; Mina é pedra e canhão.
-fn spawn_port(commands: &mut Commands, assets: &GameAssets, name: &str, dock: Vec2) {
+fn spawn_port(commands: &mut Commands, assets: &GameAssets, name: &str, dock: Vec2, inland: Vec2) {
     let pirate = name == PIRATE_PORT;
     let mina = name.contains("Mina");
-    // Direção da terra a partir do cais: Serra a oeste, Mina a leste, o
-    // porto pirata ao sul (na ilha, virado para as Águas Negras).
-    let inland = if pirate {
-        Vec2::NEG_Y
-    } else if dock.x < 0.0 {
-        Vec2::NEG_X
-    } else {
-        Vec2::X
-    };
     let side = inland.perp();
     let at = |along: f32, across: f32| dock + inland * along + side * across;
     let facing = Quat::from_rotation_z(inland.to_angle());

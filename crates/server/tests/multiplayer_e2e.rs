@@ -171,6 +171,10 @@ impl Harness {
             },
         ]));
         server_app.add_plugins(ServerPlugin);
+        // Posições do teste são do mapa clássico (seed 0), não do gerado.
+        server_app.insert_resource(marvyr_server::net::ServerWorldMap(
+            marvyr_domain_world::WorldMap::vertical_slice().with_hidden_islands(),
+        ));
         // MF-060: piratas e marinha nascem na Rota da Costa, bem onde o duelo
         // acontece — entram na briga e tornam o teste aleatório. Sem NPCs:
         // o teste mede AOI e dano entre jogadores.
@@ -675,7 +679,10 @@ fn digging_at_the_map_spot_trades_the_map_for_treasure() {
         (dev.treasure_map, dev.abyssal_pearl)
     };
     let map_id = marvyr_shared::ids::ItemInstanceId(uuid::Uuid::from_u128(0));
-    let island = marvyr_domain_world::treasure::island_for_map(0);
+    let classic = marvyr_domain_world::WorldMap::vertical_slice();
+    let island =
+        marvyr_domain_world::treasure::island_for_map(&classic.features().hidden_islands, 0)
+            .expect("mapa clássico tem ilhas ocultas");
     {
         let catalog = dev_items(&harness.server_app).catalog.clone();
         with_ship(&mut harness.server_app, a_id, |ship| {
