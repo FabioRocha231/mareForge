@@ -291,7 +291,7 @@ const TABLE: &[(&str, &str)] = &[
     ("Zonas", "Zones"),
     ("Águas protegidas: ninguém ataca você. Fronteira: combate liberado. Sem lei: combate e saque total — afundou, a carga vira destroço de quem pegar.", "Protected waters: nobody can attack you. Frontier: combat allowed. Lawless: combat and full loot — sink, and your cargo becomes a wreck for whoever gets there."),
     ("Portais", "Portals"),
-    ("Cerração: banco de névoa com tempo e vagas contados; leva a uma arena isolada e devolve você quando se dissipa. Sorvedouro: redemoinho que liga pontos distantes por dentro de águas sem lei.", "Fog Bank: a timed fog with limited slots; it leads to an isolated arena and returns you when it lifts. Maelstrom: a whirlpool linking distant points through lawless water."),
+    ("Cerração: banco de névoa com tempo e vagas contados; leva a uma arena isolada, diferente a cada abertura, com baús de Cristal da Cerração que afundam em 5 minutos. Devolve você quando se dissipa. Sorvedouro: redemoinho que liga pontos distantes por dentro de águas sem lei.", "Fog Bank: a timed fog with limited slots; it leads to an isolated arena, different every time, with Fog Crystal chests that sink in 5 minutes. It returns you when it lifts. Maelstrom: a whirlpool linking distant points through lawless water."),
     ("Eventos de mar", "Sea events"),
     ("Tormenta desgasta o casco de quem está dentro. Frota do tesouro navega com escolta. O kraken morde quem chega perto. Maré disputada faz brotar recurso raro em mar aberto.", "A tempest wears down every hull inside it. The treasure fleet sails with an escort. The kraken bites anyone who comes close. A contested tide spawns rare resources in open water."),
     ("Tesouro", "Treasure"),

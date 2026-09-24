@@ -192,7 +192,7 @@ impl V {
 }
 
 /// splitmix64 — o mesmo gerador barato do resto do domínio.
-struct Rng(u64);
+pub(crate) struct Rng(pub(crate) u64);
 
 impl Rng {
     fn next(&mut self) -> u64 {
@@ -202,7 +202,7 @@ impl Rng {
         z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
         z ^ (z >> 31)
     }
-    fn range(&mut self, min: f32, max: f32) -> f32 {
+    pub(crate) fn range(&mut self, min: f32, max: f32) -> f32 {
         min + (max - min) * ((self.next() >> 40) as f32 / (1u64 << 24) as f32)
     }
     fn coin(&mut self) -> bool {

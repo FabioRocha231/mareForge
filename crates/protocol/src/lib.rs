@@ -63,7 +63,9 @@ use serde::{Deserialize, Serialize};
 ///      client reporta `OnboardingProgress` (telemetria, nunca concede nada).
 /// v17: MV-065 — mundo procedural. `WorldSeed` (registrada no fim) chega
 ///      logo após o `ServerWelcome` aceito; o client monta o mesmo mapa.
-pub const PROTOCOL_VERSION: u16 = 17;
+/// v18: MV-066 — zonas, arenas e cosméticos. `PortalsUpdate.arenas` traz a
+///      semente do miolo de cada cerração aberta.
+pub const PROTOCOL_VERSION: u16 = 18;
 
 /// Rótulo de versão da build (`MARVYR_VERSION_LABEL` no build de release,
 /// senão a versão do Cargo). Client e servidor mostram no log e no HUD.
@@ -531,6 +533,9 @@ pub struct PortalState {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PortalsUpdate {
     pub portals: Vec<PortalState>,
+    /// Cerrações abertas: (slot, semente do miolo). O client sorteia os
+    /// mesmos rochedos (`arena_layout`).
+    pub arenas: Vec<(u8, u64)>,
 }
 
 /// Jogador quer saquear um wreck (PRD §27: precisa estar nele, com porão).
@@ -842,8 +847,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn current_protocol_version_is_seventeen() {
-        assert_eq!(PROTOCOL_VERSION, 17);
+    fn current_protocol_version_is_eighteen() {
+        assert_eq!(PROTOCOL_VERSION, 18);
         assert_eq!(
             ClientHello::current("token").protocol_version,
             PROTOCOL_VERSION

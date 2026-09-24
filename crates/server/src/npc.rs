@@ -1116,8 +1116,8 @@ pub fn simulate_npcs(
     }
 }
 
-/// Wreck de despojos de um NPC de evento (MV-061).
-fn spawn_spoils_wreck(
+/// Wreck de despojos (MV-061): NPC de evento abatido ou baú de cerração.
+pub(crate) fn spawn_spoils_wreck(
     commands: &mut Commands,
     wreck_ids: &mut crate::net::WreckIdCounter,
     live_wrecks: &mut crate::net::LiveWreckRecords,
@@ -1157,7 +1157,7 @@ fn spawn_spoils_wreck(
         exclusive_looter,
         spawned_at_secs: f64::from(now),
     });
-    info!(wreck_num, x, y, "despojos do Kraken boiando");
+    info!(wreck_num, x, y, "despojos boiando");
 }
 
 pub(crate) fn apply_npc_damage(npc: &mut NpcShip, damage: u32) -> DamageOutcome {

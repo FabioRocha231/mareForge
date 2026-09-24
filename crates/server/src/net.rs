@@ -147,6 +147,11 @@ pub struct DevItems {
     pub black_hull: ItemDefinitionId,
     pub fog_sails: ItemDefinitionId,
     pub abyssal_cannons: ItemDefinitionId,
+    // MV-066: tier 3 — só nos baús das cerrações, vira equipamento na Forja
+    // Pirata junto com o tier 2.
+    pub fog_crystal: ItemDefinitionId,
+    pub crystal_hull: ItemDefinitionId,
+    pub crystal_cannons: ItemDefinitionId,
     /// MV-061: mapa do tesouro (item de missão; aponta para uma ilha oculta).
     pub treasure_map: ItemDefinitionId,
 }
@@ -287,6 +292,9 @@ impl DevItems {
         let black_hull = ItemDefinitionId::stable("Casco Negro");
         let fog_sails = ItemDefinitionId::stable("Velas de Cerração");
         let abyssal_cannons = ItemDefinitionId::stable("Canhões Abissais");
+        let fog_crystal = ItemDefinitionId::stable("Cristal da Cerração");
+        let crystal_hull = ItemDefinitionId::stable("Casco de Cristal");
+        let crystal_cannons = ItemDefinitionId::stable("Canhões de Cristal");
         let no_stats = EquipmentStats {
             damage: 0,
             speed: 0,
@@ -329,6 +337,28 @@ impl DevItems {
                 },
                 12,
             ),
+            rare_resource(fog_crystal, "Cristal da Cerração", 1),
+            equipment_item(
+                crystal_hull,
+                "Casco de Cristal",
+                EquipmentSlot::Hull,
+                EquipmentStats {
+                    hp: 150,
+                    ..no_stats
+                },
+                10,
+            ),
+            equipment_item(
+                crystal_cannons,
+                "Canhões de Cristal",
+                EquipmentSlot::Weapon,
+                EquipmentStats {
+                    damage: 26,
+                    range: 3500,
+                    ..no_stats
+                },
+                12,
+            ),
         ] {
             register(definition);
         }
@@ -356,6 +386,9 @@ impl DevItems {
             black_hull,
             fog_sails,
             abyssal_cannons,
+            fog_crystal,
+            crystal_hull,
+            crystal_cannons,
             treasure_map,
         }
     }

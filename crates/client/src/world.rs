@@ -6,8 +6,10 @@
 use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, ShaderRef};
 use bevy::sprite::{Anchor, Material2d, Material2dPlugin};
-use marvyr_domain_world::map::PIRATE_PORT;
+use lightyear::prelude::ClientReceiveMessage;
+use marvyr_domain_world::map::{FOG_SLOTS, PIRATE_PORT};
 use marvyr_domain_world::{LandMass, RiskTier, WorldMap, ZoneShape};
+use marvyr_protocol::PortalsUpdate;
 
 use crate::assets::{deco, fort, layers, GameAssets};
 use crate::zone::CurrentZone;
@@ -96,7 +98,13 @@ impl Plugin for WorldVisualPlugin {
             .add_systems(Update, spawn_world.run_if(resource_added::<ClientWorld>))
             .add_systems(
                 Update,
-                (tint_sea_by_zone, stream_land, animate_flags, follow_ocean),
+                (
+                    tint_sea_by_zone,
+                    apply_arenas.before(stream_land),
+                    stream_land,
+                    animate_flags,
+                    follow_ocean,
+                ),
             );
     }
 }
@@ -115,6 +123,7 @@ pub fn sea_params(map: &WorldMap, center: Vec2, view_radius: f32) -> SeaParams {
     let mut visible: Vec<&LandMass> = map
         .land()
         .iter()
+        .chain(map.arena_land())
         .filter(|mass| gap(mass) < view_radius)
         .collect();
     visible.sort_by(|a, b| gap(a).total_cmp(&gap(b)));
@@ -271,6 +280,41 @@ fn spawn_gates(
             Anchor::Center,
             Transform::from_translation((gate + inward * 420.0).extend(layers::LABELS)),
         ));
+    }
+}
+
+/// Miolo das cerrações abertas (MV-066): a mesma semente sorteia os mesmos
+/// rochedos do servidor; muda o mapa e força o shader a recarregar a terra.
+fn apply_arenas(
+    mut events: EventReader<ClientReceiveMessage<PortalsUpdate>>,
+    world: Option<ResMut<ClientWorld>>,
+    sea: Option<ResMut<Sea>>,
+    mut applied: Local<[Option<u64>; FOG_SLOTS.len()]>,
+) {
+    let (Some(event), Some(mut world)) = (events.read().last(), world) else {
+        return;
+    };
+    if world.is_added() {
+        // Mapa novo (reconexão) nasce sem miolo.
+        *applied = Default::default();
+    }
+    let mut open = [None; FOG_SLOTS.len()];
+    for &(slot, layout) in &event.message().arenas {
+        if let Some(entry) = open.get_mut(usize::from(slot)) {
+            *entry = Some(layout);
+        }
+    }
+    if open == *applied {
+        return;
+    }
+    for (slot, layout) in open.iter().enumerate() {
+        if applied[slot] != *layout {
+            world.0.set_arena(slot, *layout);
+        }
+    }
+    *applied = open;
+    if let Some(mut sea) = sea {
+        sea.streamed_at = Vec3::splat(f32::INFINITY);
     }
 }
 

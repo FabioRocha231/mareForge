@@ -151,6 +151,9 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Casco Negro", "Black Hull"),
     ("Velas de Cerração", "Fog Sails"),
     ("Canhões Abissais", "Abyssal Cannons"),
+    ("Cristal da Cerração", "Fog Crystal"),
+    ("Casco de Cristal", "Crystal Hull"),
+    ("Canhões de Cristal", "Crystal Cannons"),
 ];
 
 #[cfg(test)]

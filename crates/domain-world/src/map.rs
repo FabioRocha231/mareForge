@@ -55,12 +55,13 @@ pub(crate) const AREA_WALL_BAND: f32 = 2.0 * WALL_RADIUS;
 /// Distância, na carta, entre zonas vizinhas (≈ viagem de portão a portão).
 pub const CHART_CELL: f32 = 2800.0;
 
-/// Terra das instâncias: anel de parede em cada cerração, corredor de Sorvedouro
-/// e rochedos de dentro. Determinístico (mesma geometria no servidor e no
+/// Terra das instâncias: anel de parede em cada cerração e corredor de
+/// Sorvedouro com seus rochedos (o miolo da cerração é sorteado a cada
+/// abertura, ver [`arena_layout`]). Determinístico (mesma geometria no servidor e no
 /// client).
 pub(crate) fn instance_land() -> Vec<LandMass> {
     let mut land = Vec::new();
-    for (slot, (cx, cy)) in FOG_SLOTS.into_iter().enumerate() {
+    for (cx, cy) in FOG_SLOTS {
         let ring = FOG_RADIUS + WALL_RADIUS;
         let count = (std::f32::consts::TAU * ring / 200.0).ceil() as usize;
         for k in 0..count {
@@ -69,15 +70,6 @@ pub(crate) fn instance_land() -> Vec<LandMass> {
                 cx + a.cos() * ring,
                 cy + a.sin() * ring,
                 WALL_RADIUS,
-            ));
-        }
-        for k in 0..5 {
-            let a = k as f32 * 1.3 + slot as f32;
-            let r = 190.0 + (k % 3) as f32 * 90.0;
-            land.push(LandMass::cliff(
-                cx + a.cos() * r,
-                cy + a.sin() * r,
-                22.0 + (k % 3) as f32 * 8.0,
             ));
         }
     }
@@ -106,6 +98,62 @@ pub(crate) fn instance_land() -> Vec<LandMass> {
         land.push(LandMass::cliff(MAELSTROM_X + side * 110.0, y, 34.0));
     }
     land
+}
+
+/// Miolo de uma cerração aberta (MV-066): rochedos e baús.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArenaLayout {
+    pub rocks: Vec<LandMass>,
+    pub chests: Vec<(f32, f32)>,
+}
+
+/// Baús por abertura de cerração.
+pub const ARENA_CHESTS: usize = 2;
+const ARENA_ROCKS: usize = 9;
+
+/// Sorteia o miolo da cerração `slot` a partir de `layout` (a semente da
+/// abertura). Mesma entrada, mesmo miolo — no servidor e no client. Chegada,
+/// portal de saída, nós de recurso e baús ficam sempre em água livre.
+pub fn arena_layout(slot: usize, layout: u64) -> ArenaLayout {
+    let (cx, cy) = FOG_SLOTS[slot];
+    let mut rng =
+        crate::generate::Rng(layout ^ (slot as u64 + 1).wrapping_mul(0xA24B_AED4_963E_E407));
+    let mut keep: Vec<(f32, f32, f32)> = vec![(cx, cy - 250.0, 120.0), (cx, cy, 120.0)];
+    keep.extend(
+        crate::features::instance_nodes()
+            .into_iter()
+            .filter(|n| (n.x - cx).hypot(n.y - cy) <= FOG_RADIUS)
+            .map(|n| (n.x, n.y, 80.0)),
+    );
+    let sample = |rng: &mut crate::generate::Rng,
+                  keep: &[(f32, f32, f32)],
+                  (min_r, max_r): (f32, f32),
+                  clear: f32| {
+        (0..40).find_map(|_| {
+            let a = rng.range(0.0, std::f32::consts::TAU);
+            let r = rng.range(min_r, max_r);
+            let (x, y) = (cx + a.cos() * r, cy + a.sin() * r);
+            keep.iter()
+                .all(|(kx, ky, kr)| (x - kx).hypot(y - ky) > kr + clear)
+                .then_some((x, y))
+        })
+    };
+    let mut chests = Vec::new();
+    for _ in 0..ARENA_CHESTS {
+        // Sempre acha: a arena tem espaço de sobra para dois baús.
+        if let Some(at) = sample(&mut rng, &keep, (260.0, 450.0), 60.0) {
+            keep.push((at.0, at.1, 90.0));
+            chests.push(at);
+        }
+    }
+    let mut rocks = Vec::new();
+    for _ in 0..ARENA_ROCKS {
+        let radius = rng.range(24.0, 46.0);
+        if let Some((x, y)) = sample(&mut rng, &keep, (120.0, 440.0), radius) {
+            rocks.push(LandMass::cliff(x, y, radius));
+        }
+    }
+    ArenaLayout { rocks, chests }
 }
 
 pub(crate) fn zone(name: &'static str, tier: RiskTier, x: f32, y: f32, radius: f32) -> Zone {
@@ -152,6 +200,8 @@ pub struct WorldMap {
     zones: Vec<Zone>,
     regions: Vec<Region>,
     land: Vec<LandMass>,
+    /// Rochedos do miolo de cada cerração aberta (vazio = fechada).
+    arenas: [Vec<LandMass>; FOG_SLOTS.len()],
     features: Features,
 }
 
@@ -166,6 +216,7 @@ impl WorldMap {
             zones,
             regions,
             land,
+            arenas: Default::default(),
             features,
         }
     }
@@ -262,13 +313,36 @@ impl WorldMap {
         &self.land
     }
 
+    /// Rochedos dos miolos de cerração abertos.
+    pub fn arena_land(&self) -> impl Iterator<Item = &LandMass> {
+        self.arenas.iter().flatten()
+    }
+
+    /// Abre (`Some(layout)`) ou esvazia (`None`) o miolo da cerração `slot`.
+    pub fn set_arena(&mut self, slot: usize, layout: Option<u64>) {
+        self.arenas[slot] = layout
+            .map(|layout| arena_layout(slot, layout).rocks)
+            .unwrap_or_default();
+    }
+
     /// Posição corrigida para fora da terra (ver [`push_out_of_land`]).
+    ///
+    /// ponytail: terra fixa e miolo de cerração empurram em sequência — um
+    /// rochedo do miolo nunca encosta no paredão, então não há ping-pong.
     pub fn push_out_of_land(&self, x: f32, y: f32, clearance: f32) -> Option<(f32, f32)> {
-        push_out_of_land(&self.land, x, y, clearance)
+        let fixed = push_out_of_land(&self.land, x, y, clearance);
+        let (px, py) = fixed.unwrap_or((x, y));
+        self.arenas
+            .iter()
+            .find_map(|rocks| push_out_of_land(rocks, px, py, clearance))
+            .or(fixed)
     }
 
     pub fn is_land(&self, x: f32, y: f32) -> bool {
-        self.land.iter().any(|mass| mass.contains(x, y, 0.0))
+        self.land
+            .iter()
+            .chain(self.arena_land())
+            .any(|mass| mass.contains(x, y, 0.0))
     }
 
     /// Mapa do servidor (MV-061): as ilhas ocultas são terra de verdade —
@@ -614,6 +688,48 @@ mod tests {
             assert!(map.push_out_of_land(x, y, 20.0).is_none());
             assert!(map.is_land(x + MAELSTROM_HALF_WIDTH + 60.0, y));
             assert!(map.is_land(x - MAELSTROM_HALF_WIDTH - 60.0, y));
+        }
+    }
+
+    #[test]
+    fn arena_layouts_vary_and_keep_every_point_of_interest_open() {
+        let mut map = WorldMap::vertical_slice();
+        let nodes = crate::features::instance_nodes();
+        for slot in 0..FOG_SLOTS.len() {
+            let (cx, cy) = FOG_SLOTS[slot];
+            for layout in 1..200u64 {
+                let arena = arena_layout(slot, layout);
+                assert_eq!(arena, arena_layout(slot, layout), "determinístico");
+                assert_eq!(
+                    arena.chests.len(),
+                    ARENA_CHESTS,
+                    "slot {slot} layout {layout}"
+                );
+                assert!(arena.rocks.len() >= ARENA_ROCKS / 2);
+                map.set_arena(slot, Some(layout));
+                let open = [(cx, cy - 250.0), (cx, cy)]
+                    .into_iter()
+                    .chain(arena.chests.iter().copied())
+                    .chain(
+                        nodes
+                            .iter()
+                            .filter(|n| (n.x - cx).hypot(n.y - cy) <= FOG_RADIUS)
+                            .map(|n| (n.x, n.y)),
+                    );
+                for (x, y) in open {
+                    assert!(
+                        map.push_out_of_land(x, y, 25.0).is_none(),
+                        "slot {slot} layout {layout}"
+                    );
+                }
+                for rock in &arena.rocks {
+                    assert!(map.is_land(rock.x, rock.y));
+                    assert!((rock.x - cx).hypot(rock.y - cy) + rock.radius < FOG_RADIUS - 40.0);
+                }
+            }
+            assert_ne!(arena_layout(slot, 1), arena_layout(slot, 2));
+            map.set_arena(slot, None);
+            assert_eq!(map.arena_land().count(), 0);
         }
     }
 

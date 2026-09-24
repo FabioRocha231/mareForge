@@ -348,7 +348,7 @@ fn page_lines(page: usize) -> Vec<Line> {
             Heading("Zonas"),
             Prose("Águas protegidas: ninguém ataca você. Fronteira: combate liberado. Sem lei: combate e saque total — afundou, a carga vira destroço de quem pegar."),
             Heading("Portais"),
-            Prose("Cerração: banco de névoa com tempo e vagas contados; leva a uma arena isolada e devolve você quando se dissipa. Sorvedouro: redemoinho que liga pontos distantes por dentro de águas sem lei."),
+            Prose("Cerração: banco de névoa com tempo e vagas contados; leva a uma arena isolada, diferente a cada abertura, com baús de Cristal da Cerração que afundam em 5 minutos. Devolve você quando se dissipa. Sorvedouro: redemoinho que liga pontos distantes por dentro de águas sem lei."),
             Heading("Eventos de mar"),
             Prose("Tormenta desgasta o casco de quem está dentro. Frota do tesouro navega com escolta. O kraken morde quem chega perto. Maré disputada faz brotar recurso raro em mar aberto."),
             Heading("Tesouro"),
