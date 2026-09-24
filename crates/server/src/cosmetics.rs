@@ -27,7 +27,13 @@ pub struct CaptainLook {
     /// Conexão que já recebeu o snapshot (reconexão recarrega do store e
     /// pega concessões novas).
     client: Option<ClientId>,
+    /// Última troca aceita (s de simulação): cada troca grava no banco.
+    last_wear: Option<f64>,
 }
+
+/// Uma troca por segundo por capitão: a UI não precisa de mais, e cada troca
+/// é uma escrita no banco dentro do tick.
+const WEAR_COOLDOWN_SECS: f64 = 1.0;
 
 #[derive(Resource, Default)]
 pub struct CaptainCosmetics(pub HashMap<CharacterId, CaptainLook>);
@@ -83,6 +89,7 @@ fn look_from_record(record: &CosmeticsRecord, grant_all: bool) -> CaptainLook {
         owned,
         worn,
         client: None,
+        last_wear: None,
     }
 }
 
@@ -131,6 +138,7 @@ fn load_on_connect(
 /// Troca de visual: só atracado (é no porto que se pinta o navio) e só o
 /// que o capitão possui. A resposta é sempre o snapshot verdadeiro.
 fn handle_wear(
+    time: Res<Time>,
     mut events: EventReader<ServerReceiveMessage<WearCosmetic>>,
     ships: Query<&ServerShip>,
     store: Res<StoreHandle>,
@@ -151,10 +159,15 @@ fn handle_wear(
             1 => CosmeticSlot::Flag,
             _ => continue,
         };
-        let docked = matches!(ship.presence, VesselPresence::Docked(_));
+        let now = time.elapsed_secs_f64();
+        let is_docked = matches!(ship.presence, VesselPresence::Docked(_));
+        let is_rested = look
+            .last_wear
+            .map_or(true, |last| now - last >= WEAR_COOLDOWN_SECS);
         let before = look.worn;
-        match docked.then(|| look.worn.wear(&look.owned, slot, wear.code)) {
+        match (is_docked && is_rested).then(|| look.worn.wear(&look.owned, slot, wear.code)) {
             Some(Ok(())) if look.worn != before => {
+                look.last_wear = Some(now);
                 info!(
                     ship_id = ship.ship_id,
                     ?slot,
@@ -174,7 +187,10 @@ fn handle_wear(
             }
             Some(Ok(())) => {}
             Some(Err(error)) => warn!(ship_id = ship.ship_id, %error, "troca de visual recusada"),
-            None => warn!(ship_id = ship.ship_id, "troca de visual fora do porto"),
+            None => warn!(
+                ship_id = ship.ship_id,
+                "troca de visual fora do porto ou rápida demais"
+            ),
         }
         let _ = connection_manager.send_message::<ReliableChannel, _>(client_id, &snapshot(look));
     }

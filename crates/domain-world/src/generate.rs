@@ -635,16 +635,29 @@ pub(crate) fn generate(seed: u64) -> WorldMap {
     let dock_of = |role: Role| docks.iter().find(|(r, _)| *r == role).map(|(_, d)| *d);
     let serra_dock = dock_of(Role::Serra).expect("Serra tem doca");
     let mina_dock = dock_of(Role::Mina).expect("Mina tem doca");
-    let to_road = exit_between(serra, road);
-    let to_mina = exit_between(road, mina);
-    let caravan_route = vec![
+    // Portão leva num sentido só: ida e volta têm cada uma os seus.
+    let lane = |from_dock: V, first: ZoneExit, second: ZoneExit, to_dock: V| {
+        vec![
+            from_dock,
+            V(first.x, first.y),
+            V(first.dest.0, first.dest.1),
+            V(second.x, second.y),
+            V(second.dest.0, second.dest.1),
+            to_dock,
+        ]
+    };
+    let caravan_route = lane(
         serra_dock,
-        V(to_road.x, to_road.y),
-        V(to_road.dest.0, to_road.dest.1),
-        V(to_mina.x, to_mina.y),
-        V(to_mina.dest.0, to_mina.dest.1),
+        exit_between(serra, road),
+        exit_between(road, mina),
         mina_dock,
-    ];
+    );
+    let caravan_return = lane(
+        mina_dock,
+        exit_between(mina, road),
+        exit_between(road, serra),
+        serra_dock,
+    );
 
     // Pontos de conteúdo que o espalhamento precisa respeitar.
     for (index, plan) in plans.iter().enumerate() {
@@ -805,6 +818,7 @@ pub(crate) fn generate(seed: u64) -> WorldMap {
         raider_spawns: raider_spawns.into_iter().map(V::t).collect(),
         navy_spawns: navy_spawns.into_iter().map(V::t).collect(),
         caravan_route: caravan_route.into_iter().map(V::t).collect(),
+        caravan_return: caravan_return.into_iter().map(V::t).collect(),
         whirlpool_sectors: [box_of(Role::Dawn), box_of(Role::Dusk), box_of(Role::Black)],
         labels,
     };
@@ -953,7 +967,11 @@ mod tests {
         for seed in SEEDS {
             let map = generate(seed).with_hidden_islands();
             let f = map.features();
-            for (route, clearance) in [(&f.fleet_route, 40.0), (&f.caravan_route, 20.0)] {
+            for (route, clearance) in [
+                (&f.fleet_route, 40.0),
+                (&f.caravan_route, 20.0),
+                (&f.caravan_return, 20.0),
+            ] {
                 for leg in route.windows(2) {
                     let ((ax, ay), (bx, by)) = (leg[0], leg[1]);
                     if !same_area(&map, leg[0], leg[1]) {
@@ -979,8 +997,14 @@ mod tests {
     fn caravan_route_crosses_zones_through_real_gates() {
         for seed in SEEDS {
             let map = generate(seed);
-            let route = &map.features().caravan_route;
-            for leg in route.windows(2) {
+            let f = map.features();
+            assert_eq!(f.caravan_route.first(), f.caravan_return.last());
+            assert_eq!(f.caravan_route.last(), f.caravan_return.first());
+            for leg in f
+                .caravan_route
+                .windows(2)
+                .chain(f.caravan_return.windows(2))
+            {
                 if map.area_at(leg[0].0, leg[0].1) != map.area_at(leg[1].0, leg[1].1) {
                     let exit = map
                         .exit_at(leg[0].0, leg[0].1)

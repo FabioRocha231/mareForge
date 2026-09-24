@@ -152,7 +152,7 @@ fn arena_chest(dev: &crate::net::DevItems) -> Vec<(marvyr_shared::ids::ItemDefin
 /// NPC num portão de zona: quem tem o outro lado na rota (caravana)
 /// atravessa e segue a rota; o resto (patrulha, perseguição) bate no
 /// paredão e volta para dentro da própria zona.
-fn cross_npc(map: &marvyr_domain_world::WorldMap, npc: &mut crate::npc::NpcShip) {
+pub(crate) fn cross_npc(map: &marvyr_domain_world::WorldMap, npc: &mut crate::npc::NpcShip) {
     let Some(exit) = map.exit_at(npc.motion.x, npc.motion.y).copied() else {
         return;
     };

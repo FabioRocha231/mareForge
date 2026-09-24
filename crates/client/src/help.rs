@@ -326,8 +326,8 @@ fn page_lines(page: usize) -> Vec<Line> {
             Custom("Roda do mouse", "Analógico direito", "Aproximar e afastar a câmera"),
             Key(KeyCode::KeyE, "Atracar quando o bilhete de porto aparecer"),
             // Só teclado: o controle não tem botão sobrando para a carta.
-            Custom("M", "M", "Carta náutica: o que você já navegou"),
-            Custom("N", "N", "Ligar e desligar a música"),
+            Custom("M", "—", "Carta náutica: o que você já navegou"),
+            Custom("O", "—", "Ligar e desligar a música"),
             Prose("O vento manda. De popa ou de través o navio corre; contra o vento mal sai do lugar. A rosa no canto direito mostra de onde ele sopra e como está o seu pano."),
         ],
         1 => vec![

@@ -78,8 +78,11 @@ pub struct Features {
     /// Piratas que rondam a Rota da Costa.
     pub raider_spawns: Vec<(f32, f32)>,
     pub navy_spawns: Vec<(f32, f32)>,
-    /// Serra -> Mina (a volta é a lista invertida).
+    /// Serra -> Mina.
     pub caravan_route: Vec<(f32, f32)>,
+    /// Mina -> Serra. Não é a ida invertida: cada portão só leva num
+    /// sentido (MV-066), a volta usa os portões do outro lado.
+    pub caravan_return: Vec<(f32, f32)>,
     /// Onde os três redemoinhos nascem (ligam aos `MAELSTROM_POINTS`).
     pub whirlpool_sectors: [Sector; 3],
     /// Nomes de águas perigosas que o client escreve no mar.
@@ -163,6 +166,13 @@ impl Features {
                 (0.0, 0.0),
                 (300.0, 0.0),
                 (560.0, 0.0),
+            ],
+            caravan_return: vec![
+                (560.0, 0.0),
+                (300.0, 0.0),
+                (0.0, 0.0),
+                (-300.0, 0.0),
+                (-560.0, 0.0),
             ],
             whirlpool_sectors: [
                 (-1000.0, -200.0, -500.0, 800.0),

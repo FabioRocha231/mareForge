@@ -119,7 +119,7 @@ as sessões: reinicie os dois serviços juntos.
 Velas e bandeiras são **só aparência** (nunca stats). Não há loja: a
 administração concede pelo nome de login do capitão, dentro do contêiner do
 servidor. O capitão vê o item no próximo login e escolhe na aba *Equipamento*
-do porto.
+do porto. Revogar também vale a partir do próximo login do capitão.
 
 ```sh
 C=$(docker ps -qf name=marvyr-server)
