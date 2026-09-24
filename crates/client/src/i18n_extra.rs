@@ -162,6 +162,9 @@ pub const TABLE: &[(&str, &str)] = &[
         "Nautical chart: everywhere you have sailed",
     ),
     ("Ligar e desligar a música", "Toggle the music"),
+    // Nós das fronteiras (MV-067)
+    ("Madeira à Deriva", "Driftwood"),
+    ("Veio Submerso", "Sunken Ore Vein"),
     // Cosméticos (MV-066)
     ("Velas Esmeralda", "Emerald Sails"),
     ("Velas de Ouro", "Golden Sails"),

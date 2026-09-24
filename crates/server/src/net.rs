@@ -619,6 +619,7 @@ impl Plugin for ServerNetPlugin {
         crate::weather::install(app);
         crate::seafaring::install(app);
         crate::cosmetics::install(app);
+        crate::flotsam::install(app);
         app.register_message::<marvyr_protocol::ReputationUpdate>(ChannelDirection::ServerToClient);
         app.register_message::<marvyr_protocol::WorldEvent>(ChannelDirection::ServerToClient);
         // v15 (MV-061): combate profundo, tripulação, eventos e tesouro.

@@ -36,7 +36,8 @@ pub struct NodeIdCounter(pub u32);
 fn resource_of_node(name: &str, region: &str, dev: &DevItems) -> Option<ItemDefinitionId> {
     match name {
         // MV-066: portos livres têm madeira e minério na mesma baía.
-        "Mata Costeira" => return Some(dev.timber),
+        "Mata Costeira" | "Madeira à Deriva" => return Some(dev.timber),
+        "Veio Submerso" => return Some(dev.ore),
         "Jazida Costeira" => return Some(dev.ore),
         "Recife Abissal" => return Some(dev.abyssal_pearl),
         "Coração da Cerração" => return Some(dev.fog_essence),

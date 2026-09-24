@@ -35,6 +35,11 @@ use crate::reputation::{notoriety_gain, Offense, Reputation};
 /// tentáculos (m). O monstro não tem canhão: precisa encostar.
 const KRAKEN_BITE: u32 = 22;
 const KRAKEN_REACH: f32 = 42.0;
+
+/// Alcance máximo de canhão de NPC: o do casco inicial do jogador.
+fn npc_max_range(dev_ships: &DevShips) -> f32 {
+    dev_ships.merchant.base_weapon_range
+}
 /// Segundos entre dois golpes do Kraken.
 const KRAKEN_BITE_SECS: f32 = 1.6;
 /// Distância lateral (m) da escolta ao galeão.
@@ -216,7 +221,8 @@ impl NpcSpawnConfig {
     pub fn for_map(map: &WorldMap) -> Self {
         let features = map.features();
         Self {
-            count: 3,
+            // MV-067: um pirata por ponto do mapa (zonas sem lei inteiras).
+            count: features.pirate_spawns.len(),
             // Águas da Ilha do Coral Negro: lawless e longe dos portos.
             spawn_positions: features.pirate_spawns.clone(),
             respawn_after_secs: 30.0,
@@ -406,12 +412,15 @@ pub(crate) fn build_npc(
     let ship_id = next_npc_id(ids);
     let kind = role.kind();
     let definition = dev_ships.definition(kind).clone();
-    let stats = compute_ship_stats(
+    let mut stats = compute_ship_stats(
         &definition,
         &EquippedComponents::default(),
         &ItemCatalog::default(),
     )
     .expect("stats de navio sem equipamento não podem falhar");
+    // MV-067: NPC nunca atira mais longe que o navio inicial do jogador —
+    // quem é atingido sempre consegue revidar (o Kraken morde de perto).
+    stats.weapon_range = stats.weapon_range.min(npc_max_range(dev_ships));
     let max_hp = stats.max_hp;
     let cargo_capacity = stats.cargo_capacity;
     let position = config.home(role, position);

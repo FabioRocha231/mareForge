@@ -69,9 +69,10 @@ pub enum DirectorChange {
 }
 
 /// Intervalo (s) entre o fim de um evento e o próximo.
-const INTERVAL: (f32, f32) = (240.0, 480.0);
+/// MV-067: mar com evento quase sempre à vista (antes 4–8 min de espera).
+const INTERVAL: (f32, f32) = (90.0, 180.0);
 /// Primeiro evento depois do boot (s): dá tempo de o servidor encher.
-const FIRST_EVENT: f32 = 180.0;
+const FIRST_EVENT: f32 = 60.0;
 
 #[derive(Debug, Clone)]
 pub struct SeaEventDirector {
