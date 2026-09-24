@@ -34,7 +34,13 @@ The human playtest runs a server and client together. It starts at Porto da
 Serra and provides keyboard-driven sailing, docking, storage, gathering,
 crafting, loadout, market selling, naval combat, and wreck looting.
 
-## Play now
+## Play the public alpha
+
+Download the Windows zip from the GitHub Releases page, extract it and run
+`Marvyr.exe`. Create an account on the login screen; the session is kept in
+your user data folder. See [`docs/PLAYERS.md`](docs/PLAYERS.md).
+
+## Play locally (developers)
 
 Requirements: Rust 1.80 or newer.
 
@@ -53,8 +59,20 @@ For the complete 14-step checklist and bug-reporting guidance, see
 
 Essential controls: `W`/`S` raise or lower sail (3 levels), `A`/`D` rudder,
 mouse wheel zoom, `E` dock or undock, `G` gather, `Q`/`R` fire
-broadside weapons, and `F` loot a wreck. The checklist covers the complete UI
-flow.
+broadside weapons, and `F` loot a wreck. At sea: `K` repair (spends timber),
+`H` board a crippled ship, `J` dig at a treasure-map spot, and `P` hire crew
+while docked. The checklist covers the complete UI flow.
+
+To run the pieces separately against a remote server (login and all):
+
+```sh
+cargo run -p marvyr-auth --release     # MARVYR_DATABASE_URL, MARVYR_JWT_SECRET
+cargo run -p marvyr-server --release   # same secret; MARVYR_ENV=production
+cargo run -p marvyr-client --release -- --server host:5000 --auth-url http://host:8080
+```
+
+Environment variables, Dokploy topology and the release pipeline are in
+[`docs/DEPLOY.md`](docs/DEPLOY.md).
 
 ## Test
 
@@ -74,6 +92,11 @@ cargo test --workspace
   management.
 - Domain crates for items, crafting, economy, ships, combat, and world rules.
 - PostgreSQL/sqlx persistence code and an immutable economic ledger design.
+- Accounts (`marvyr-auth`: register/login, JWT) with an in-game login screen.
+- Deep naval combat: firing arcs, stern hits cripple the rudder, repair at
+  sea, crew and boarding.
+- Sea events: tempests, treasure fleets with escorts, the kraken and
+  contested tides; hidden islands and treasure maps.
 
 ## Architecture
 

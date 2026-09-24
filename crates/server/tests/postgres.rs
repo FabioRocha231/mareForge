@@ -243,6 +243,7 @@ fn ship_record_roundtrips_through_postgres() {
         // MF-049: testa o roundtrip da presença. Navio do teste estava
         // fora do porto no momento da persistência — restaura igual.
         presence: marvyr_domain_ships::VesselPresence::AtSea,
+        crew: 7,
     };
 
     store.save_ship(&record).expect("save_ship");
@@ -273,6 +274,32 @@ fn ship_record_roundtrips_through_postgres() {
         restored.cargo[0].location,
         ItemLocation::ShipCargo(ship_instance)
     );
+
+    // Depositar no porto mantém o id do item: o save_market seguinte não
+    // pode bater na linha de carga ainda gravada pelo último save_ship.
+    let region = RegionId::new();
+    let mut deposited = restored.cargo[0].clone();
+    deposited.location = ItemLocation::PortStorage(region);
+    let mut after_deposit = seed.clone();
+    after_deposit.storage = vec![marvyr_server::market::StorageEntry {
+        character,
+        region,
+        stacks: vec![deposited],
+    }];
+    store
+        .save_market(&after_deposit)
+        .expect("save_market depois do depósito");
+    let market = store.load_market().expect("load").expect("snapshot");
+    assert_eq!(quantity_of(&market, character), 12, "item mudou de lugar");
+    let ship = store.load_ship(character).expect("load").expect("navio");
+    assert!(ship.cargo.is_empty(), "item não fica em dois lugares");
+
+    // Naufrágio: o casco checkpointado não volta no próximo login, e o
+    // equipamento a bordo some com ele; o storage do porto fica.
+    store.delete_ships_of(character).expect("delete_ships_of");
+    assert!(store.load_ship(character).expect("load").is_none());
+    let market = store.load_market().expect("load").expect("snapshot");
+    assert_eq!(quantity_of(&market, character), 12, "storage intocado");
 }
 
 /// MF-041: um Expired persistido no banco volta com o status preservado e

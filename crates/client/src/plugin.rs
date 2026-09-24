@@ -46,6 +46,8 @@ impl Plugin for ClientPlugin {
             .add_plugins(JuicePlugin)
             .add_plugins(SoundPlugin)
             .add_plugins(WantedHudPlugin)
+            .add_plugins(crate::seafaring::SeafaringPlugin)
+            .add_plugins(crate::session::SessionPlugin)
             .add_systems(Update, update_wanted_markers.after(lerp_ship_visuals))
             .add_systems(Startup, setup_camera)
             .add_systems(

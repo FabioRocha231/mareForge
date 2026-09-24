@@ -1,0 +1,8 @@
+target
+.git
+playtest-results
+screenshots
+.claude
+.firecrawl
+.playwright-mcp
+dist

@@ -1,6 +1,7 @@
 pub mod assets;
 pub mod audio;
 pub mod camera;
+pub mod config;
 pub mod crafting;
 pub mod guild;
 pub mod hud;
@@ -12,6 +13,8 @@ pub mod playtest;
 pub mod plugin;
 pub mod port_screen;
 pub mod portals;
+pub mod seafaring;
+pub mod session;
 pub mod ship;
 pub mod ui;
 pub mod vfx;
@@ -21,8 +24,6 @@ pub mod world;
 pub mod zone;
 
 pub use plugin::ClientPlugin;
-
-use std::path::{Path, PathBuf};
 
 use bevy::asset::AssetPlugin;
 use bevy::prelude::*;
@@ -39,7 +40,7 @@ pub fn windowed_app() -> App {
             .set(ImagePlugin::default_nearest())
             .set(WindowPlugin {
                 primary_window: Some(Window {
-                    title: "Marvyr — Playtest α".into(),
+                    title: format!("Marvyr {}", marvyr_protocol::VERSION_LABEL),
                     resolution: (1280.0_f32, 720.0_f32).into(),
                     // Captura de dev não rouba o foco (nem o teclado) de
                     // quem está usando a máquina.
@@ -57,29 +58,5 @@ pub fn windowed_app() -> App {
 }
 
 fn asset_root() -> String {
-    workspace_assets().to_string_lossy().into_owned()
-}
-
-fn workspace_assets() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("marvyr-client lives under the workspace crates directory")
-        .join("assets")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn always_uses_the_compiled_workspace_assets() {
-        let client = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let workspace = client
-            .parent()
-            .and_then(Path::parent)
-            .expect("workspace root");
-
-        assert_eq!(Path::new(&asset_root()), workspace.join("assets"));
-    }
+    config::asset_root().to_string_lossy().into_owned()
 }

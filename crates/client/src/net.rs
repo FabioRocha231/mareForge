@@ -27,24 +27,35 @@ use marvyr_protocol::{
     WalletUpdated, WorldSnapshot, ZoneChanged, PROTOCOL_VERSION,
 };
 
-pub fn server_addr() -> SocketAddr {
-    let port = parse_port(std::env::var("MARVYR_PORT").ok().as_deref());
-    SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port)
+/// Socket local em todas as interfaces (MV-061: servidor remoto). Porta 0:
+/// o SO escolhe a efêmera — permite vários clients na mesma máquina.
+const CLIENT_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0);
+
+/// Config de netcode para um servidor já resolvido. O `client_id` é
+/// aleatório: dois jogadores em máquinas diferentes nunca colidem (o id
+/// de processo colidia).
+pub fn netcode_config(server_addr: SocketAddr) -> NetConfig {
+    NetConfig::Netcode {
+        auth: Authentication::Manual {
+            server_addr,
+            client_id: rand_client_id(),
+            private_key: marvyr_protocol::NETCODE_KEY,
+            protocol_id: marvyr_protocol::NETCODE_PROTOCOL_ID,
+        },
+        io: IoConfig {
+            transport: ClientTransport::UdpSocket(CLIENT_ADDR),
+            ..default()
+        },
+        config: NetcodeConfig {
+            client_timeout_secs: 10,
+            ..default()
+        },
+    }
 }
 
-fn parse_port(value: Option<&str>) -> u16 {
-    value
-        .map(|value| {
-            value
-                .parse::<u16>()
-                .ok()
-                .filter(|port| *port != 0)
-                .unwrap_or_else(|| panic!("MARVYR_PORT must be an integer from 1 to 65535"))
-        })
-        .unwrap_or(5000)
+fn rand_client_id() -> u64 {
+    uuid::Uuid::new_v4().as_u64_pair().0
 }
-/// Porta 0: o SO escolhe a porta efêmera — permite vários clients na mesma máquina.
-const CLIENT_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
 const SIM_HZ: f64 = 30.0;
 
 /// Espelho do canal confiável do servidor.
@@ -79,8 +90,8 @@ pub struct KnownShipKind(pub Option<ShipKind>);
 #[derive(Resource, Default)]
 pub struct ClientNetOverride(pub Option<NetConfig>);
 
-/// Identidade usada no `ClientHello` dos testes. Quando ausente, o client
-/// continua lendo `MARVYR_IDENTITY`/`~/.marvyr/identity`.
+/// Identidade enviada no `ClientHello`: o JWT da conta (login) ou, em dev
+/// sem serviço de contas, o token anônimo persistente. Os testes injetam.
 #[derive(Resource, Default)]
 pub struct ClientIdentity(pub Option<String>);
 
@@ -93,29 +104,21 @@ pub struct ClientNetPlugin;
 
 impl Plugin for ClientNetPlugin {
     fn build(&self, app: &mut App) {
-        let net_config = app
+        let overridden = app
             .world()
             .get_resource::<ClientNetOverride>()
-            .and_then(|override_config| override_config.0.clone())
-            .unwrap_or_else(|| {
-                // Id único por processo: dois clients na mesma máquina não podem
-                // disputar o mesmo client_id no netcode (o servidor rejeita duplicado).
-                let client_id = u64::from(std::process::id());
-                let auth = Authentication::Manual {
-                    server_addr: server_addr(),
-                    client_id,
-                    private_key: Key::default(),
-                    protocol_id: 0,
-                };
-                NetConfig::Netcode {
-                    auth,
-                    io: IoConfig {
-                        transport: ClientTransport::UdpSocket(CLIENT_ADDR),
-                        ..default()
-                    },
-                    config: NetcodeConfig::default(),
-                }
-            });
+            .and_then(|override_config| override_config.0.clone());
+        // Sem override, o endereço real só existe depois do login/DNS
+        // (`session::start_connection` regrava o `ClientConfig`).
+        let net_config = overridden.clone().unwrap_or_else(|| {
+            netcode_config(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 5000))
+        });
+        app.init_resource::<crate::session::ConnectionStatus>();
+        if overridden.is_some() {
+            // Testes: transporte e identidade injetados; conecta no boot.
+            app.insert_resource(crate::session::ConnectImmediately);
+            app.add_systems(Startup, connect_now);
+        }
         app.init_resource::<ClientNetOverride>();
         app.init_resource::<ClientIdentity>();
         app.init_resource::<ShipInputOverride>();
@@ -136,7 +139,10 @@ impl Plugin for ClientNetPlugin {
             mode: ChannelMode::UnorderedUnreliable,
             ..default()
         });
+        // Handshake PRIMEIRO (ids de rede 0 e 1, congelados desde o v15):
+        // espelho exato do servidor.
         app.register_message::<ClientHello>(ChannelDirection::ClientToServer);
+        app.register_message::<ServerWelcome>(ChannelDirection::ServerToClient);
         app.register_message::<ShipInput>(ChannelDirection::ClientToServer);
         app.register_message::<Dock>(ChannelDirection::ClientToServer);
         app.register_message::<Undock>(ChannelDirection::ClientToServer);
@@ -152,7 +158,6 @@ impl Plugin for ClientNetPlugin {
         app.register_message::<CreateSellOrder>(ChannelDirection::ClientToServer);
         app.register_message::<CancelSellOrder>(ChannelDirection::ClientToServer);
         app.register_message::<BuySellOrder>(ChannelDirection::ClientToServer);
-        app.register_message::<ServerWelcome>(ChannelDirection::ServerToClient);
         app.register_message::<AssignShip>(ChannelDirection::ServerToClient);
         app.register_message::<DockResult>(ChannelDirection::ServerToClient);
         app.register_message::<LoadoutSnapshot>(ChannelDirection::ServerToClient);
@@ -183,11 +188,18 @@ impl Plugin for ClientNetPlugin {
         app.register_message::<marvyr_protocol::WeatherUpdate>(ChannelDirection::ServerToClient);
         app.register_message::<marvyr_protocol::ReputationUpdate>(ChannelDirection::ServerToClient);
         app.register_message::<marvyr_protocol::WorldEvent>(ChannelDirection::ServerToClient);
+        app.register_message::<marvyr_protocol::SetRepair>(ChannelDirection::ClientToServer);
+        app.register_message::<marvyr_protocol::BoardShip>(ChannelDirection::ClientToServer);
+        app.register_message::<marvyr_protocol::HireCrew>(ChannelDirection::ClientToServer);
+        app.register_message::<marvyr_protocol::DigTreasure>(ChannelDirection::ClientToServer);
+        app.register_message::<marvyr_protocol::ActionResult>(ChannelDirection::ServerToClient);
+        app.register_message::<marvyr_protocol::SeaEventsUpdate>(ChannelDirection::ServerToClient);
+        app.register_message::<marvyr_protocol::TreasureHints>(ChannelDirection::ServerToClient);
+        app.register_message::<marvyr_protocol::IslandsInSight>(ChannelDirection::ServerToClient);
         app.init_resource::<crate::ship::DestroyedShips>();
         app.init_resource::<KnownWrecks>();
         app.init_resource::<MyDocked>();
         app.init_resource::<SailLevel>();
-        app.add_systems(Startup, (connect, log_connecting));
         // Intenção contínua (leme/pano) vai no tick fixo; comandos de tecla
         // única ficam no Update — `just_pressed` vale um frame de render e o
         // FixedUpdate a 30 Hz pula frames, engolindo tiros e atracações.
@@ -332,24 +344,17 @@ fn handle_dock_result(
     }
 }
 
-/// Token de identidade persistente do jogador (MF-035): a MESMA identidade
-/// sobrevive a restart de client — a conexão é descartável, o personagem
-/// não. Ordem: `MARVYR_IDENTITY` (testes/smoke) → `~/.marvyr/identity`
-/// → gera e salva. Fail-closed seria negar jogo; aqui gerar é a política
-/// dev declarada (identidade nova = personagem novo, sem inventar dono).
-fn identity_token() -> String {
+/// Token anônimo persistente (MF-035) para dev SEM serviço de contas: a
+/// MESMA identidade sobrevive a restart de client. Ordem: `MARVYR_IDENTITY`
+/// (testes/smoke) → `<dados do jogador>/identity` → gera e salva. Produção
+/// usa o JWT do login; o servidor recusa token anônimo.
+pub(crate) fn identity_token() -> String {
     if let Ok(token) = std::env::var("MARVYR_IDENTITY") {
         if !token.trim().is_empty() {
             return token;
         }
     }
-    let path = std::env::var("HOME")
-        .map(|home| {
-            std::path::PathBuf::from(home)
-                .join(".marvyr")
-                .join("identity")
-        })
-        .unwrap_or_else(|_| std::path::PathBuf::from("marvyr-identity"));
+    let path = crate::config::data_dir().join("identity");
     if let Ok(token) = std::fs::read_to_string(&path) {
         let token = token.trim().to_string();
         if !token.is_empty() {
@@ -385,20 +390,19 @@ fn reset_on_disconnect(
     mut disconnect: EventReader<DisconnectEvent>,
     mut my_ship: ResMut<MyShip>,
     mut ship_kind: ResMut<KnownShipKind>,
+    mut status: ResMut<crate::session::ConnectionStatus>,
 ) {
     for _ in disconnect.read() {
         warn!("conexão perdida; personagem segue no servidor dentro da janela de graça");
         my_ship.0 = None;
         ship_kind.0 = None;
+        status.on_disconnect();
     }
 }
 
-fn connect(mut commands: Commands) {
+fn connect_now(mut commands: Commands, mut status: ResMut<crate::session::ConnectionStatus>) {
     commands.connect_client();
-}
-
-fn log_connecting() {
-    info!(server = %server_addr(), "conectando ao servidor marvyr");
+    *status = crate::session::ConnectionStatus::Connecting { since: 0.0 };
 }
 
 /// Handshake (ADR-0011): primeira mensagem após conectar é o hello com a
@@ -409,7 +413,10 @@ fn send_hello_on_connect(
     identity: Res<ClientIdentity>,
 ) {
     for _ in connect.read() {
-        let token = identity.0.clone().unwrap_or_else(identity_token);
+        let Some(token) = identity.0.clone() else {
+            warn!("conectado sem identidade de sessão; hello adiado");
+            continue;
+        };
         info!("conectado; enviando ClientHello com identidade");
         let _ = connection_manager.send_message::<ReliableChannel, _>(&ClientHello::current(token));
     }
@@ -667,6 +674,7 @@ fn handle_handshake(
     mut assign_events: EventReader<ClientReceiveMessage<AssignShip>>,
     mut my_ship: ResMut<MyShip>,
     mut ship_kind: ResMut<KnownShipKind>,
+    mut status: ResMut<crate::session::ConnectionStatus>,
 ) {
     for event in welcome_events.read() {
         let welcome = event.message();
@@ -675,12 +683,15 @@ fn handle_handshake(
                 server_protocol = welcome.protocol_version,
                 "handshake aceito pelo servidor"
             );
+            *status = crate::session::ConnectionStatus::InGame;
         } else {
             error!(
                 server_protocol = welcome.protocol_version,
                 our_protocol = PROTOCOL_VERSION,
-                "servidor rejeitou a versão do protocolo; atualize o client"
+                reason = %welcome.reason,
+                "servidor recusou a conexão"
             );
+            *status = crate::session::ConnectionStatus::from_rejection(welcome);
         }
     }
     for event in assign_events.read() {
@@ -692,26 +703,5 @@ fn handle_handshake(
             kind = ?message.kind,
             "navio atribuído a este client"
         );
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::parse_port;
-
-    #[test]
-    fn port_defaults_to_5000() {
-        assert_eq!(parse_port(None), 5000);
-    }
-
-    #[test]
-    fn port_accepts_valid_value() {
-        assert_eq!(parse_port(Some("5001")), 5001);
-    }
-
-    #[test]
-    #[should_panic(expected = "MARVYR_PORT must be an integer from 1 to 65535")]
-    fn port_rejects_zero() {
-        parse_port(Some("0"));
     }
 }

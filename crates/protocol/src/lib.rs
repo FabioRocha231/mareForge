@@ -50,7 +50,46 @@ use serde::{Deserialize, Serialize};
 ///      munição e `ShipState.sail_hp`/`ammo`.
 /// v14: MF-060 — mar vivo: `ShipState.faction`/`notoriety_tier`,
 ///      `ReputationUpdate` e `WorldEvent`.
-pub const PROTOCOL_VERSION: u16 = 14;
+/// v15: MV-061 — Public Alpha. Handshake CONGELADO: `ClientHello` e
+///      `ServerWelcome` são as duas primeiras mensagens registradas (ids de
+///      rede 0 e 1) e só ganham campos no FIM — assim um client de qualquer
+///      versão futura ainda decodifica a recusa e mostra "versão
+///      incompatível". `ServerWelcome.reason` explica a recusa; `identity`
+///      carrega o JWT do `marvyr-auth`. Gameplay: dano de leme, reparo no
+///      mar, abordagem, tripulação, eventos de mundo, mapas do tesouro e
+///      ilhas ocultas.
+pub const PROTOCOL_VERSION: u16 = 15;
+
+/// Rótulo de versão da build (`MARVYR_VERSION_LABEL` no build de release,
+/// senão a versão do Cargo). Client e servidor mostram no log e no HUD.
+pub const VERSION_LABEL: &str = match option_env!("MARVYR_VERSION_LABEL") {
+    Some(label) => label,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
+/// Commit da build (`MARVYR_BUILD_SHA`), `dev` fora do pipeline.
+pub const BUILD_SHA: &str = match option_env!("MARVYR_BUILD_SHA") {
+    Some(sha) => sha,
+    None => "dev",
+};
+
+/// Id de protocolo do netcode (lightyear). Constante ENTRE versões: a
+/// incompatibilidade de versão é detectada no `ClientHello`, onde o client
+/// ainda consegue mostrar a mensagem certa — não no transporte.
+pub const NETCODE_PROTOCOL_ID: u64 = 0x4D41_5256_5952_0001;
+
+/// Chave do connect token do netcode. Vai no binário do client (auth
+/// `Manual`), então NÃO é segredo: o controle de acesso real é o JWT do
+/// `ClientHello`. Só separa o Marvyr de outro tráfego netcode.
+pub const NETCODE_KEY: [u8; 32] = *b"marvyr-public-alpha-netcode-key!";
+
+/// Tamanho máximo aceito para `ClientHello.identity` (JWT cabe folgado).
+pub const MAX_IDENTITY_LEN: usize = 2048;
+
+/// Recusas que mandam o client de volta ao login (sessão ausente/vencida).
+/// Ficam no protocolo porque o client decide a tela comparando o texto.
+pub const REASON_NO_SESSION: &str = "Sessão ausente. Faça login novamente.";
+pub const REASON_BAD_SESSION: &str = "Sessão expirada ou inválida. Faça login novamente.";
 
 /// Primeira mensagem do client após conectar (ADR-0011). `identity` é o
 /// token persistente do jogador (MF-035): o servidor resolve token →
@@ -71,12 +110,32 @@ impl ClientHello {
     }
 }
 
-/// Resposta do servidor. Conexão com versão incompatível é rejeitada
-/// (`accepted == false`) e encerrada em seguida.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Resposta do servidor. Conexão recusada (`accepted == false`) é encerrada
+/// logo em seguida; `reason` é texto para o jogador (vazio quando aceito).
+/// Layout congelado desde o v15 (ver [`PROTOCOL_VERSION`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServerWelcome {
     pub protocol_version: u16,
     pub accepted: bool,
+    pub reason: String,
+}
+
+impl ServerWelcome {
+    pub fn accepted() -> Self {
+        Self {
+            protocol_version: PROTOCOL_VERSION,
+            accepted: true,
+            reason: String::new(),
+        }
+    }
+
+    pub fn rejected(reason: impl Into<String>) -> Self {
+        Self {
+            protocol_version: PROTOCOL_VERSION,
+            accepted: false,
+            reason: reason.into(),
+        }
+    }
 }
 
 /// O servidor atribui um navio ao jogador aceito (janela com visão própria).
@@ -147,10 +206,126 @@ pub struct ShipState {
     /// Todos veem quem é procurado. Aditivo, default 0.
     #[serde(default)]
     pub notoriety_tier: u8,
+    /// v15: integridade do leme (0..100); avariado, o navio gira menos.
+    #[serde(default = "full_sails")]
+    pub rudder_hp: f32,
+    /// v15: tripulação a bordo e capacidade do casco.
+    #[serde(default)]
+    pub crew: u16,
+    #[serde(default)]
+    pub crew_max: u16,
+    /// v15: tripulação trabalhando no reparo em mar.
+    #[serde(default)]
+    pub repairing: bool,
+    /// v15: progresso da escavação de tesouro (0 = não está cavando).
+    #[serde(default)]
+    pub dig_progress: f32,
 }
 
 fn full_sails() -> f32 {
     100.0
+}
+
+/// v15: liga/desliga o reparo em mar (tecla K). O servidor só repara com
+/// o navio parado, fora de combate e com Madeira no porão.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetRepair {
+    pub active: bool,
+}
+
+/// v15: tentativa de abordagem (tecla H) — encostado no alvo avariado ou
+/// parado; o resultado depende das tripulações.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoardShip {
+    pub target_ship_id: u32,
+}
+
+/// v15: contratar marujos no porto (atracado), pagando ouro.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HireCrew {
+    pub count: u16,
+}
+
+/// v15: cavar no ponto do mapa do tesouro (tecla J), parado sobre ele.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DigTreasure;
+
+/// v15: ação de mar/porto que recebeu veredito.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ActionKind {
+    Repair,
+    Board,
+    HireCrew,
+    Dig,
+}
+
+/// v15: veredito das ações novas (texto para o toast do HUD).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActionResult {
+    pub action: ActionKind,
+    pub success: bool,
+    pub reason: String,
+}
+
+/// v15: tipo de evento de mundo em curso.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SeaEventKind {
+    /// Tempestade que também racha casco.
+    Tempest,
+    /// Comboio NPC com ouro e escolta pesada.
+    TreasureFleet,
+    /// Monstro marinho que ataca navios.
+    Kraken,
+    /// Maré rica em recurso raro, disputada.
+    ContestedTide,
+}
+
+/// v15: evento de mundo visível para todos (área e tempo restante).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SeaEventState {
+    pub event_id: u32,
+    pub kind: SeaEventKind,
+    pub name: String,
+    pub x: f32,
+    pub y: f32,
+    pub radius: f32,
+    pub remaining_secs: f32,
+}
+
+/// v15: eventos de mundo em curso (~1 Hz, todos os clients).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SeaEventsUpdate {
+    pub events: Vec<SeaEventState>,
+}
+
+/// v15: onde os mapas do tesouro no porão apontam.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TreasureHint {
+    pub x: f32,
+    pub y: f32,
+    pub island: String,
+}
+
+/// v15: pistas dos mapas do PRÓPRIO porão (~1 Hz, só para o dono).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TreasureHints {
+    pub hints: Vec<TreasureHint>,
+}
+
+/// v15: ilha oculta à vista (só aparece para quem chega perto).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct IslandState {
+    pub island_id: u32,
+    pub name: String,
+    pub x: f32,
+    pub y: f32,
+    pub radius: f32,
+}
+
+/// v15: ilhas ocultas dentro do alcance de visão do navio (~1 Hz).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct IslandsInSight {
+    pub islands: Vec<IslandState>,
 }
 
 /// Troca de munição do próprio navio (MF-059). O servidor guarda e aplica
@@ -169,6 +344,9 @@ pub struct StormState {
     pub radius: f32,
     /// 0..1 — fade in/out da célula.
     pub intensity: f32,
+    /// v15: tempestade de evento (racha casco, não só pano).
+    #[serde(default)]
+    pub tempest: bool,
 }
 
 /// Clima do mar (MF-059), ~1 Hz para todos: vento global e tempestades.
@@ -188,6 +366,8 @@ pub enum Faction {
     Pirate,
     Navy,
     Merchant,
+    /// v15: criatura marinha (kraken de evento).
+    Monster,
 }
 
 /// Faixas de notoriedade no wire (`ShipState.notoriety_tier`).
@@ -635,8 +815,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn current_protocol_version_is_twelve() {
-        assert_eq!(PROTOCOL_VERSION, 14);
+    fn current_protocol_version_is_fifteen() {
+        assert_eq!(PROTOCOL_VERSION, 15);
         assert_eq!(
             ClientHello::current("token").protocol_version,
             PROTOCOL_VERSION
@@ -666,6 +846,11 @@ mod tests {
             ammo: Ammo::Round,
             faction: Faction::Player,
             notoriety_tier: 0,
+            rudder_hp: 100.0,
+            crew: 0,
+            crew_max: 0,
+            repairing: false,
+            dig_progress: 0.0,
         };
         let bytes = bincode::serialize(&state).unwrap();
         let decoded = bincode::deserialize::<ShipState>(&bytes).unwrap();
@@ -699,6 +884,11 @@ mod tests {
                 ammo: Ammo::Round,
                 faction: Faction::Navy,
                 notoriety_tier: 0,
+                rudder_hp: 100.0,
+                crew: 0,
+                crew_max: 0,
+                repairing: false,
+                dig_progress: 0.0,
             };
             let bytes = bincode::serialize(&state).unwrap();
             let decoded = bincode::deserialize::<ShipState>(&bytes).unwrap();
@@ -840,6 +1030,11 @@ mod tests {
             ammo: Ammo::Round,
             faction: Faction::Player,
             notoriety_tier: 0,
+            rudder_hp: 100.0,
+            crew: 0,
+            crew_max: 0,
+            repairing: false,
+            dig_progress: 0.0,
         };
         let bytes = bincode::serialize(&full).expect("encode");
         // Trunca 8 bytes (dois f32): simula cliente novo lendo servidor antigo.
@@ -865,6 +1060,7 @@ mod tests {
         let message = ServerWelcome {
             protocol_version: 99,
             accepted: false,
+            reason: String::from("versão incompatível"),
         };
         let bytes = bincode::serialize(&message).unwrap();
         let decoded: ServerWelcome = bincode::deserialize(&bytes).unwrap();
@@ -909,6 +1105,11 @@ mod tests {
                     ammo: Ammo::Round,
                     faction: Faction::Player,
                     notoriety_tier: 2,
+                    rudder_hp: 100.0,
+                    crew: 0,
+                    crew_max: 0,
+                    repairing: false,
+                    dig_progress: 0.0,
                 },
                 ShipState {
                     ship_id: 2,
@@ -931,6 +1132,11 @@ mod tests {
                     ammo: Ammo::Round,
                     faction: Faction::Pirate,
                     notoriety_tier: 0,
+                    rudder_hp: 100.0,
+                    crew: 0,
+                    crew_max: 0,
+                    repairing: false,
+                    dig_progress: 0.0,
                 },
             ],
             projectiles: vec![ProjectileState {

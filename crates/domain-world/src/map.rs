@@ -150,6 +150,17 @@ impl WorldMap {
         self.land.iter().any(|mass| mass.contains(x, y, 0.0))
     }
 
+    /// Mapa do servidor (MV-061): as ilhas ocultas são terra de verdade —
+    /// o client não as recebe no mapa estático, só quando as avista.
+    pub fn with_hidden_islands(mut self) -> Self {
+        self.land.extend(
+            crate::treasure::HIDDEN_ISLANDS
+                .iter()
+                .map(crate::treasure::HiddenIsland::land),
+        );
+        self
+    }
+
     pub fn region_by_name(&self, name: &str) -> Result<&Region, WorldError> {
         self.regions
             .iter()
@@ -254,7 +265,7 @@ impl WorldMap {
 
         let regions = vec![
             Region {
-                id: RegionId::new(),
+                id: RegionId::stable("Porto da Serra"),
                 name: "Porto da Serra",
                 port: Some(Port {
                     name: "Porto da Serra",
@@ -264,7 +275,7 @@ impl WorldMap {
                 }),
             },
             Region {
-                id: RegionId::new(),
+                id: RegionId::stable("Porto da Mina"),
                 name: "Porto da Mina",
                 port: Some(Port {
                     name: "Porto da Mina",
@@ -274,7 +285,7 @@ impl WorldMap {
                 }),
             },
             Region {
-                id: RegionId::new(),
+                id: RegionId::stable("Ilha do Coral Negro"),
                 name: "Ilha do Coral Negro",
                 // Porto pirata: atraca qualquer um, até
                 // procurado, mas a porta dele é água sem lei.

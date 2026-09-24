@@ -37,9 +37,13 @@ impl Drop for ServerProcess {
     fn drop(&mut self) {
         // SIGTERM (não SIGKILL) para que o child `--playtest` grave o resumo
         // JSON no encerramento ordenado antes de sair.
+        #[cfg(unix)]
         unsafe {
             libc::kill(self.0.id() as libc::pid_t, libc::SIGTERM);
         }
+        // Windows não tem SIGTERM: encerra o processo (sem resumo).
+        #[cfg(not(unix))]
+        let _ = self.0.kill();
         let _ = self.0.wait();
     }
 }

@@ -1,1 +1,4 @@
 /target
+/dist
+/playtest-results
+crates/tools/*/playtest-results

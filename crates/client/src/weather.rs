@@ -711,6 +711,7 @@ mod tests {
                 y: 0.0,
                 radius: 300.0,
                 intensity: 1.0,
+                tempest: false,
             }],
             known: true,
             ..default()

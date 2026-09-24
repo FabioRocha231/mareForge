@@ -1,0 +1,18 @@
+# marvyr-auth: serviço HTTP de contas (registro/login).
+FROM rust:1-bookworm AS builder
+WORKDIR /src
+COPY . .
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/src/target \
+    cargo build --release -p marvyr-auth --locked \
+    && cp target/release/marvyr-auth /usr/local/bin/marvyr-auth
+
+FROM debian:bookworm-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 10001 --no-create-home marvyr
+COPY --from=builder /usr/local/bin/marvyr-auth /usr/local/bin/marvyr-auth
+USER marvyr
+EXPOSE 8080
+CMD ["marvyr-auth"]

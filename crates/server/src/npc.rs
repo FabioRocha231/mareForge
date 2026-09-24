@@ -31,6 +31,15 @@ use crate::net::{
 };
 use crate::reputation::{notoriety_gain, Offense, Reputation};
 
+/// MV-061: mordida do Kraken (dano ao casco por golpe) e alcance dos
+/// tentáculos (m). O monstro não tem canhão: precisa encostar.
+const KRAKEN_BITE: u32 = 22;
+const KRAKEN_REACH: f32 = 42.0;
+/// Segundos entre dois golpes do Kraken.
+const KRAKEN_BITE_SECS: f32 = 1.6;
+/// Distância lateral (m) da escolta ao galeão.
+const ESCORT_OFFSET: f32 = 70.0;
+
 /// Raio padrão de patrulha ao redor do ponto de spawn.
 const PATROL_RADIUS: f32 = 120.0;
 /// Separador de ids: NPCs não compartilham o espaço de `ShipIdCounter` para
@@ -51,21 +60,39 @@ pub enum NpcRole {
     Caravan {
         reverse: bool,
     },
+    /// MV-061: evento Kraken — monstro que ataca corpo a corpo.
+    Kraken,
+    /// MV-061: evento Frota do Tesouro — galeão carregado de ouro.
+    TreasureGalleon,
+    /// MV-061: escolta da coroa colada no galeão.
+    Escort,
 }
 
 impl NpcRole {
     pub fn faction(self) -> Faction {
         match self {
             Self::Pirate => Faction::Pirate,
-            Self::Navy => Faction::Navy,
-            Self::Caravan { .. } => Faction::Merchant,
+            Self::Navy | Self::Escort => Faction::Navy,
+            Self::Caravan { .. } | Self::TreasureGalleon => Faction::Merchant,
+            Self::Kraken => Faction::Monster,
         }
+    }
+
+    /// Mercante NPC: foge quando atacado, suja o nome de quem ataca e paga
+    /// a carga em ouro a quem afunda.
+    pub fn is_merchant(self) -> bool {
+        matches!(self, Self::Caravan { .. } | Self::TreasureGalleon)
+    }
+
+    /// NPC de evento de mundo: nunca respawna, some quando o evento acaba.
+    pub fn is_event_npc(self) -> bool {
+        matches!(self, Self::Kraken | Self::TreasureGalleon | Self::Escort)
     }
 
     pub fn kind(self) -> ShipKind {
         match self {
-            Self::Pirate => ShipKind::Corsair,
-            Self::Navy => ShipKind::Patrol,
+            Self::Pirate | Self::Kraken => ShipKind::Corsair,
+            Self::Navy | Self::Escort | Self::TreasureGalleon => ShipKind::Patrol,
             Self::Caravan { .. } => ShipKind::SmallMerchant,
         }
     }
@@ -73,8 +100,10 @@ impl NpcRole {
     fn label(self) -> &'static str {
         match self {
             Self::Pirate => "Corsario",
-            Self::Navy => "navio da Marinha",
+            Self::Navy | Self::Escort => "navio da Marinha",
             Self::Caravan { .. } => "Mercador",
+            Self::Kraken => "Kraken",
+            Self::TreasureGalleon => "Galeao do Tesouro",
         }
     }
 }
@@ -120,6 +149,10 @@ pub enum NpcState {
         target: u32,
     },
     Attack,
+    /// MV-061: escolta mantendo posição ao lado do líder.
+    Escort {
+        leader: u32,
+    },
     Dead,
 }
 
@@ -136,6 +169,8 @@ pub struct NpcAi {
     /// Waypoints da caravana (vazio para os demais).
     pub route: Vec<(f32, f32)>,
     pub next_waypoint: usize,
+    /// MV-061: galeão que esta escolta protege (0 = nenhum).
+    pub escort_leader: u32,
 }
 
 #[derive(Resource, Default)]
@@ -161,6 +196,10 @@ pub struct NpcSpawnConfig {
     pub caravan_flee_secs: f32,
     /// Marinha a esta distância de uma caravana atacada responde.
     pub navy_response_radius: f32,
+    /// MV-061: ouro do galeão da Frota do Tesouro (faucet `CaravanPlunder`).
+    pub fleet_plunder_gold: u64,
+    /// MV-061: cabeça do Kraken, paga pela coroa (`NpcBounty`).
+    pub kraken_bounty_gold: u64,
 }
 
 impl Default for NpcSpawnConfig {
@@ -188,6 +227,8 @@ impl Default for NpcSpawnConfig {
             caravan_plunder_gold: 80,
             caravan_flee_secs: 12.0,
             navy_response_radius: 900.0,
+            fleet_plunder_gold: 600,
+            kraken_bounty_gold: 300,
         }
     }
 }
@@ -216,6 +257,8 @@ impl NpcSpawnConfig {
             NpcRole::Pirate => self.respawn_after_secs,
             NpcRole::Navy => self.navy_respawn_secs,
             NpcRole::Caravan { .. } => self.caravan_respawn_secs,
+            // Evento não volta: o próximo evento é do diretor.
+            NpcRole::Kraken | NpcRole::TreasureGalleon | NpcRole::Escort => f32::INFINITY,
         }
     }
 }
@@ -298,6 +341,57 @@ pub fn respawn_npcs(
     }
 }
 
+/// MV-061: Frota do Tesouro — o galeão na rota do sul e duas escoltas da
+/// coroa, uma em cada bordo.
+pub(crate) fn spawn_treasure_fleet(
+    commands: &mut Commands,
+    dev_ships: &DevShips,
+    map: &WorldMap,
+    config: &NpcSpawnConfig,
+    ids: &mut NpcIdCounter,
+) {
+    let (leader, mut galleon) = build_npc(
+        dev_ships,
+        map,
+        config,
+        ids,
+        NpcRole::TreasureGalleon,
+        marvyr_domain_world::FLEET_ROUTE[0],
+    );
+    place_on_route(&mut galleon, 0);
+    let (gx, gy) = (galleon.motion.x, galleon.motion.y);
+    commands.spawn((galleon,));
+    for side in [-1.0_f32, 1.0] {
+        let (id, mut escort) = build_npc(
+            dev_ships,
+            map,
+            config,
+            ids,
+            NpcRole::Escort,
+            (gx, gy + side * ESCORT_OFFSET),
+        );
+        escort.ai.state = NpcState::Escort { leader };
+        escort.ai.escort_leader = leader;
+        info!(npc_id = id, leader, "escolta na Frota do Tesouro");
+        commands.spawn((escort,));
+    }
+    info!(npc_id = leader, "Frota do Tesouro zarpou");
+}
+
+/// MV-061: o Kraken emerge no ponto do evento.
+pub(crate) fn spawn_kraken(
+    commands: &mut Commands,
+    dev_ships: &DevShips,
+    map: &WorldMap,
+    config: &NpcSpawnConfig,
+    ids: &mut NpcIdCounter,
+    at: (f32, f32),
+) {
+    let (id, kraken) = build_npc(dev_ships, map, config, ids, NpcRole::Kraken, at);
+    commands.spawn((kraken,));
+    info!(npc_id = id, x = at.0, y = at.1, "Kraken emergiu");
+}
+
 pub(crate) fn build_npc(
     dev_ships: &DevShips,
     map: &WorldMap,
@@ -317,14 +411,50 @@ pub(crate) fn build_npc(
     .expect("stats de navio sem equipamento não podem falhar");
     let max_hp = stats.max_hp;
     let cargo_capacity = stats.cargo_capacity;
-    let weapon_range = stats.weapon_range;
     let position = config.home(role, position);
     let (state, route, detection_radius, leash_radius, bounty_gold) = match role {
         NpcRole::Pirate => (patrol_state(position), Vec::new(), 380.0, 600.0, 50),
         // Afundar a marinha não rende nada da coroa.
         NpcRole::Navy => (patrol_state(position), Vec::new(), 450.0, 1_000.0, 0),
         NpcRole::Caravan { reverse } => (NpcState::Travel, config.route(reverse), 0.0, 0.0, 0),
+        NpcRole::Kraken => (
+            patrol_state(position),
+            Vec::new(),
+            450.0,
+            900.0,
+            config.kraken_bounty_gold,
+        ),
+        NpcRole::TreasureGalleon => (
+            NpcState::Travel,
+            marvyr_domain_world::FLEET_ROUTE.to_vec(),
+            0.0,
+            0.0,
+            0,
+        ),
+        // A escolta ganha o líder em `spawn_treasure_fleet`.
+        NpcRole::Escort => (NpcState::Idle, Vec::new(), 0.0, 700.0, 0),
     };
+    // MV-061: cascos de evento são maiores que o navio base do papel.
+    let (max_hp, stats) = match role {
+        NpcRole::Kraken => (
+            900,
+            ShipStats {
+                speed: stats.speed * 1.1,
+                weapon_damage: KRAKEN_BITE,
+                weapon_range: KRAKEN_REACH,
+                ..stats
+            },
+        ),
+        NpcRole::TreasureGalleon => (
+            max_hp * 3,
+            ShipStats {
+                speed: stats.speed * 0.7,
+                ..stats
+            },
+        ),
+        _ => (max_hp, stats),
+    };
+    let weapon_range = stats.weapon_range;
     let mut ship = NpcShip {
         ship_id,
         kind,
@@ -352,6 +482,7 @@ pub(crate) fn build_npc(
             spawn_position: position,
             route,
             next_waypoint: 0,
+            escort_leader: 0,
         },
         last_damage_dealer: None,
         last_target: None,
@@ -370,7 +501,10 @@ fn patrol_state(origin: (f32, f32)) -> NpcState {
 /// Estado de repouso do papel: caravana volta à rota, os demais patrulham.
 fn home_state(npc: &NpcShip) -> NpcState {
     match npc.role {
-        NpcRole::Caravan { .. } => NpcState::Travel,
+        NpcRole::Caravan { .. } | NpcRole::TreasureGalleon => NpcState::Travel,
+        NpcRole::Escort => NpcState::Escort {
+            leader: npc.ai.escort_leader,
+        },
         _ => patrol_state(npc.ai.spawn_position),
     }
 }
@@ -417,7 +551,11 @@ fn lawful_prey(role: NpcRole, contact: &Contact) -> bool {
             contact.hunted_by_navy
                 && matches!(contact.zone, Some(RiskTier::Protected | RiskTier::Frontier))
         }
-        NpcRole::Caravan { .. } => false,
+        // MV-061: o monstro ataca qualquer casco fora das águas da coroa.
+        NpcRole::Kraken => contact.zone != Some(RiskTier::Protected),
+        // A escolta persegue quem mexeu com a frota, em qualquer água.
+        NpcRole::Escort => contact.hunted_by_navy,
+        NpcRole::Caravan { .. } | NpcRole::TreasureGalleon => false,
     }
 }
 
@@ -459,8 +597,15 @@ pub fn drive_npcs(
     mut npc_respawns: ResMut<NpcRespawnQueue>,
     time: Res<Time>,
     weather: Res<crate::weather::ServerWeather>,
+    mut deferred: ResMut<crate::net::DeferredImpacts>,
 ) {
     let dt = time.delta_secs();
+    // MV-061: posição dos galeões para as escoltas manterem formação.
+    let leaders: HashMap<u32, ShipMotion> = npcs
+        .iter()
+        .filter(|(_, npc)| npc.role == NpcRole::TreasureGalleon)
+        .map(|(_, npc)| (npc.ship_id, npc.motion))
+        .collect();
     let contacts: Vec<Contact> = ships
         .iter()
         .filter(|ship| ship.client_id.is_some() && ship.presence == VesselPresence::AtSea)
@@ -509,7 +654,8 @@ pub fn drive_npcs(
                 Some((wx, wy)) => Some(steer_input(npc.motion, wx, wy)),
                 None => {
                     // Atracou no destino: sai do mar e volta mais tarde, do
-                    // mesmo porto, no sentido contrário.
+                    // mesmo porto, no sentido contrário. O galeão da frota
+                    // escapou com o ouro: não volta.
                     if let NpcRole::Caravan { reverse } = npc.role {
                         npc_respawns.0.push((
                             npc.ai.respawn_after_secs,
@@ -535,6 +681,21 @@ pub fn drive_npcs(
                     }
                 }
             }
+            NpcState::Escort { leader } => {
+                if let Some(target) =
+                    pick_target(npc.role, x, y, npc.ai.detection_radius, &contacts)
+                {
+                    npc.last_target = Some(target);
+                    npc.ai.state = NpcState::Chase { target };
+                    None
+                } else if let Some(lead) = leaders.get(&leader) {
+                    Some(escort_input(npc.motion, *lead, npc.ship_id))
+                } else {
+                    // Galeão afundou ou escapou: a escolta patrulha ali.
+                    npc.ai.state = patrol_state((x, y));
+                    None
+                }
+            }
             NpcState::Chase { target } => match find(target) {
                 Some(c) if keeps_hunting(&npc, &c) => {
                     npc.last_target = Some(target);
@@ -553,6 +714,20 @@ pub fn drive_npcs(
                 Some(c) if keeps_hunting(&npc, &c) => {
                     if distance(x, y, c.x, c.y) > npc.ai.weapon_range {
                         npc.ai.state = NpcState::Chase { target: c.ship_id };
+                        Some(steer_input(npc.motion, c.x, c.y))
+                    } else if npc.role == NpcRole::Kraken {
+                        // MV-061: o Kraken abraça o casco e morde.
+                        if npc.battery.try_fire(BroadsideSide::Port, KRAKEN_BITE_SECS) {
+                            deferred.0.push(crate::net::Impact {
+                                projectile: None,
+                                target_ship_id: c.ship_id,
+                                hull_damage: npc.stats.weapon_damage,
+                                attacker_ship_id: npc.ship_id,
+                                sail_damage: 6.0,
+                                at: (x, y),
+                                boarded: false,
+                            });
+                        }
                         Some(steer_input(npc.motion, c.x, c.y))
                     } else {
                         // MF-058: em vez de parar e atirar, o NPC vira o
@@ -652,7 +827,7 @@ pub(crate) fn avoid_land(map: &WorldMap, motion: ShipMotion, input: MotionInput)
 }
 
 /// Impactos de projéteis em NPCs, recompensas e alarme de caravana.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn simulate_npcs(
     mut commands: Commands,
     mut connection_manager: ResMut<ConnectionManager>,
@@ -667,6 +842,13 @@ pub fn simulate_npcs(
     mut metrics: ResMut<crate::net::Metrics>,
     mut npc_respawns: ResMut<NpcRespawnQueue>,
     mut reputation: ResMut<Reputation>,
+    (mut boardings, mut wreck_ids, mut live_wrecks, dev, time): (
+        ResMut<crate::seafaring::NpcBoardings>,
+        ResMut<crate::net::WreckIdCounter>,
+        ResMut<crate::net::LiveWreckRecords>,
+        Res<DevItems>,
+        Res<Time>,
+    ),
 ) {
     let player_positions: HashMap<u32, (f32, f32)> = ships
         .iter()
@@ -694,7 +876,11 @@ pub fn simulate_npcs(
         .iter()
         .map(|(_, npc)| (npc.ship_id, (npc.motion.x, npc.motion.y)))
         .collect();
-    let mut npc_impacts: Vec<(Entity, u32, u32, u32)> = Vec::new();
+    let mut npc_impacts: Vec<(Option<Entity>, u32, u32, u32)> = Vec::new();
+    // MV-061: NPC tomado por abordagem rende como se afundasse.
+    for (npc_id, attacker_ship_id) in boardings.0.drain(..) {
+        npc_impacts.push((None, npc_id, u32::MAX, attacker_ship_id));
+    }
     for (projectile_entity, projectile) in &projectiles {
         if projectile.0.expired() {
             continue;
@@ -712,7 +898,7 @@ pub fn simulate_npcs(
             }
             if projectile.0.hit_ship(*x, *y, tuning.hit_radius) {
                 npc_impacts.push((
-                    projectile_entity,
+                    Some(projectile_entity),
                     *npc_id,
                     projectile.0.damage,
                     projectile.0.owner_ship_id,
@@ -725,7 +911,9 @@ pub fn simulate_npcs(
     // Caravanas atacadas nesta passada: (navio agressor, x, y).
     let mut caravan_alarms: Vec<(u32, f32, f32)> = Vec::new();
     for (projectile_entity, target_npc_id, damage, killer_ship_id) in npc_impacts {
-        commands.entity(projectile_entity).despawn();
+        if let Some(projectile_entity) = projectile_entity {
+            commands.entity(projectile_entity).despawn();
+        }
 
         let killed = {
             let Some((entity, mut npc)) = npcs
@@ -754,7 +942,7 @@ pub fn simulate_npcs(
             npc.last_damage_dealer = killer;
             // Caravana atacada por jogador: suja o nome, foge e chama a
             // marinha (um alarme por fuga).
-            if let (NpcRole::Caravan { .. }, Some(attacker)) = (npc.role, killer) {
+            if let (true, Some(attacker)) = (npc.role.is_merchant(), killer) {
                 let gain = notoriety_gain(Offense::Hit, zone_tier, false);
                 crate::reputation::raise_notoriety(
                     &mut connection_manager,
@@ -791,6 +979,7 @@ pub fn simulate_npcs(
                     npc.ai.bounty_gold,
                     killer,
                     zone_tier,
+                    (npc.motion.x, npc.motion.y),
                 )),
             }
         };
@@ -804,6 +993,7 @@ pub fn simulate_npcs(
             bounty_gold,
             killer,
             zone_tier,
+            position,
         )) = killed
         else {
             continue;
@@ -819,13 +1009,13 @@ pub fn simulate_npcs(
                 // Pilar 1: a carga da caravana é paga em Gold ao killer
                 // (faucet `CaravanPlunder`) em vez de wreck com itens — NPC
                 // nunca fabrica item útil.
-                NpcRole::Caravan { .. } => {
-                    award_caravan_plunder(
-                        &mut market,
-                        killer,
-                        npc_ship_id,
-                        config.caravan_plunder_gold,
-                    );
+                NpcRole::Caravan { .. } | NpcRole::TreasureGalleon => {
+                    let gold = if role == NpcRole::TreasureGalleon {
+                        config.fleet_plunder_gold
+                    } else {
+                        config.caravan_plunder_gold
+                    };
+                    award_caravan_plunder(&mut market, killer, npc_ship_id, gold);
                     let gain = notoriety_gain(Offense::Sink, zone_tier, false);
                     crate::reputation::raise_notoriety(
                         &mut connection_manager,
@@ -834,7 +1024,7 @@ pub fn simulate_npcs(
                         killer,
                         gain,
                     );
-                    config.caravan_plunder_gold
+                    gold
                 }
                 _ if bounty_gold > 0 => {
                     award_npc_bounty(&mut market, &mut metrics, killer, npc_ship_id, bounty_gold);
@@ -846,6 +1036,9 @@ pub fn simulate_npcs(
             if let Some(client) = client_of(killer) {
                 let text = match role {
                     NpcRole::Caravan { .. } => format!("Voce saqueou um Mercador +{reward}g"),
+                    NpcRole::TreasureGalleon => {
+                        format!("Voce saqueou o Galeao do Tesouro +{reward}g")
+                    }
                     _ if reward > 0 => format!("Voce afundou {} +{reward}g", role.label()),
                     _ => format!("Voce afundou um {}", role.label()),
                 };
@@ -863,10 +1056,25 @@ pub fn simulate_npcs(
                 "recompensa de NPC creditada"
             );
         }
+        // MV-061: o Kraken deixa recurso bruto boiando (vira carga de
+        // jogador — ainda precisa chegar ao porto e ser fabricado).
+        if role == NpcRole::Kraken {
+            spawn_spoils_wreck(
+                &mut commands,
+                &mut wreck_ids,
+                &mut live_wrecks,
+                crate::seafaring::kraken_spoils(&dev),
+                killer,
+                position,
+                time.elapsed_secs(),
+            );
+        }
         commands.entity(entity).despawn();
-        npc_respawns
-            .0
-            .push((respawn_after_secs, role, config.home(role, spawn_position)));
+        if !role.is_event_npc() {
+            npc_respawns
+                .0
+                .push((respawn_after_secs, role, config.home(role, spawn_position)));
+        }
     }
 
     // Caravana grita; a marinha por perto larga a patrulha e vem.
@@ -878,7 +1086,7 @@ pub fn simulate_npcs(
                 navy.ai.state,
                 NpcState::Dead | NpcState::Chase { .. } | NpcState::Attack
             );
-            if navy.role == NpcRole::Navy
+            if matches!(navy.role, NpcRole::Navy | NpcRole::Escort)
                 && !busy
                 && distance(navy.motion.x, navy.motion.y, x, y) <= config.navy_response_radius
             {
@@ -906,6 +1114,50 @@ pub fn simulate_npcs(
             WorldEventKind::Alert,
         );
     }
+}
+
+/// Wreck de despojos de um NPC de evento (MV-061).
+fn spawn_spoils_wreck(
+    commands: &mut Commands,
+    wreck_ids: &mut crate::net::WreckIdCounter,
+    live_wrecks: &mut crate::net::LiveWreckRecords,
+    spoils: Vec<(marvyr_shared::ids::ItemDefinitionId, u32)>,
+    exclusive_looter: Option<CharacterId>,
+    (x, y): (f32, f32),
+    now: f32,
+) {
+    let wreck_num = wreck_ids.0;
+    wreck_ids.0 += 1;
+    let wreck_id = marvyr_shared::ids::WreckId::new();
+    let mut chest = marvyr_domain_combat::WreckChest::new(wreck_id);
+    for (definition, quantity) in spoils {
+        chest.insert(
+            marvyr_domain_combat::SurvivorItem {
+                definition,
+                quantity,
+                durability: None,
+            },
+            marvyr_shared::ids::ItemInstanceId::new(),
+        );
+    }
+    commands.spawn((crate::net::ServerWreck {
+        wreck_num,
+        wreck_id,
+        chest,
+        exclusive_looter,
+        spawned_at_secs: now,
+        x,
+        y,
+    },));
+    live_wrecks.0.push(crate::persist::WreckRecord {
+        wreck_num,
+        wreck_id,
+        x,
+        y,
+        exclusive_looter,
+        spawned_at_secs: f64::from(now),
+    });
+    info!(wreck_num, x, y, "despojos do Kraken boiando");
 }
 
 pub(crate) fn apply_npc_damage(npc: &mut NpcShip, damage: u32) -> DamageOutcome {
@@ -982,7 +1234,29 @@ pub(crate) fn to_npc_ship_state(npc: &NpcShip, catalog: &ItemCatalog) -> ShipSta
         ammo: Default::default(),
         faction: npc.role.faction(),
         notoriety_tier: 0,
+        rudder_hp: 100.0,
+        crew: 0,
+        crew_max: 0,
+        repairing: false,
+        dig_progress: 0.0,
     }
+}
+
+/// Escolta: um bordo de cada lado do galeão (pela paridade do id), no
+/// mesmo pano — encosta e segura a formação.
+fn escort_input(motion: ShipMotion, leader: ShipMotion, ship_id: u32) -> MotionInput {
+    let side = if ship_id % 2 == 0 { 1.0 } else { -1.0 };
+    let normal = leader.heading + side * std::f32::consts::FRAC_PI_2;
+    let station = (
+        leader.x + normal.cos() * ESCORT_OFFSET + leader.heading.cos() * 20.0,
+        leader.y + normal.sin() * ESCORT_OFFSET + leader.heading.sin() * 20.0,
+    );
+    let mut input = steer_input(motion, station.0, station.1);
+    if distance(motion.x, motion.y, station.0, station.1) < 40.0 {
+        input = steer_heading(motion, leader.heading);
+        input.throttle = 0.7;
+    }
+    input
 }
 
 fn patrol_input(motion: ShipMotion, origin: (f32, f32), radius: f32) -> MotionInput {

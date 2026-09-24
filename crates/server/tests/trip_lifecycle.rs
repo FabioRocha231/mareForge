@@ -66,6 +66,7 @@ fn make_ship(presence: VesselPresence) -> ServerShip {
         restored_trip_started_at: None,
         sail_hp: 100.0,
         ammo: Default::default(),
+        sea: marvyr_server::seafaring::SeaCondition::fresh(4),
     }
 }
 
@@ -228,6 +229,7 @@ fn restored_docked_does_not_start_trip() {
         cargo: Vec::new(),
         equipped: Vec::new(),
         presence: VesselPresence::Docked(RegionId::new()),
+        crew: 4,
     };
     let now = 999.0_f32;
 
@@ -253,6 +255,7 @@ fn restored_at_sea_starts_new_measurement() {
         cargo: Vec::new(),
         equipped: Vec::new(),
         presence: VesselPresence::AtSea,
+        crew: 4,
     };
     let boot_now = 1234.5_f32;
 

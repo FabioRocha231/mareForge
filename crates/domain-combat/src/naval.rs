@@ -1,0 +1,195 @@
+//! Combate naval profundo (MV-061): arco de tiro, avaria por zona do casco
+//! e abordagem. Regras puras — o servidor decide quando chamar.
+
+use serde::{Deserialize, Serialize};
+
+use crate::weapon::BroadsideSide;
+
+/// Meia abertura do arco de tiro de cada bordo (±25° do través). Dentro do
+/// arco a bateria corrige a pontaria sozinha — o jogador ainda precisa
+/// apresentar o costado, mas não com precisão de transferidor.
+pub const FIRING_ARC: f32 = 25.0 * std::f32::consts::PI / 180.0;
+
+/// Correção de pontaria (radianos, somada à direção do través) para o alvo
+/// mais bem alinhado dentro do arco e do alcance. Sem alvo, 0 (tiro reto
+/// no través, como antes).
+pub fn arc_aim(
+    heading: f32,
+    side: BroadsideSide,
+    shooter: (f32, f32),
+    targets: &[(f32, f32)],
+    range: f32,
+) -> f32 {
+    let beam = heading + side.angle_offset();
+    targets
+        .iter()
+        .filter_map(|&(x, y)| {
+            let (dx, dy) = (x - shooter.0, y - shooter.1);
+            if dx * dx + dy * dy > range * range {
+                return None;
+            }
+            let error = angle_delta(dy.atan2(dx), beam);
+            (error.abs() <= FIRING_ARC).then_some(error)
+        })
+        .min_by(|a, b| a.abs().total_cmp(&b.abs()))
+        .unwrap_or(0.0)
+}
+
+/// Parte do casco atingida, pela posição do impacto relativa à proa.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HitZone {
+    Bow,
+    Midship,
+    /// Popa: onde fica o leme.
+    Stern,
+}
+
+/// Cone de popa/proa: impacto a menos de ~35° do eixo do navio.
+const END_CONE_COS: f32 = 0.82;
+
+pub fn hit_zone(ship: (f32, f32), heading: f32, impact: (f32, f32)) -> HitZone {
+    let (dx, dy) = (impact.0 - ship.0, impact.1 - ship.1);
+    let dist = (dx * dx + dy * dy).sqrt();
+    if dist <= f32::EPSILON {
+        return HitZone::Midship;
+    }
+    let along = (dx * heading.cos() + dy * heading.sin()) / dist;
+    if along >= END_CONE_COS {
+        HitZone::Bow
+    } else if along <= -END_CONE_COS {
+        HitZone::Stern
+    } else {
+        HitZone::Midship
+    }
+}
+
+/// Pontos de leme (0..100) perdidos por um golpe na popa, proporcionais ao
+/// casco do alvo: a mesma bala avaria mais o leme de um casco pequeno.
+pub fn rudder_points(hull_damage: u32, target_max_hp: u32, zone: HitZone) -> f32 {
+    if zone != HitZone::Stern || target_max_hp == 0 {
+        return 0.0;
+    }
+    (hull_damage as f32 / target_max_hp as f32 * 250.0).min(100.0)
+}
+
+/// Resultado de uma abordagem.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoardingOutcome {
+    /// O alvo rendeu; o atacante perdeu `attacker_losses` marujos.
+    Captured { attacker_losses: u16 },
+    /// Abordagem repelida: baixas dos dois lados.
+    Repelled {
+        attacker_losses: u16,
+        defender_losses: u16,
+    },
+}
+
+/// Chance (0..1) de o atacante tomar o navio: força de cada lado é a
+/// tripulação, e o defensor avariado luta pior (casco a 20% vale 60%).
+pub fn boarding_chance(attacker_crew: u16, defender_crew: u16, defender_hull_ratio: f32) -> f32 {
+    let attack = f32::from(attacker_crew);
+    let defense = f32::from(defender_crew) * (0.5 + 0.5 * defender_hull_ratio.clamp(0.0, 1.0));
+    if attack <= 0.0 {
+        return 0.0;
+    }
+    (attack / (attack + defense.max(0.5))).clamp(0.05, 0.95)
+}
+
+/// Resolve a abordagem com um rolo `roll` em [0, 1) (o servidor sorteia).
+pub fn resolve_boarding(
+    attacker_crew: u16,
+    defender_crew: u16,
+    defender_hull_ratio: f32,
+    roll: f32,
+) -> BoardingOutcome {
+    let chance = boarding_chance(attacker_crew, defender_crew, defender_hull_ratio);
+    if roll < chance {
+        BoardingOutcome::Captured {
+            attacker_losses: (defender_crew / 3).min(attacker_crew),
+        }
+    } else {
+        BoardingOutcome::Repelled {
+            attacker_losses: attacker_crew.div_ceil(2),
+            defender_losses: (attacker_crew / 3).min(defender_crew),
+        }
+    }
+}
+
+fn angle_delta(target: f32, current: f32) -> f32 {
+    let mut delta = (target - current).rem_euclid(std::f32::consts::TAU);
+    if delta > std::f32::consts::PI {
+        delta -= std::f32::consts::TAU;
+    }
+    delta
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::f32::consts::FRAC_PI_2;
+
+    #[test]
+    fn aim_corrects_toward_target_inside_arc_only() {
+        // Navio aproado para +X; bombordo aponta para +Y.
+        let inside = arc_aim(
+            0.0,
+            BroadsideSide::Port,
+            (0.0, 0.0),
+            &[(30.0, 100.0)],
+            200.0,
+        );
+        assert!(
+            inside < 0.0 && inside.abs() <= FIRING_ARC,
+            "puxa para a proa"
+        );
+        let outside = arc_aim(
+            0.0,
+            BroadsideSide::Port,
+            (0.0, 0.0),
+            &[(100.0, 30.0)],
+            200.0,
+        );
+        assert_eq!(outside, 0.0, "fora do arco o tiro sai no través");
+        let far = arc_aim(0.0, BroadsideSide::Port, (0.0, 0.0), &[(0.0, 500.0)], 200.0);
+        assert_eq!(far, 0.0, "fora do alcance não mira");
+    }
+
+    #[test]
+    fn aim_picks_best_aligned_target() {
+        let aim = arc_aim(
+            FRAC_PI_2,
+            BroadsideSide::Starboard,
+            (0.0, 0.0),
+            &[(100.0, 30.0), (100.0, 2.0)],
+            300.0,
+        );
+        assert!(aim.abs() < 0.05);
+    }
+
+    #[test]
+    fn stern_hits_hurt_rudder_and_bow_or_midship_do_not() {
+        assert_eq!(hit_zone((0.0, 0.0), 0.0, (-15.0, 1.0)), HitZone::Stern);
+        assert_eq!(hit_zone((0.0, 0.0), 0.0, (15.0, -1.0)), HitZone::Bow);
+        assert_eq!(hit_zone((0.0, 0.0), 0.0, (1.0, 15.0)), HitZone::Midship);
+        assert!(rudder_points(20, 100, HitZone::Stern) > 0.0);
+        assert_eq!(rudder_points(20, 100, HitZone::Midship), 0.0);
+        assert_eq!(rudder_points(500, 100, HitZone::Stern), 100.0);
+    }
+
+    #[test]
+    fn crew_and_damage_decide_boarding() {
+        assert!(boarding_chance(20, 5, 0.2) > boarding_chance(5, 20, 1.0));
+        assert_eq!(boarding_chance(0, 5, 0.5), 0.0);
+        assert!(matches!(
+            resolve_boarding(20, 4, 0.1, 0.0),
+            BoardingOutcome::Captured { attacker_losses: 1 }
+        ));
+        assert_eq!(
+            resolve_boarding(4, 20, 1.0, 0.99),
+            BoardingOutcome::Repelled {
+                attacker_losses: 2,
+                defender_losses: 1
+            }
+        );
+    }
+}

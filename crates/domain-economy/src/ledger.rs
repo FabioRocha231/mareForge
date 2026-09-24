@@ -31,6 +31,24 @@ pub enum LedgerKind {
     /// Procurado para quem o afundou (nunca faucet — senão dois jogadores
     /// combinados cunhavam ouro).
     BountyClaim,
+    /// MV-061: ouro pago para contratar marujos no porto — sink auditado.
+    CrewWage,
+}
+
+impl LedgerKind {
+    /// Todas as origens, na ordem do relatório de sessão (MV-061: a
+    /// economia NPC nunca se mistura com a player-driven).
+    pub const ALL: [LedgerKind; 9] = [
+        LedgerKind::Mint,
+        LedgerKind::Burn,
+        LedgerKind::Trade,
+        LedgerKind::NpcBounty,
+        LedgerKind::GuildPurchase,
+        LedgerKind::ContractReward,
+        LedgerKind::CaravanPlunder,
+        LedgerKind::BountyClaim,
+        LedgerKind::CrewWage,
+    ];
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -97,6 +115,17 @@ impl Ledger {
             self.entries
                 .iter()
                 .filter(|entry| entry.kind == LedgerKind::Trade)
+                .map(|entry| entry.amount.0)
+                .sum(),
+        )
+    }
+
+    /// Total movimentado por uma origem.
+    pub fn total(&self, kind: LedgerKind) -> Money {
+        Money(
+            self.entries
+                .iter()
+                .filter(|entry| entry.kind == kind)
                 .map(|entry| entry.amount.0)
                 .sum(),
         )

@@ -144,6 +144,16 @@ impl CargoHold {
         std::mem::take(&mut self.slots)
     }
 
+    /// Retira uma instância específica inteira (ex.: o mapa do tesouro que
+    /// foi escavado — cada mapa aponta para um lugar próprio).
+    pub fn remove_instance(&mut self, id: marvyr_shared::ids::ItemInstanceId) -> Option<Custody> {
+        let index = self
+            .slots
+            .iter()
+            .position(|custody| custody.instance.id == id)?;
+        Some(self.slots.remove(index))
+    }
+
     /// Retira `quantity` unidades de uma definição, agregando pilhas
     /// quando necessário (coleta fracionada tem que permitir craft inteiro).
     pub fn remove(

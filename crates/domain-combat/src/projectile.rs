@@ -122,6 +122,11 @@ impl Projectile {
             .collect()
     }
 
+    /// Gira o voo (correção de pontaria dentro do arco, MV-061).
+    pub fn rotate(&mut self, delta: f32) {
+        self.heading = normalize(self.heading + delta);
+    }
+
     /// Movimento retilíneo por um passo de simulação.
     pub fn advance(&mut self, dt: f32) {
         self.x += self.heading.cos() * self.speed * dt;

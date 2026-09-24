@@ -1,0 +1,11 @@
+[package]
+name = "marvyr-auth-token"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+jsonwebtoken = { version = "9.3", default-features = false }
+serde = { version = "1", features = ["derive"] }
+uuid = { version = "1", features = ["serde", "v4"] }
