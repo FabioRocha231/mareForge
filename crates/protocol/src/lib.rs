@@ -67,7 +67,8 @@ use serde::{Deserialize, Serialize};
 ///      semente do miolo de cada cerração aberta. Cosméticos: `ShipState`
 ///      ganha `sail_cosmetic`/`flag_cosmetic`, `CosmeticsSnapshot` e
 ///      `WearCosmetic` (registradas no fim).
-pub const PROTOCOL_VERSION: u16 = 18;
+/// v19: MV-067 — Renome (`RenownUpdate`), registrado no fim.
+pub const PROTOCOL_VERSION: u16 = 19;
 
 /// Rótulo de versão da build (`MARVYR_VERSION_LABEL` no build de release,
 /// senão a versão do Cargo). Client e servidor mostram no log e no HUD.
@@ -142,6 +143,19 @@ pub struct CosmeticsSnapshot {
 pub struct WearCosmetic {
     pub slot: u8,
     pub code: u8,
+}
+
+/// Renome do capitão (v19, MV-067): o total e onde ele está no nível. Chega
+/// ao conectar (`gained` 0) e a cada feito, com o motivo (PT-BR).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenownUpdate {
+    pub total: u64,
+    pub level: u32,
+    /// Renome dentro do nível atual e o tamanho do nível (0 = nível máximo).
+    pub into: u64,
+    pub span: u64,
+    pub gained: u32,
+    pub reason: String,
 }
 
 /// Resposta do servidor. Conexão recusada (`accepted == false`) é encerrada
@@ -873,8 +887,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn current_protocol_version_is_eighteen() {
-        assert_eq!(PROTOCOL_VERSION, 18);
+    fn current_protocol_version_is_nineteen() {
+        assert_eq!(PROTOCOL_VERSION, 19);
         assert_eq!(
             ClientHello::current("token").protocol_version,
             PROTOCOL_VERSION

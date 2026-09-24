@@ -19,6 +19,7 @@ pub mod playtest;
 pub mod plugin;
 pub mod port_screen;
 pub mod portals;
+pub mod renown;
 pub mod seafaring;
 pub mod session;
 pub mod ship;

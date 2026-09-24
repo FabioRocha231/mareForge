@@ -102,6 +102,17 @@ impl NpcRole {
         }
     }
 
+    /// Renome de quem afunda (MV-067): quanto mais perigoso, mais rende.
+    pub fn renown(self) -> u32 {
+        match self {
+            Self::Caravan { .. } => 20,
+            Self::Pirate | Self::Navy => 35,
+            Self::Escort => 50,
+            Self::TreasureGalleon => 150,
+            Self::Kraken => 250,
+        }
+    }
+
     fn label(self) -> &'static str {
         match self {
             Self::Pirate => "Corsario",
@@ -854,12 +865,13 @@ pub fn simulate_npcs(
     mut metrics: ResMut<crate::net::Metrics>,
     mut npc_respawns: ResMut<NpcRespawnQueue>,
     mut reputation: ResMut<Reputation>,
-    (mut boardings, mut wreck_ids, mut live_wrecks, dev, time): (
+    (mut boardings, mut wreck_ids, mut live_wrecks, dev, time, mut renown): (
         ResMut<crate::seafaring::NpcBoardings>,
         ResMut<crate::net::WreckIdCounter>,
         ResMut<crate::net::LiveWreckRecords>,
         Res<DevItems>,
         Res<Time>,
+        EventWriter<crate::renown::RenownEarned>,
     ),
 ) {
     let player_positions: HashMap<u32, (f32, f32)> = ships
@@ -1044,6 +1056,11 @@ pub fn simulate_npcs(
                 }
                 _ => 0,
             };
+            renown.send(crate::renown::RenownEarned {
+                character: killer,
+                amount: role.renown(),
+                reason: "navio afundado",
+            });
             crate::market::send_wallet(&mut connection_manager, &market, &viewers, killer);
             if let Some(client) = client_of(killer) {
                 let text = match role {

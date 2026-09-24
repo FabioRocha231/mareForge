@@ -620,6 +620,7 @@ impl Plugin for ServerNetPlugin {
         crate::seafaring::install(app);
         crate::cosmetics::install(app);
         crate::flotsam::install(app);
+        crate::renown::install(app);
         app.register_message::<marvyr_protocol::ReputationUpdate>(ChannelDirection::ServerToClient);
         app.register_message::<marvyr_protocol::WorldEvent>(ChannelDirection::ServerToClient);
         // v15 (MV-061): combate profundo, tripulação, eventos e tesouro.
@@ -642,6 +643,8 @@ impl Plugin for ServerNetPlugin {
             ChannelDirection::ServerToClient,
         );
         app.register_message::<marvyr_protocol::WearCosmetic>(ChannelDirection::ClientToServer);
+        // v19 (MV-067): SEMPRE no fim, espelhado no client.
+        app.register_message::<marvyr_protocol::RenownUpdate>(ChannelDirection::ServerToClient);
         app.add_systems(Startup, start_server);
         app.add_systems(Startup, crate::nodes::spawn_dev_nodes.after(start_server));
         app.add_systems(Startup, crate::npc::setup_npcs.after(start_server));
@@ -1798,6 +1801,7 @@ fn handle_loot(
     mut metrics: ResMut<Metrics>,
     mut ships: Query<&mut ServerShip>,
     mut wrecks: Query<(Entity, &mut ServerWreck)>,
+    mut renown: EventWriter<crate::renown::RenownEarned>,
 ) {
     for event in loot_events.read() {
         let client_id = event.from();
@@ -1884,6 +1888,11 @@ fn handle_loot(
                 let stacks = moved.len() as u32;
                 // §72 wrecks_looted: transferência atômica concluída.
                 metrics.wrecks_looted += 1;
+                renown.send(crate::renown::RenownEarned {
+                    character: ship.character,
+                    amount: marvyr_domain_economy::renown::PER_WRECK_LOOTED,
+                    reason: "destroço saqueado",
+                });
                 // Drenagem imediata do baú (não-deferida): a prova de que o
                 // primeiro saque venceu fica visível para o resto do tick.
                 wreck.chest.drain();
@@ -2345,6 +2354,7 @@ fn resolve_destructions(
     time: Res<Time>,
     pending: Res<PendingShipDestructions>,
     store: Res<crate::persist::StoreHandle>,
+    mut renown: EventWriter<crate::renown::RenownEarned>,
 ) {
     for destruction in &pending.0 {
         // O checkpoint pode ter gravado este casco: naufragado, ele não
@@ -2362,6 +2372,17 @@ fn resolve_destructions(
             NetworkTarget::Only(destruction.audience.clone()),
         );
 
+        // MV-067: afundar outro capitão rende Renome a quem afundou.
+        if let Some(killer) = destruction
+            .exclusive_looter
+            .filter(|killer| *killer != destruction.victim_character)
+        {
+            renown.send(crate::renown::RenownEarned {
+                character: killer,
+                amount: marvyr_domain_economy::renown::PER_CAPTAIN_SUNK,
+                reason: "capitão afundado",
+            });
+        }
         let event = DestructionEventId::new();
         // MV-061: navio rendido não afunda — a carga passa inteira.
         let policy = if destruction.boarded {

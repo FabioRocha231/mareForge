@@ -122,6 +122,8 @@ pub fn nodes_snapshot(nodes: &Query<&ServerNode>, catalog: &ItemCatalog) -> Node
 
 /// Coleta (PRD MF-019): perto do node, com estoque e espaço de porão. O
 /// servidor corta o pedido ao que couber — nada se perde no mar.
+// System Bevy: params são injeção de dependência, não assinatura.
+#[allow(clippy::too_many_arguments)]
 pub fn handle_gather(
     mut gather_events: EventReader<ServerReceiveMessage<GatherNode>>,
     mut connection_manager: ResMut<ConnectionManager>,
@@ -130,6 +132,7 @@ pub fn handle_gather(
     mut metrics: ResMut<crate::net::Metrics>,
     mut ships: Query<&mut ServerShip>,
     mut nodes: Query<&mut ServerNode>,
+    mut renown: EventWriter<crate::renown::RenownEarned>,
 ) {
     for event in gather_events.read() {
         let client_id = event.from();
@@ -233,6 +236,11 @@ pub fn handle_gather(
             )
             .expect("cabe: o espaço foi conferido acima");
         metrics.items_gathered += u64::from(taken);
+        renown.send(crate::renown::RenownEarned {
+            character: ship.character,
+            amount: taken * marvyr_domain_economy::renown::PER_GATHERED_UNIT,
+            reason: "coleta",
+        });
         if server_node.node.is_depleted() {
             server_node.respawn_at =
                 Some(Instant::now() + Duration::from_secs_f32(policy.0.respawn_secs));

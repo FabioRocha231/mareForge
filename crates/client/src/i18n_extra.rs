@@ -162,6 +162,23 @@ pub const TABLE: &[(&str, &str)] = &[
         "Nautical chart: everywhere you have sailed",
     ),
     ("Ligar e desligar a música", "Toggle the music"),
+    // Renome (MV-067)
+    ("RENOME", "RENOWN"),
+    ("RENOME {0}", "RENOWN {0}"),
+    ("+{0} Renome", "+{0} Renown"),
+    ("Nv {0} · {1}/{2}", "Lv {0} · {1}/{2}"),
+    ("Nv {0} · máx", "Lv {0} · max"),
+    (
+        "+1 ponto na Rosa dos Ventos",
+        "+1 point in the Compass Rose",
+    ),
+    ("navio afundado", "ship sunk"),
+    ("destroço saqueado", "wreck looted"),
+    ("coleta", "gathering"),
+    ("fabricação", "crafting"),
+    ("navio construído", "ship built"),
+    ("contrato entregue", "contract delivered"),
+    ("capitão afundado", "captain sunk"),
     // Nós das fronteiras (MV-067)
     ("Madeira à Deriva", "Driftwood"),
     ("Veio Submerso", "Sunken Ore Vein"),

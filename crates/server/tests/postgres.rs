@@ -458,3 +458,23 @@ fn cosmetics_roundtrip_through_postgres() {
     assert_eq!(record.sail.as_deref(), Some("sail-gold"));
     assert_eq!(record.flag, None);
 }
+
+#[test]
+fn renown_roundtrips_through_postgres() {
+    let _guard = test_lock();
+    let Some((store, url)) = store_or_skip() else {
+        return;
+    };
+    reset_database(&url);
+
+    let (snapshot, character) = sample_snapshot();
+    store
+        .save_market(&snapshot)
+        .expect("save_market cria o personagem");
+    assert_eq!(store.load_renown(character).expect("load inicial"), 0);
+    store.save_renown(&[(character, 420)]).expect("save_renown");
+    store
+        .save_renown(&[(character, 555)])
+        .expect("save_renown de novo");
+    assert_eq!(store.load_renown(character).expect("load_renown"), 555);
+}

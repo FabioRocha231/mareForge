@@ -70,6 +70,8 @@ pub enum HudText {
     ZoneRisk,
     Reload(Broadside),
     Prompt,
+    /// MV-067: nível e progresso de Renome.
+    Renown,
 }
 
 /// Qual barra este nó de preenchimento representa.
@@ -77,6 +79,7 @@ pub enum HudText {
 pub enum HudFill {
     Hp,
     Cargo,
+    Renown,
     Reload(Broadside),
 }
 
@@ -251,6 +254,7 @@ pub fn setup_hud(mut commands: Commands) {
             ui::double_rule(panel);
             spawn_stat_row(panel, "CASCO", HudText::Hp, HudFill::Hp);
             spawn_stat_row(panel, "CARGA", HudText::Cargo, HudFill::Cargo);
+            spawn_stat_row(panel, "RENOME", HudText::Renown, HudFill::Renown);
             panel.spawn((
                 ui::face("", ui::FONT_REGULAR, 14.0, ui::INK_SOFT),
                 crate::seafaring::SeaStatusText,
@@ -579,6 +583,7 @@ fn my_visual<'a>(
 pub fn update_ship_panel(
     my_ship: Res<MyShip>,
     wallet: Res<Wallet>,
+    renown: Option<Res<crate::renown::MyRenown>>,
     visuals: Query<&crate::ship::ShipVisual>,
     mut texts: Query<(&mut Text, &HudText)>,
     mut fills: Query<(&mut Node, &mut BackgroundColor, &HudFill)>,
@@ -592,6 +597,11 @@ pub fn update_ship_panel(
             HudText::Hp => format!("{}/{}", state.hp, state.max_hp),
             HudText::Cargo => format!("{}/{}", state.cargo_weight, state.cargo_capacity),
             HudText::Gold => format!("{}g", wallet.0),
+            HudText::Renown => renown
+                .as_ref()
+                .and_then(|renown| renown.0.as_ref())
+                .map(crate::renown::level_label)
+                .unwrap_or_else(|| String::from("-")),
             _ => continue,
         };
         if text.0 != value {
@@ -612,6 +622,14 @@ pub fn update_ship_panel(
                     ui::bar_width(ratio(state.cargo_weight, state.cargo_capacity)),
                 );
                 bg.set_if_neq(BackgroundColor(ui::GOLD.with_alpha(0.85)));
+            }
+            HudFill::Renown => {
+                let fraction = renown
+                    .as_ref()
+                    .and_then(|renown| renown.0.as_ref())
+                    .map_or(0.0, crate::renown::level_fraction);
+                set_width(&mut node, ui::bar_width(fraction));
+                bg.set_if_neq(BackgroundColor(ui::BRASS));
             }
             HudFill::Reload(_) => {}
         }
@@ -924,6 +942,20 @@ pub fn spawn_zone_banner(commands: &mut Commands, anchor: Entity, name: &str) {
         ui::PANEL_BORDER,
         ZoneBannerPanel,
         &[(&display, 34.0, ui::INK)],
+    );
+}
+
+/// Faixa de nível novo de Renome (MV-067), no mesmo lugar da faixa de zona.
+pub fn spawn_level_banner(commands: &mut Commands, anchor: Entity, level: u32) {
+    let title = crate::i18n::trf("RENOME {0}", &[&level.to_string()]);
+    let hint = crate::i18n::tr("+1 ponto na Rosa dos Ventos");
+    spawn_faded_panel(
+        commands,
+        anchor,
+        (0.3, 2.8, 3.6),
+        ui::BRASS,
+        ZoneBannerPanel,
+        &[(&title, 34.0, ui::BRASS_INK), (&hint, 16.0, ui::INK)],
     );
 }
 

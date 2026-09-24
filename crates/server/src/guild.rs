@@ -355,6 +355,8 @@ fn pay_contract(market: &mut ServerMarket, character: CharacterId, contract: &Co
 
 /// Renova quadros, conta abates de Caça, expira prazos e conclui entregas
 /// de quem está atracado no destino com a carga no porão.
+// System Bevy: params são injeção de dependência, não assinatura.
+#[allow(clippy::too_many_arguments)]
 fn tick_contracts(
     mut connection_manager: ResMut<ConnectionManager>,
     mut market: ResMut<ServerMarket>,
@@ -363,6 +365,7 @@ fn tick_contracts(
     map: Res<ServerWorldMap>,
     time: Res<Time>,
     mut ships: Query<&mut ServerShip>,
+    mut renown: EventWriter<crate::renown::RenownEarned>,
 ) {
     let now = time.elapsed_secs_f64();
     if now >= guild.next_refresh_secs {
@@ -443,6 +446,11 @@ fn tick_contracts(
 
     for (character, contract) in completed {
         pay_contract(&mut market, character, &contract);
+        renown.send(crate::renown::RenownEarned {
+            character,
+            amount: marvyr_domain_economy::renown::PER_CONTRACT,
+            reason: "contrato entregue",
+        });
         info!(
             contract = contract.id,
             reward = contract.reward,

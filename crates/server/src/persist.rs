@@ -114,6 +114,10 @@ pub trait StateStore: Send + Sync {
         sail: Option<&str>,
         flag: Option<&str>,
     ) -> Result<(), String>;
+    /// Renome acumulado (MV-067). Personagem sem linha = 0.
+    fn load_renown(&self, character: CharacterId) -> Result<u64, String>;
+    /// Grava o Renome de vários capitões numa transação.
+    fn save_renown(&self, totals: &[(CharacterId, u64)]) -> Result<(), String>;
 }
 
 /// Snapshot JSON em arquivo (`MARVYR_STATE_PATH`), escrita atômica via
@@ -210,6 +214,15 @@ impl StateStore for FileStateStore {
         _sail: Option<&str>,
         _flag: Option<&str>,
     ) -> Result<(), String> {
+        Ok(())
+    }
+
+    // Dev: Renome vive só na sessão (como os navios neste store).
+    fn load_renown(&self, _character: CharacterId) -> Result<u64, String> {
+        Ok(0)
+    }
+
+    fn save_renown(&self, _totals: &[(CharacterId, u64)]) -> Result<(), String> {
         Ok(())
     }
 }
@@ -879,6 +892,32 @@ impl StateStore for PostgresStateStore {
             .await
             .map_err(|error| error.to_string())?;
             Ok(())
+        })
+    }
+
+    fn load_renown(&self, character: CharacterId) -> Result<u64, String> {
+        self.runtime.block_on(async {
+            let row: Option<(i64,)> = sqlx::query_as("SELECT renown FROM characters WHERE id = $1")
+                .bind(character.0)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|error| error.to_string())?;
+            Ok(row.map_or(0, |(renown,)| renown.max(0) as u64))
+        })
+    }
+
+    fn save_renown(&self, totals: &[(CharacterId, u64)]) -> Result<(), String> {
+        self.runtime.block_on(async {
+            let mut tx = self.pool.begin().await.map_err(|error| error.to_string())?;
+            for (character, total) in totals {
+                sqlx::query("UPDATE characters SET renown = $2 WHERE id = $1")
+                    .bind(character.0)
+                    .bind(i64::try_from(*total).unwrap_or(i64::MAX))
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|error| error.to_string())?;
+            }
+            tx.commit().await.map_err(|error| error.to_string())
         })
     }
 }

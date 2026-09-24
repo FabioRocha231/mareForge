@@ -12,6 +12,7 @@ pub mod persist;
 mod playtest;
 pub mod plugin;
 pub mod portals;
+pub mod renown;
 pub mod reputation;
 pub mod seafaring;
 pub mod session;

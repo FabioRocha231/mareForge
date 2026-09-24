@@ -7,6 +7,7 @@ pub mod ledger;
 pub mod market;
 pub mod order;
 pub mod price_index;
+pub mod renown;
 pub mod transaction;
 
 pub use contract::{generate_offers, ActiveContract, Contract, ContractKind, PortSite};

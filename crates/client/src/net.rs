@@ -207,6 +207,8 @@ impl Plugin for ClientNetPlugin {
             ChannelDirection::ServerToClient,
         );
         app.register_message::<marvyr_protocol::WearCosmetic>(ChannelDirection::ClientToServer);
+        // v19 (MV-067): SEMPRE no fim, espelho do servidor.
+        app.register_message::<marvyr_protocol::RenownUpdate>(ChannelDirection::ServerToClient);
         app.add_event::<PlayerNotice>();
         app.init_resource::<crate::ship::DestroyedShips>();
         app.init_resource::<KnownWrecks>();
