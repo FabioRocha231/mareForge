@@ -3,7 +3,7 @@
 # workflow de release só chama este script).
 #
 # Uso: [VERSION=0.1.0-alpha.1] [TARGET=x86_64-pc-windows-msvc] \
-#      [PACKAGE_SERVER=host:porta] bash scripts/package_windows.sh [--skip-build]
+#      [PACKAGE_SERVER=host:porta] [PACKAGE_AUTH_URL=https://...] bash scripts/package_windows.sh [--skip-build]
 #
 # Saída: dist/windows/ (pasta pronta para o butler) e
 #        dist/Marvyr-v<versão>-windows-x86_64.zip.
@@ -74,6 +74,9 @@ printf 'Marvyr %s\nbuild %s\nprotocol %s\n' "$VERSION" "$MARVYR_BUILD_SHA" "$PRO
 
 if [[ -z "${MARVYR_DEFAULT_SERVER:-}" && -n "${PACKAGE_SERVER:-}" ]]; then
     printf 'server = "%s"\n' "$PACKAGE_SERVER" > "$OUT/marvyr.toml"
+fi
+if [[ -z "${MARVYR_DEFAULT_AUTH_URL:-}" && -n "${PACKAGE_AUTH_URL:-}" ]]; then
+    printf 'auth_url = "%s"\n' "$PACKAGE_AUTH_URL" >> "$OUT/marvyr.toml"
 fi
 
 cat > "$OUT/README.txt" <<EOF

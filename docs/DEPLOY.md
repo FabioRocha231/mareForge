@@ -59,6 +59,7 @@ Atenção: o Docker escreve regras de iptables que ignoram o `ufw`. Por isso a
 | `MARVYR_MAX_CLIENTS` | `64` | padrão 64 |
 | `RUST_LOG` | `info,marvyr_server=info` | |
 | `MARVYR_REPORT_DIR` | `/data/reports` | `session-summary.json` é gravado aqui no desligamento |
+| `MARVYR_SEA_EVENT` | *(não definir)* | `tempest`/`fleet`/`kraken`/`tide` força um evento de mar no boot — só teste |
 
 Monte um volume persistente em `/data` (relatórios de sessão).
 
@@ -68,8 +69,9 @@ Monte um volume persistente em `/data` (relatórios de sessão).
 |---|---|---|
 | `MARVYR_AUTH_ADDR` | `0.0.0.0:8080` | padrão |
 | `MARVYR_JWT_SECRET` | mesmo do servidor | |
-| `MARVYR_DATABASE_URL` | mesma string do servidor | confirme no `Dockerfile.auth`/crate `marvyr-auth` |
-| `MARVYR_ENV` | `production` | |
+| `MARVYR_DATABASE_URL` | mesma string do servidor | obrigatório; as migrations rodam no boot |
+| `MARVYR_TOKEN_TTL_SECS` | `604800` | validade do token (padrão 7 dias) |
+| `MARVYR_TRUST_PROXY` | `1` atrás do Traefik | usa `X-Forwarded-For` no limite de tentativas; o Traefik **precisa sobrescrever** esse header |
 | `RUST_LOG` | `info` | |
 
 ### Cliente (`Marvyr.exe`)
@@ -90,7 +92,7 @@ Variáveis de **build** (lidas pelo `cargo build`, não em runtime):
 | `MARVYR_DEFAULT_SERVER` / `MARVYR_DEFAULT_AUTH_URL` | endereços padrão gravados no exe |
 | `MARVYR_BUILD_SHA` / `MARVYR_VERSION_LABEL` | metadados exibidos pelo jogo |
 
-Dados do jogador: `%APPDATA%\Marvyr` (Windows), `~/Library/Application Support/Marvyr` (macOS), `~/.local/share/marvyr` (Linux).
+Dados do jogador: `%APPDATA%\Marvyr` (Windows), `~/Library/Application Support/Marvyr` (macOS), `~/.local/share/Marvyr` (Linux).
 
 ## Segredo JWT
 
