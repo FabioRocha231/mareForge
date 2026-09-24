@@ -271,13 +271,15 @@ fn rate_limit(state: &AppState, headers: &HeaderMap, peer: SocketAddr) -> Result
 }
 
 /// `X-Forwarded-For` só vale atrás do proxy (Traefik); direto na internet o
-/// cliente forjaria o header para escapar do rate limit.
+/// cliente forjaria o header para escapar do rate limit. Usa a entrada mais
+/// à direita — a que o nosso proxy (um salto) anexou; as da esquerda vêm do
+/// cliente.
 pub fn client_ip(headers: &HeaderMap, peer: SocketAddr, trust_proxy: bool) -> IpAddr {
     if trust_proxy {
         let forwarded = headers
             .get("x-forwarded-for")
             .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.split(',').next())
+            .and_then(|v| v.rsplit(',').next())
             .and_then(|v| v.trim().parse::<IpAddr>().ok());
         if let Some(ip) = forwarded {
             return ip;
@@ -405,10 +407,7 @@ mod tests {
     fn forwarded_for_only_when_trusted() {
         let peer: SocketAddr = "172.18.0.2:5000".parse().unwrap();
         let mut headers = HeaderMap::new();
-        headers.insert(
-            "x-forwarded-for",
-            "203.0.113.7, 172.18.0.1".parse().unwrap(),
-        );
+        headers.insert("x-forwarded-for", "10.9.9.9, 203.0.113.7".parse().unwrap());
         assert_eq!(client_ip(&headers, peer, false), peer.ip());
         assert_eq!(
             client_ip(&headers, peer, true),

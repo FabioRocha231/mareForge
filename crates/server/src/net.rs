@@ -2216,8 +2216,17 @@ fn resolve_destructions(
     mut metrics: ResMut<Metrics>,
     time: Res<Time>,
     pending: Res<PendingShipDestructions>,
+    store: Res<crate::persist::StoreHandle>,
 ) {
     for destruction in &pending.0 {
+        // O checkpoint pode ter gravado este casco: naufragado, ele não
+        // volta no próximo login (a carga agora é do wreck). Roda antes do
+        // respawn, que é encadeado depois deste sistema.
+        if let Some(store) = store.0.as_ref() {
+            if let Err(error) = store.delete_ships_of(destruction.victim_character) {
+                warn!(%error, ship_id = destruction.target_ship_id, "falha ao apagar navio afundado");
+            }
+        }
         let _ = connection_manager.send_message_to_target::<ReliableChannel, _>(
             &ShipDestroyed {
                 ship_id: destruction.target_ship_id,
@@ -2615,18 +2624,26 @@ fn save_ships<'a>(
 
 /// MV-061: checkpoint periódico — restart/crash não devolve o capitão a
 /// um navio de meia hora atrás.
+/// Espalhado: a cada segundo salva só a fatia `ship_id % 30` da vez — o
+/// tick nunca paga o banco de todos os navios de uma vez.
 fn persist_ships_periodically(
     time: Res<Time>,
     store: Res<crate::persist::StoreHandle>,
     ships: Query<&ServerShip>,
-    mut timer: Local<f32>,
+    mut clock: Local<(f32, u32)>,
 ) {
-    *timer += time.delta_secs();
-    if *timer < SHIP_CHECKPOINT_SECS {
+    clock.0 += time.delta_secs();
+    if clock.0 < 1.0 {
         return;
     }
-    *timer = 0.0;
-    let saved = save_ships(&store, ships.iter());
+    clock.0 = 0.0;
+    let buckets = SHIP_CHECKPOINT_SECS as u32;
+    let bucket = clock.1 % buckets;
+    clock.1 = clock.1.wrapping_add(1);
+    let saved = save_ships(
+        &store,
+        ships.iter().filter(|ship| ship.ship_id % buckets == bucket),
+    );
     if saved > 0 {
         tracing::debug!(saved, "checkpoint de navios");
     }

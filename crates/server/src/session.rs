@@ -13,6 +13,7 @@ use bevy::prelude::*;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 use marvyr_protocol::MAX_IDENTITY_LEN;
+pub use marvyr_protocol::{REASON_BAD_SESSION, REASON_NO_SESSION};
 use tracing::{info, warn};
 
 /// Configuração de sessão lida do ambiente no boot.
@@ -92,8 +93,6 @@ pub struct ResolvedIdentity {
     pub display_name: String,
 }
 
-pub const REASON_NO_SESSION: &str = "Sessão ausente. Faça login novamente.";
-pub const REASON_BAD_SESSION: &str = "Sessão expirada ou inválida. Faça login novamente.";
 pub const REASON_LOGIN_REQUIRED: &str = "Este servidor exige login com uma conta Marvyr.";
 pub const REASON_FULL: &str = "Servidor cheio. Tente de novo em alguns minutos.";
 pub const REASON_ALREADY_AT_SEA: &str =
@@ -124,6 +123,10 @@ pub fn resolve_identity(
     }
     if !config.allow_anon {
         return Err(REASON_LOGIN_REQUIRED);
+    }
+    // Chave `account:<uuid>` só nasce de JWT verificado.
+    if token.starts_with(crate::market::ACCOUNT_IDENTITY_PREFIX) {
+        return Err(REASON_BAD_SESSION);
     }
     Ok(ResolvedIdentity {
         key: token.to_owned(),
@@ -272,15 +275,20 @@ pub fn police_intents(
 }
 
 /// Esconde a senha de uma URL de banco para log (`postgres://u:***@host/db`).
+/// A query string sai inteira: `?password=`/`sslpassword=` também são segredo.
 pub fn redact_url(url: &str) -> String {
+    let url = url.split('?').next().unwrap_or_default();
     let Some((scheme, rest)) = url.split_once("://") else {
         return String::from("***");
     };
-    let Some((credentials, host)) = rest.rsplit_once('@') else {
-        return url.to_owned();
-    };
-    let user = credentials.split(':').next().unwrap_or_default();
-    format!("{scheme}://{user}:***@{host}")
+    let (authority, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
+    match authority.rsplit_once('@') {
+        Some((credentials, host)) => {
+            let user = credentials.split(':').next().unwrap_or_default();
+            format!("{scheme}://{user}:***@{host}{path}")
+        }
+        None => format!("{scheme}://{authority}{path}"),
+    }
 }
 
 #[cfg(test)]
@@ -343,6 +351,11 @@ mod tests {
     fn dev_accepts_anonymous_token() {
         let resolved = resolve_identity("dev-token", &AuthConfig::default()).unwrap();
         assert_eq!(resolved.key, "dev-token");
+        let forged = format!("account:{}", uuid::Uuid::new_v4());
+        assert!(
+            resolve_identity(&forged, &AuthConfig::default()).is_err(),
+            "token anônimo não se passa por conta"
+        );
     }
 
     #[test]
@@ -364,5 +377,9 @@ mod tests {
             "postgres://marvyr:***@db:5432/marvyr"
         );
         assert_eq!(redact_url("sem-esquema"), "***");
+        assert_eq!(
+            redact_url("postgres://db/marvyr?password=x&sslmode=require"),
+            "postgres://db/marvyr"
+        );
     }
 }

@@ -86,6 +86,11 @@ pub const NETCODE_KEY: [u8; 32] = *b"marvyr-public-alpha-netcode-key!";
 /// Tamanho máximo aceito para `ClientHello.identity` (JWT cabe folgado).
 pub const MAX_IDENTITY_LEN: usize = 2048;
 
+/// Recusas que mandam o client de volta ao login (sessão ausente/vencida).
+/// Ficam no protocolo porque o client decide a tela comparando o texto.
+pub const REASON_NO_SESSION: &str = "Sessão ausente. Faça login novamente.";
+pub const REASON_BAD_SESSION: &str = "Sessão expirada ou inválida. Faça login novamente.";
+
 /// Primeira mensagem do client após conectar (ADR-0011). `identity` é o
 /// token persistente do jogador (MF-035): o servidor resolve token →
 /// CharacterId; ClientId/conexão é só transporte da sessão.

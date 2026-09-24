@@ -26,7 +26,7 @@ use marvyr_protocol::{
     WorldEventKind,
 };
 use marvyr_shared::ids::{ItemInstanceId, ResourceNodeId};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::net::{
     DeferredImpacts, DevItems, Impact, Metrics, ReliableChannel, ServerRiskPolicy, ServerShip,
@@ -268,6 +268,7 @@ fn handle_hire_crew(
     mut events: EventReader<ServerReceiveMessage<HireCrew>>,
     mut connection_manager: ResMut<ConnectionManager>,
     mut market: ResMut<crate::market::ServerMarket>,
+    store: Res<crate::persist::StoreHandle>,
     mut ships: Query<&mut ServerShip>,
 ) {
     for event in events.read() {
@@ -315,6 +316,13 @@ fn handle_hire_crew(
         );
         market.persist();
         ship.sea.crew += count;
+        // Ouro já saiu no banco: a tripulação paga vai junto, não no
+        // próximo checkpoint.
+        if let Some(store) = store.0.as_ref() {
+            if let Err(error) = store.save_ship(&crate::net::ship_record(&ship)) {
+                warn!(%error, "falha ao persistir tripulação contratada");
+            }
+        }
         let character = ship.character;
         let crew = ship.sea.crew;
         crate::market::send_wallet(
@@ -1047,15 +1055,12 @@ fn broadcast_sea_state(
     }
 }
 
-/// Recompensa do kraken abatido: recurso bruto de alto risco num wreck
-/// (vira carga de jogador, que ainda precisa chegar ao porto) e, às vezes,
-/// um mapa. A cabeça do monstro é paga pela coroa (`NpcBounty`).
+/// Recompensa do kraken abatido: só recurso bruto de alto risco num wreck
+/// (vira carga de jogador, que ainda precisa chegar ao porto). Mapa não —
+/// NPC não dá item útil (pilar 1). A cabeça do monstro é paga pela coroa
+/// (`NpcBounty`).
 pub(crate) fn kraken_spoils(dev: &DevItems) -> Vec<(marvyr_shared::ids::ItemDefinitionId, u32)> {
-    let mut spoils = vec![(dev.abyssal_pearl, 5), (dev.abyssal_amber, 3)];
-    if roll() % 2 == 0 {
-        spoils.push((dev.treasure_map, 1));
-    }
-    spoils
+    vec![(dev.abyssal_pearl, 5), (dev.abyssal_amber, 3)]
 }
 
 #[cfg(test)]

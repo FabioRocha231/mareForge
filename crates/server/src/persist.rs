@@ -83,6 +83,9 @@ pub trait StateStore: Send + Sync {
     fn load_ship(&self, character: CharacterId) -> Result<Option<ShipRecord>, String>;
     /// Persiste o navio (e a carga embarcada) de um personagem.
     fn save_ship(&self, record: &ShipRecord) -> Result<(), String>;
+    /// Naufrágio: o casco persistido (e o que tinha a bordo) deixa de
+    /// existir — senão o próximo hello restauraria carga que já virou wreck.
+    fn delete_ships_of(&self, character: CharacterId) -> Result<(), String>;
     /// `true` = salvamento periódico aceitável (arquivo de dev);
     /// `false` = persistência por operação crítica (produção).
     fn periodic_saving(&self) -> bool;
@@ -135,6 +138,10 @@ impl StateStore for FileStateStore {
     }
 
     fn save_ship(&self, _record: &ShipRecord) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn delete_ships_of(&self, _character: CharacterId) -> Result<(), String> {
         Ok(())
     }
 
@@ -217,7 +224,11 @@ impl PostgresStateStore {
         sqlx::query(
             "INSERT INTO item_instances \
              (id, owner_character_id, definition_id, quantity, durability, location) \
-             VALUES ($1, $2, $3, $4, $5, $6)",
+             VALUES ($1, $2, $3, $4, $5, $6) \
+             ON CONFLICT (id) DO UPDATE SET \
+             owner_character_id = EXCLUDED.owner_character_id, \
+             definition_id = EXCLUDED.definition_id, quantity = EXCLUDED.quantity, \
+             durability = EXCLUDED.durability, location = EXCLUDED.location",
         )
         .bind(custody.instance.id.0)
         .bind(owner.0)
@@ -699,6 +710,29 @@ impl StateStore for PostgresStateStore {
             }
             tx.commit().await.map_err(|error| error.to_string())?;
             Ok(())
+        })
+    }
+
+    fn delete_ships_of(&self, character: CharacterId) -> Result<(), String> {
+        self.runtime.block_on(async {
+            let mut tx = self.pool.begin().await.map_err(|error| error.to_string())?;
+            sqlx::query(
+                "DELETE FROM item_instances WHERE \
+                 location ->> 'ShipCargo' IN \
+                   (SELECT id::text FROM ship_instances WHERE character_id = $1) \
+                 OR location -> 'Equipped' ->> 'ship' IN \
+                   (SELECT id::text FROM ship_instances WHERE character_id = $1)",
+            )
+            .bind(character.0)
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| error.to_string())?;
+            sqlx::query("DELETE FROM ship_instances WHERE character_id = $1")
+                .bind(character.0)
+                .execute(&mut *tx)
+                .await
+                .map_err(|error| error.to_string())?;
+            tx.commit().await.map_err(|error| error.to_string())
         })
     }
 

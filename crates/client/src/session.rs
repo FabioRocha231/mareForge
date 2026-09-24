@@ -12,7 +12,10 @@ use std::sync::Mutex;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 use lightyear::prelude::client::*;
-use marvyr_protocol::{ServerWelcome, BUILD_SHA, PROTOCOL_VERSION, VERSION_LABEL};
+use marvyr_protocol::{
+    ServerWelcome, BUILD_SHA, PROTOCOL_VERSION, REASON_BAD_SESSION, REASON_NO_SESSION,
+    VERSION_LABEL,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{LaunchConfig, ServerTarget, Sources};
@@ -137,8 +140,18 @@ fn save_session(session: &SavedSession) {
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    if let Ok(json) = serde_json::to_string(session) {
-        let _ = std::fs::write(path, json);
+    let Ok(json) = serde_json::to_string(session) else {
+        return;
+    };
+    // O token é credencial: só o dono lê (0600 em unix; `%APPDATA%` já é
+    // do usuário no Windows).
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    if let Ok(mut file) = options.open(path) {
+        use std::io::Write;
+        let _ = file.write_all(json.as_bytes());
     }
 }
 
@@ -161,6 +174,12 @@ struct AuthError {
 /// Login ou registro em curso (thread própria — a janela não congela).
 #[derive(Resource, Default)]
 struct PendingAuth(Option<Mutex<Receiver<Result<SavedSession, String>>>>);
+
+/// Resolução DNS em andamento (thread → frame).
+#[derive(Resource, Default)]
+struct PendingDns(Option<Mutex<Receiver<DnsResult>>>);
+
+type DnsResult = Result<(ServerTarget, std::net::SocketAddr), String>;
 
 /// Formulário da tela de login.
 #[derive(Resource, Debug, Default, Clone)]
@@ -201,14 +220,17 @@ impl Plugin for SessionPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LoginForm>()
             .init_resource::<PendingAuth>()
+            .init_resource::<PendingDns>()
             .add_systems(Startup, (boot_session, spawn_screens).chain())
             .add_systems(
                 Update,
                 (
-                    type_into_form,
+                    // O Enter que sai da tela de erro não vira submit do login.
+                    type_into_form.before(retry_on_enter),
                     click_login_buttons,
                     finish_auth,
                     start_connection,
+                    finish_connection,
                     handshake_timeout,
                     retry_on_enter,
                     draw_screens,
@@ -255,6 +277,10 @@ fn boot_session(
         *status = ConnectionStatus::NotConfigured(String::from(
             "Nenhum servidor foi informado nesta build.",
         ));
+    } else if launch.auth_url.is_none() && crate::config::PUBLIC_BUILD {
+        *status = ConnectionStatus::NotConfigured(String::from(
+            "Nenhum servico de contas (auth_url) foi informado nesta build.",
+        ));
     } else if launch.auth_url.is_none() {
         // Dev sem contas: identidade anônima, direto para o mar.
         identity.0 = Some(crate::net::identity_token());
@@ -272,12 +298,11 @@ fn boot_session(
 
 /// Com identidade pronta: resolve o servidor (DNS) e conecta.
 fn start_connection(
-    mut commands: Commands,
     time: Res<Time>,
     launch: Option<Res<Launch>>,
     identity: Res<ClientIdentity>,
     mut status: ResMut<ConnectionStatus>,
-    mut config: ResMut<ClientConfig>,
+    mut pending: ResMut<PendingDns>,
 ) {
     if *status != ConnectionStatus::Authenticating || identity.0.is_none() {
         return;
@@ -285,16 +310,41 @@ fn start_connection(
     let Some(target) = launch.as_ref().and_then(|launch| launch.0.server.clone()) else {
         return;
     };
-    // ponytail: DNS no frame (uma vez por tentativa); thread quando um
-    // resolvedor lento travar a tela.
-    match target.resolve() {
-        Ok(addr) => {
+    // DNS fora do frame: resolvedor lento não congela a janela. O timeout
+    // de 10 s do handshake já conta a partir daqui.
+    let (sender, receiver) = channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(target.resolve().map(|addr| (target, addr)));
+    });
+    pending.0 = Some(Mutex::new(receiver));
+    *status = ConnectionStatus::Connecting {
+        since: time.elapsed_secs(),
+    };
+}
+
+/// DNS resolvido: abre a conexão (se a tentativa ainda estiver de pé).
+fn finish_connection(
+    mut commands: Commands,
+    mut pending: ResMut<PendingDns>,
+    mut status: ResMut<ConnectionStatus>,
+    mut config: ResMut<ClientConfig>,
+) {
+    let Some(receiver) = &pending.0 else {
+        return;
+    };
+    let received = receiver.lock().ok().and_then(|rx| rx.try_recv().ok());
+    let Some(result) = received else {
+        return;
+    };
+    pending.0 = None;
+    if !matches!(*status, ConnectionStatus::Connecting { .. }) {
+        return; // o timeout já desistiu desta tentativa
+    }
+    match result {
+        Ok((target, addr)) => {
             info!(server = %target, %addr, "conectando ao servidor marvyr");
             config.net = crate::net::netcode_config(addr);
             commands.connect_client();
-            *status = ConnectionStatus::Connecting {
-                since: time.elapsed_secs(),
-            };
         }
         Err(error) => {
             warn!(%error, "falha de DNS");
@@ -338,7 +388,7 @@ fn retry_on_enter(
         }
         ConnectionStatus::Rejected(reason) => {
             // Sessão ruim volta para o login; o resto tenta de novo.
-            let session_problem = reason.contains("Faça login")
+            let session_problem = (reason == REASON_NO_SESSION || reason == REASON_BAD_SESSION)
                 && launch.is_some_and(|launch| launch.0.auth_url.is_some());
             if session_problem {
                 forget_session();

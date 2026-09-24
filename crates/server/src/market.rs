@@ -1313,15 +1313,15 @@ pub fn save_state(
 /// Chave de identidade de uma conta autenticada pelo `marvyr-auth`. É o que
 /// vai para `characters.name` — nunca o JWT (que é credencial).
 pub fn account_identity(account: uuid::Uuid) -> String {
-    format!("{ACCOUNT_PREFIX}{account}")
+    format!("{ACCOUNT_IDENTITY_PREFIX}{account}")
 }
 
-const ACCOUNT_PREFIX: &str = "account:";
+pub const ACCOUNT_IDENTITY_PREFIX: &str = "account:";
 
 /// Conta dona de uma chave de identidade (`None` = token anônimo de dev).
 pub fn account_of_identity(identity: &str) -> Option<uuid::Uuid> {
     identity
-        .strip_prefix(ACCOUNT_PREFIX)
+        .strip_prefix(ACCOUNT_IDENTITY_PREFIX)
         .and_then(|raw| uuid::Uuid::parse_str(raw).ok())
 }
 

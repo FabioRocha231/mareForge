@@ -88,8 +88,13 @@ impl Sources {
             env_port: env("MARVYR_PORT"),
             env_auth: env("MARVYR_AUTH_URL"),
             file: exe_dir().and_then(|dir| std::fs::read_to_string(dir.join("marvyr.toml")).ok()),
-            baked_server: BAKED_SERVER.map(str::to_owned),
-            baked_auth: BAKED_AUTH_URL.map(str::to_owned),
+            // Variável do CI vazia chega como `Some("")`: vale como ausente.
+            baked_server: BAKED_SERVER
+                .filter(|v| !v.trim().is_empty())
+                .map(str::to_owned),
+            baked_auth: BAKED_AUTH_URL
+                .filter(|v| !v.trim().is_empty())
+                .map(str::to_owned),
             public_build: PUBLIC_BUILD,
         }
     }
@@ -103,18 +108,20 @@ impl Sources {
             .file
             .as_deref()
             .and_then(|file| toml_value(file, "auth_url"));
-        let env_port = self
-            .env_port
-            .as_deref()
-            .map(parse_port)
-            .transpose()?
-            .unwrap_or(DEFAULT_PORT);
+        // Só lida quando é ela que decide a porta (env ou dev).
+        let env_port = || -> Result<u16, String> {
+            self.env_port
+                .as_deref()
+                .map(parse_port)
+                .transpose()
+                .map(|port| port.unwrap_or(DEFAULT_PORT))
+        };
         let server = if let Some(raw) = &self.cli_server {
             Some(parse_target(raw)?)
         } else if let Some(host) = &self.env_host {
             Some(ServerTarget {
                 host: host.trim().to_owned(),
-                port: env_port,
+                port: env_port()?,
             })
         } else if let Some(raw) = file_server.or(self.baked_server.clone()) {
             Some(parse_target(&raw)?)
@@ -124,7 +131,7 @@ impl Sources {
             // Dev: loopback, respeitando `MARVYR_PORT` como sempre foi.
             Some(ServerTarget {
                 host: String::from("127.0.0.1"),
-                port: env_port,
+                port: env_port()?,
             })
         };
         let auth_url = self
@@ -148,11 +155,16 @@ fn parse_port(value: &str) -> Result<u16, String> {
         .ok_or_else(|| String::from("MARVYR_PORT precisa ser um inteiro de 1 a 65535"))
 }
 
-/// `host`, `host:porta` ou `[ipv6]:porta`.
+/// `host` ou `host:porta`. IPv6 fica de fora: o socket local é IPv4.
 fn parse_target(raw: &str) -> Result<ServerTarget, String> {
     let raw = raw.trim();
     if raw.is_empty() {
         return Err(String::from("endereço de servidor vazio"));
+    }
+    if raw.starts_with('[') {
+        return Err(format!(
+            "IPv6 ainda não é suportado (\"{raw}\"); use IPv4 ou hostname"
+        ));
     }
     match raw.rsplit_once(':') {
         Some((host, port)) if !host.is_empty() && !host.ends_with(':') => Ok(ServerTarget {
@@ -289,7 +301,7 @@ mod tests {
                 port: DEFAULT_PORT
             }
         );
-        assert_eq!(parse_target("[::1]:5000").unwrap().host, "::1");
+        assert!(parse_target("[::1]:5000").is_err(), "IPv6 recusado cedo");
         assert!(parse_target("host:abc").is_err());
         assert!(parse_target("").is_err());
         assert!(Sources {
@@ -298,6 +310,14 @@ mod tests {
         }
         .resolve()
         .is_err());
+        // Porta de env inválida não derruba um `--server` que já tem porta.
+        assert!(Sources {
+            cli_server: Some("play.marvyr.game:5000".into()),
+            env_port: Some("abc".into()),
+            ..Sources::default()
+        }
+        .resolve()
+        .is_ok());
     }
 
     #[test]

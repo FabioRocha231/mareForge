@@ -72,7 +72,8 @@ jobs:
 
   itch:
     needs: windows
-    if: vars.ITCH_TARGET != ''
+    # Dispatch manual gera só o artefato; itch só em tag.
+    if: github.ref_type == 'tag' && vars.ITCH_TARGET != ''
     runs-on: ubuntu-latest
     environment: itch
     env:

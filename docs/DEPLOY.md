@@ -71,7 +71,7 @@ Monte um volume persistente em `/data` (relatórios de sessão).
 | `MARVYR_JWT_SECRET` | mesmo do servidor | |
 | `MARVYR_DATABASE_URL` | mesma string do servidor | obrigatório; as migrations rodam no boot |
 | `MARVYR_TOKEN_TTL_SECS` | `604800` | validade do token (padrão 7 dias) |
-| `MARVYR_TRUST_PROXY` | `1` atrás do Traefik | usa `X-Forwarded-For` no limite de tentativas; o Traefik **precisa sobrescrever** esse header |
+| `MARVYR_TRUST_PROXY` | `1` atrás do Traefik | usa a entrada mais à direita do `X-Forwarded-For` (a que o Traefik anexa) no limite de tentativas; supõe **um** proxy na frente |
 | `RUST_LOG` | `info` | |
 
 ### Cliente (`Marvyr.exe`)
