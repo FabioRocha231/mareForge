@@ -71,6 +71,15 @@ pub struct WreckRecord {
     pub spawned_at_secs: f64,
 }
 
+/// Cosméticos de um personagem (MV-066): ids do catálogo que ele possui e
+/// o que está usando. Só aparência.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CosmeticsRecord {
+    pub owned: Vec<String>,
+    pub sail: Option<String>,
+    pub flag: Option<String>,
+}
+
 /// O contrato de persistência do servidor (MF-033). Síncrono de propósito:
 /// o loop Bevy chama e espera; implementações bloqueantes (Postgres) rodam
 /// em runtime próprio.
@@ -96,6 +105,15 @@ pub trait StateStore: Send + Sync {
     /// Remove um wreck específico (expiração pontual antes do próximo
     /// snapshot completo).
     fn delete_wreck(&self, wreck_num: u32) -> Result<(), String>;
+    /// Cosméticos concedidos e em uso (MV-066). Personagem sem linha = nada.
+    fn load_cosmetics(&self, character: CharacterId) -> Result<CosmeticsRecord, String>;
+    /// Grava o que o capitão está usando (`None` = padrão do casco).
+    fn save_cosmetic_choice(
+        &self,
+        character: CharacterId,
+        sail: Option<&str>,
+        flag: Option<&str>,
+    ) -> Result<(), String>;
 }
 
 /// Snapshot JSON em arquivo (`MARVYR_STATE_PATH`), escrita atômica via
@@ -178,6 +196,20 @@ impl StateStore for FileStateStore {
         // No store de arquivo, a remoção individual é aplicada no próximo
         // save_wreck_snapshot completo. Mantemos a no-op para não quebrar
         // o contrato.
+        Ok(())
+    }
+
+    fn load_cosmetics(&self, _character: CharacterId) -> Result<CosmeticsRecord, String> {
+        // Dev: nada concedido (`MARVYR_DEV_COSMETICS` libera o catálogo).
+        Ok(CosmeticsRecord::default())
+    }
+
+    fn save_cosmetic_choice(
+        &self,
+        _character: CharacterId,
+        _sail: Option<&str>,
+        _flag: Option<&str>,
+    ) -> Result<(), String> {
         Ok(())
     }
 }
@@ -802,6 +834,50 @@ impl StateStore for PostgresStateStore {
                 .execute(&self.pool)
                 .await
                 .map_err(|error| error.to_string())?;
+            Ok(())
+        })
+    }
+
+    fn load_cosmetics(&self, character: CharacterId) -> Result<CosmeticsRecord, String> {
+        self.runtime.block_on(async {
+            let owned: Vec<(String,)> = sqlx::query_as(
+                "SELECT cosmetic_id FROM character_cosmetics WHERE character_id = $1",
+            )
+            .bind(character.0)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|error| error.to_string())?;
+            let worn: Option<(Option<String>, Option<String>)> =
+                sqlx::query_as("SELECT sail_cosmetic, flag_cosmetic FROM characters WHERE id = $1")
+                    .bind(character.0)
+                    .fetch_optional(&self.pool)
+                    .await
+                    .map_err(|error| error.to_string())?;
+            let (sail, flag) = worn.unwrap_or_default();
+            Ok(CosmeticsRecord {
+                owned: owned.into_iter().map(|(id,)| id).collect(),
+                sail,
+                flag,
+            })
+        })
+    }
+
+    fn save_cosmetic_choice(
+        &self,
+        character: CharacterId,
+        sail: Option<&str>,
+        flag: Option<&str>,
+    ) -> Result<(), String> {
+        self.runtime.block_on(async {
+            sqlx::query(
+                "UPDATE characters SET sail_cosmetic = $2, flag_cosmetic = $3 WHERE id = $1",
+            )
+            .bind(character.0)
+            .bind(sail)
+            .bind(flag)
+            .execute(&self.pool)
+            .await
+            .map_err(|error| error.to_string())?;
             Ok(())
         })
     }

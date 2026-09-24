@@ -188,8 +188,10 @@ pub struct NpcSpawnConfig {
     pub navy_positions: Vec<(f32, f32)>,
     pub navy_respawn_secs: f32,
     pub caravan_count: usize,
-    /// Rota da Costa, Serra -> Mina (a volta é a mesma lista invertida).
+    /// Rota da Costa, Serra -> Mina.
     pub caravan_route: Vec<(f32, f32)>,
+    /// Mina -> Serra, pelos portões do sentido de volta.
+    pub caravan_return: Vec<(f32, f32)>,
     pub caravan_respawn_secs: f32,
     /// Valor da carga pago em Gold a quem afunda uma caravana.
     pub caravan_plunder_gold: u64,
@@ -225,6 +227,7 @@ impl NpcSpawnConfig {
             navy_respawn_secs: 90.0,
             caravan_count: 3,
             caravan_route: features.caravan_route.clone(),
+            caravan_return: features.caravan_return.clone(),
             caravan_respawn_secs: 25.0,
             caravan_plunder_gold: 80,
             caravan_flee_secs: 12.0,
@@ -235,11 +238,11 @@ impl NpcSpawnConfig {
     }
 
     fn route(&self, reverse: bool) -> Vec<(f32, f32)> {
-        let mut route = self.caravan_route.clone();
         if reverse {
-            route.reverse();
+            self.caravan_return.clone()
+        } else {
+            self.caravan_route.clone()
         }
-        route
     }
 
     /// Onde um papel (re)nasce: caravana sempre no porto de partida.
@@ -1116,8 +1119,8 @@ pub fn simulate_npcs(
     }
 }
 
-/// Wreck de despojos de um NPC de evento (MV-061).
-fn spawn_spoils_wreck(
+/// Wreck de despojos (MV-061): NPC de evento abatido ou baú de cerração.
+pub(crate) fn spawn_spoils_wreck(
     commands: &mut Commands,
     wreck_ids: &mut crate::net::WreckIdCounter,
     live_wrecks: &mut crate::net::LiveWreckRecords,
@@ -1157,7 +1160,7 @@ fn spawn_spoils_wreck(
         exclusive_looter,
         spawned_at_secs: f64::from(now),
     });
-    info!(wreck_num, x, y, "despojos do Kraken boiando");
+    info!(wreck_num, x, y, "despojos boiando");
 }
 
 pub(crate) fn apply_npc_damage(npc: &mut NpcShip, damage: u32) -> DamageOutcome {
@@ -1239,6 +1242,8 @@ pub(crate) fn to_npc_ship_state(npc: &NpcShip, catalog: &ItemCatalog) -> ShipSta
         crew_max: 0,
         repairing: false,
         dig_progress: 0.0,
+        sail_cosmetic: 0,
+        flag_cosmetic: 0,
     }
 }
 
@@ -1525,6 +1530,45 @@ mod tests {
             (0.0, 0.0),
         )
         .1
+    }
+
+    /// MV-066: no mundo gerado a caravana atravessa portões — nos dois
+    /// sentidos, cada um pelos seus.
+    #[test]
+    fn caravans_cross_zone_gates_both_ways_on_a_generated_world() {
+        let map = WorldMap::from_seed(crate::net::DEFAULT_WORLD_SEED);
+        let config = NpcSpawnConfig::for_map(&map);
+        for reverse in [false, true] {
+            let mut ids = NpcIdCounter::default();
+            let role = NpcRole::Caravan { reverse };
+            let (_, mut npc) = build_npc(
+                &DevShips::new(),
+                &map,
+                &config,
+                &mut ids,
+                role,
+                config.home(role, (0.0, 0.0)),
+            );
+            let goal = *npc.ai.route.last().unwrap();
+            let dt = 1.0 / 30.0;
+            let mut arrived = false;
+            for _ in 0..(30 * 1200) {
+                let Some((wx, wy)) = advance_route(&mut npc.ai, npc.motion.x, npc.motion.y) else {
+                    arrived = true;
+                    break;
+                };
+                let input = avoid_land(&map, npc.motion, steer_input(npc.motion, wx, wy));
+                step_motion(&mut npc.motion, &npc.stats, input, WIND, &npc.tuning, dt);
+                ground_on_land(&map, &mut npc.motion);
+                crate::portals::cross_npc(&map, &mut npc);
+            }
+            assert!(
+                arrived,
+                "reverse={reverse}: parou em {:?}",
+                (npc.motion.x, npc.motion.y)
+            );
+            assert!(distance(npc.motion.x, npc.motion.y, goal.0, goal.1) <= WAYPOINT_RADIUS);
+        }
     }
 
     #[test]

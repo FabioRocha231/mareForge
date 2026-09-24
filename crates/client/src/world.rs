@@ -6,8 +6,10 @@
 use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, ShaderRef};
 use bevy::sprite::{Anchor, Material2d, Material2dPlugin};
-use marvyr_domain_world::map::PIRATE_PORT;
+use lightyear::prelude::ClientReceiveMessage;
+use marvyr_domain_world::map::{FOG_SLOTS, PIRATE_PORT};
 use marvyr_domain_world::{LandMass, RiskTier, WorldMap, ZoneShape};
+use marvyr_protocol::PortalsUpdate;
 
 use crate::assets::{deco, fort, layers, GameAssets};
 use crate::zone::CurrentZone;
@@ -54,6 +56,26 @@ struct Sea {
     streamed_at: Vec3,
 }
 
+/// Anel do portão: do tamanho do vão no paredão.
+const GATE_RING_INNER: f32 = 200.0;
+const GATE_RING_OUTER: f32 = 215.0;
+
+/// O quadro do oceano anda com a câmera (MV-066): as zonas moram longe
+/// umas das outras no plano, e o shader desenha pela posição de mundo.
+#[derive(Component)]
+struct OceanQuad;
+
+fn follow_ocean(
+    camera: Query<&Transform, (With<Camera2d>, Without<OceanQuad>)>,
+    mut ocean: Query<&mut Transform, With<OceanQuad>>,
+) {
+    let (Ok(camera), Ok(mut ocean)) = (camera.get_single(), ocean.get_single_mut()) else {
+        return;
+    };
+    ocean.translation.x = camera.translation.x;
+    ocean.translation.y = camera.translation.y;
+}
+
 /// Mundo do servidor (MV-065): montado da seed que chega no handshake.
 /// Ausente até a conexão — nada de geografia antes disso.
 #[derive(Resource)]
@@ -74,22 +96,37 @@ impl Plugin for WorldVisualPlugin {
             // O oceano já anima atrás do login; a terra vem com a seed.
             .add_systems(Startup, spawn_ocean)
             .add_systems(Update, spawn_world.run_if(resource_added::<ClientWorld>))
-            .add_systems(Update, (tint_sea_by_zone, stream_land, animate_flags));
+            .add_systems(
+                Update,
+                (
+                    tint_sea_by_zone,
+                    apply_arenas.before(stream_land),
+                    stream_land,
+                    animate_flags,
+                    follow_ocean,
+                ),
+            );
     }
 }
 
-/// Parede de instância (cerração/Sorvedouro) é penhasco, não ilha com palmeira.
+/// Paredão (borda de zona ou de instância) é penhasco, não ilha com palmeira.
 fn is_cliff(mass: &LandMass) -> bool {
-    mass.x.abs() > 3000.0
+    mass.cliff
 }
 
 /// Parâmetros do shader com a terra que cabe na vista em `center`.
 pub fn sea_params(map: &WorldMap, center: Vec2, view_radius: f32) -> SeaParams {
     let mut land = [Vec4::ZERO; MAX_LAND];
-    let visible = map
+    // Mais perto primeiro: com paredão em volta da zona, a vista pode ter
+    // mais discos que o shader comporta — os de longe ficam de fora.
+    let gap = |mass: &&LandMass| center.distance(Vec2::new(mass.x, mass.y)) - mass.radius;
+    let mut visible: Vec<&LandMass> = map
         .land()
         .iter()
-        .filter(|mass| center.distance(Vec2::new(mass.x, mass.y)) < view_radius + mass.radius);
+        .chain(map.arena_land())
+        .filter(|mass| gap(mass) < view_radius)
+        .collect();
+    visible.sort_by(|a, b| gap(a).total_cmp(&gap(b)));
     let mut count = 0;
     for (slot, mass) in land.iter_mut().zip(visible) {
         *slot = Vec4::new(mass.x, mass.y, mass.radius, is_cliff(mass) as u8 as f32);
@@ -169,6 +206,7 @@ fn spawn_ocean(
         Mesh2d(meshes.add(Rectangle::new(11000.0, 6400.0))),
         MeshMaterial2d(sea.clone()),
         Transform::from_xyz(0.0, 300.0, layers::OCEAN),
+        OceanQuad,
     ));
     commands.insert_resource(Sea {
         material: sea,
@@ -181,6 +219,8 @@ fn spawn_world(
     assets: Res<GameAssets>,
     world: Res<ClientWorld>,
     sea: Option<ResMut<Sea>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut colors: ResMut<Assets<ColorMaterial>>,
 ) {
     let map = &world.0;
     // O shader recebe a terra nova no próximo quadro.
@@ -204,6 +244,77 @@ fn spawn_world(
     let danger = Color::srgb(1.0, 0.82, 0.78);
     for &(text, x, y) in &map.features().labels {
         label(&mut commands, text, Vec2::new(x, y), 16.0, danger);
+    }
+    spawn_gates(&mut commands, map, &mut meshes, &mut colors);
+}
+
+/// Portões de zona (MV-066): anel no vão do paredão e, do lado de dentro,
+/// o nome da zona para onde ele leva.
+fn spawn_gates(
+    commands: &mut Commands,
+    map: &WorldMap,
+    meshes: &mut Assets<Mesh>,
+    colors: &mut Assets<ColorMaterial>,
+) {
+    let features = map.features();
+    let ring = meshes.add(Annulus::new(GATE_RING_INNER, GATE_RING_OUTER));
+    let glow = colors.add(ColorMaterial::from(Color::srgba(0.85, 0.95, 1.0, 0.35)));
+    for exit in &features.exits {
+        let (from, to) = (&features.areas[exit.from], &features.areas[exit.to]);
+        let gate = Vec2::new(exit.x, exit.y);
+        let inward = (Vec2::new(from.x, from.y) - gate).normalize_or_zero();
+        commands.spawn((
+            Mesh2d(ring.clone()),
+            MeshMaterial2d(glow.clone()),
+            Transform::from_translation(gate.extend(layers::PROPS)),
+        ));
+        let text = format!("→ {}", crate::i18n::tr(to.name));
+        commands.spawn((
+            Text2d::new(text),
+            TextLayout::new_with_no_wrap(),
+            TextFont {
+                font_size: 18.0,
+                ..default()
+            },
+            TextColor(Color::srgb(0.95, 0.97, 1.0)),
+            Anchor::Center,
+            Transform::from_translation((gate + inward * 420.0).extend(layers::LABELS)),
+        ));
+    }
+}
+
+/// Miolo das cerrações abertas (MV-066): a mesma semente sorteia os mesmos
+/// rochedos do servidor; muda o mapa e força o shader a recarregar a terra.
+fn apply_arenas(
+    mut events: EventReader<ClientReceiveMessage<PortalsUpdate>>,
+    world: Option<ResMut<ClientWorld>>,
+    sea: Option<ResMut<Sea>>,
+    mut applied: Local<[Option<u64>; FOG_SLOTS.len()]>,
+) {
+    let (Some(event), Some(mut world)) = (events.read().last(), world) else {
+        return;
+    };
+    if world.is_added() {
+        // Mapa novo (reconexão) nasce sem miolo.
+        *applied = Default::default();
+    }
+    let mut open = [None; FOG_SLOTS.len()];
+    for &(slot, layout) in &event.message().arenas {
+        if let Some(entry) = open.get_mut(usize::from(slot)) {
+            *entry = Some(layout);
+        }
+    }
+    if open == *applied {
+        return;
+    }
+    for (slot, layout) in open.iter().enumerate() {
+        if applied[slot] != *layout {
+            world.0.set_arena(slot, *layout);
+        }
+    }
+    *applied = open;
+    if let Some(mut sea) = sea {
+        sea.streamed_at = Vec3::splat(f32::INFINITY);
     }
 }
 

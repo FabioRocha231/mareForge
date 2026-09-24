@@ -4,6 +4,7 @@ use std::collections::HashSet;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
+use marvyr_domain_ships::{cosmetic_code, COSMETICS};
 use sqlx::migrate::{Migrate, Migrator};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
@@ -36,12 +37,43 @@ pub enum Command {
     Redo,
     /// List embedded migrations and whether each is applied.
     Status,
+    /// Grant a cosmetic (appearance only) to a captain, by login name.
+    GrantCosmetic {
+        #[arg(long)]
+        captain: String,
+        #[arg(long)]
+        cosmetic: String,
+        /// Who granted it (audit trail).
+        #[arg(long, default_value = "admin")]
+        by: String,
+    },
+    /// Take a cosmetic back; if the captain was wearing it, the ship goes
+    /// back to its default look.
+    RevokeCosmetic {
+        #[arg(long)]
+        captain: String,
+        #[arg(long)]
+        cosmetic: String,
+    },
+    /// List the cosmetic catalog, or what one captain owns.
+    ListCosmetics {
+        #[arg(long)]
+        captain: Option<String>,
+    },
 }
 
 pub async fn run(cli: Cli) -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
+
+    // The catalog needs no database.
+    if let Command::ListCosmetics { captain: None } = cli.command {
+        for cosmetic in COSMETICS {
+            println!("{:<16} {:?}\t{}", cosmetic.id, cosmetic.slot, cosmetic.name);
+        }
+        return Ok(());
+    }
 
     let database_url = resolve_database_url(cli.database_url.as_deref())?;
     validate_database_url(&database_url)?;
@@ -52,8 +84,114 @@ pub async fn run(cli: Cli) -> Result<()> {
         Command::Down => down(&pool).await?,
         Command::Redo => redo(&pool).await?,
         Command::Status => status(&pool).await?,
+        Command::GrantCosmetic {
+            captain,
+            cosmetic,
+            by,
+        } => grant_cosmetic(&pool, &captain, &cosmetic, &by).await?,
+        Command::RevokeCosmetic { captain, cosmetic } => {
+            revoke_cosmetic(&pool, &captain, &cosmetic).await?
+        }
+        Command::ListCosmetics {
+            captain: Some(captain),
+        } => list_cosmetics(&pool, &captain).await?,
+        // Catálogo: já listado antes de conectar.
+        Command::ListCosmetics { captain: None } => {}
     }
 
+    Ok(())
+}
+
+fn known_cosmetic(id: &str) -> Result<()> {
+    if cosmetic_code(id).is_none() {
+        bail!("unknown cosmetic `{id}` (see `list-cosmetics`)");
+    }
+    Ok(())
+}
+
+/// The captain's character (login name is case-insensitive, like the
+/// `idx_accounts_username_lower` index). None = never set sail.
+async fn captain_character(pool: &PgPool, captain: &str) -> Result<sqlx::types::Uuid> {
+    let row: Option<(sqlx::types::Uuid,)> = sqlx::query_as(
+        "SELECT c.id FROM characters c JOIN accounts a ON a.id = c.account_id \
+         WHERE lower(a.username) = lower($1) ORDER BY c.last_seen_at DESC LIMIT 1",
+    )
+    .bind(captain)
+    .fetch_optional(pool)
+    .await
+    .context("failed to look up the captain")?;
+    row.map(|(id,)| id)
+        .with_context(|| format!("captain `{captain}` not found (or never set sail)"))
+}
+
+async fn grant_cosmetic(pool: &PgPool, captain: &str, cosmetic: &str, by: &str) -> Result<()> {
+    known_cosmetic(cosmetic)?;
+    let character = captain_character(pool, captain).await?;
+    let inserted = sqlx::query(
+        "INSERT INTO character_cosmetics (character_id, cosmetic_id, granted_by) \
+         VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+    )
+    .bind(character)
+    .bind(cosmetic)
+    .bind(by)
+    .execute(pool)
+    .await
+    .context("failed to grant the cosmetic")?;
+    if inserted.rows_affected() == 0 {
+        println!("{captain} already owns {cosmetic}");
+    } else {
+        println!("granted {cosmetic} to {captain} (shows up at the next login)");
+    }
+    Ok(())
+}
+
+async fn revoke_cosmetic(pool: &PgPool, captain: &str, cosmetic: &str) -> Result<()> {
+    known_cosmetic(cosmetic)?;
+    let character = captain_character(pool, captain).await?;
+    let mut tx = pool.begin().await.context("failed to open a transaction")?;
+    let removed =
+        sqlx::query("DELETE FROM character_cosmetics WHERE character_id = $1 AND cosmetic_id = $2")
+            .bind(character)
+            .bind(cosmetic)
+            .execute(&mut *tx)
+            .await
+            .context("failed to revoke the cosmetic")?;
+    sqlx::query(
+        "UPDATE characters SET \
+         sail_cosmetic = NULLIF(sail_cosmetic, $2), flag_cosmetic = NULLIF(flag_cosmetic, $2) \
+         WHERE id = $1",
+    )
+    .bind(character)
+    .bind(cosmetic)
+    .execute(&mut *tx)
+    .await
+    .context("failed to clear the worn cosmetic")?;
+    tx.commit().await.context("failed to commit the revoke")?;
+    if removed.rows_affected() == 0 {
+        println!("{captain} did not own {cosmetic}");
+    } else {
+        println!("revoked {cosmetic} from {captain}");
+    }
+    Ok(())
+}
+
+async fn list_cosmetics(pool: &PgPool, captain: &str) -> Result<()> {
+    let character = captain_character(pool, captain).await?;
+    let owned: Vec<(
+        String,
+        String,
+        sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>,
+    )> = sqlx::query_as(
+        "SELECT cosmetic_id, granted_by, granted_at FROM character_cosmetics \
+         WHERE character_id = $1 ORDER BY granted_at",
+    )
+    .bind(character)
+    .fetch_all(pool)
+    .await
+    .context("failed to list the captain's cosmetics")?;
+    for (id, by, at) in owned {
+        println!("{id:<16} granted by {by} at {at}");
+    }
     Ok(())
 }
 

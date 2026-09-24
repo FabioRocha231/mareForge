@@ -81,6 +81,8 @@ impl Default for PortalTuning {
 pub struct FogArena {
     pub origin: (f32, f32),
     pub closes_at: f64,
+    /// Semente do miolo desta abertura (ver [`crate::map::arena_layout`]).
+    pub layout: u64,
 }
 
 /// Arena que fechou neste tick: o servidor devolve quem estiver dentro.
@@ -99,12 +101,15 @@ impl Rng {
         Self(seed.max(1))
     }
 
-    pub fn next_f32(&mut self) -> f32 {
+    pub fn next_u64(&mut self) -> u64 {
         self.0 ^= self.0 >> 12;
         self.0 ^= self.0 << 25;
         self.0 ^= self.0 >> 27;
-        let v = self.0.wrapping_mul(0x2545_F491_4F6C_DD1D);
-        (v >> 40) as f32 / (1u64 << 24) as f32
+        self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    pub fn next_f32(&mut self) -> f32 {
+        (self.next_u64() >> 40) as f32 / (1u64 << 24) as f32
     }
 
     fn range(&mut self, min: f32, max: f32) -> f32 {
@@ -230,7 +235,12 @@ impl PortalDirector {
         let Some(slot) = self.arenas.iter().position(Option::is_none) else {
             return;
         };
-        let Some(origin) = self.sample_open_sea(map, map.features().bounds) else {
+        let sectors = &map.features().sea_sectors;
+        let pick = (self.rng.next_f32() * sectors.len() as f32) as usize;
+        let Some(&sector) = sectors.get(pick.min(sectors.len().saturating_sub(1))) else {
+            return;
+        };
+        let Some(origin) = self.sample_open_sea(map, sector) else {
             return;
         };
         let center = FOG_SLOTS[slot];
@@ -240,6 +250,7 @@ impl PortalDirector {
         self.arenas[slot] = Some(FogArena {
             origin: landing,
             closes_at,
+            layout: self.rng.next_u64(),
         });
         let gate = Portal {
             id: self.id(),

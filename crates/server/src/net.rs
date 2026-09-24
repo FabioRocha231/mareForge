@@ -147,6 +147,11 @@ pub struct DevItems {
     pub black_hull: ItemDefinitionId,
     pub fog_sails: ItemDefinitionId,
     pub abyssal_cannons: ItemDefinitionId,
+    // MV-066: tier 3 — só nos baús das cerrações, vira equipamento na Forja
+    // Pirata junto com o tier 2.
+    pub fog_crystal: ItemDefinitionId,
+    pub crystal_hull: ItemDefinitionId,
+    pub crystal_cannons: ItemDefinitionId,
     /// MV-061: mapa do tesouro (item de missão; aponta para uma ilha oculta).
     pub treasure_map: ItemDefinitionId,
 }
@@ -287,6 +292,9 @@ impl DevItems {
         let black_hull = ItemDefinitionId::stable("Casco Negro");
         let fog_sails = ItemDefinitionId::stable("Velas de Cerração");
         let abyssal_cannons = ItemDefinitionId::stable("Canhões Abissais");
+        let fog_crystal = ItemDefinitionId::stable("Cristal da Cerração");
+        let crystal_hull = ItemDefinitionId::stable("Casco de Cristal");
+        let crystal_cannons = ItemDefinitionId::stable("Canhões de Cristal");
         let no_stats = EquipmentStats {
             damage: 0,
             speed: 0,
@@ -329,6 +337,28 @@ impl DevItems {
                 },
                 12,
             ),
+            rare_resource(fog_crystal, "Cristal da Cerração", 1),
+            equipment_item(
+                crystal_hull,
+                "Casco de Cristal",
+                EquipmentSlot::Hull,
+                EquipmentStats {
+                    hp: 150,
+                    ..no_stats
+                },
+                10,
+            ),
+            equipment_item(
+                crystal_cannons,
+                "Canhões de Cristal",
+                EquipmentSlot::Weapon,
+                EquipmentStats {
+                    damage: 26,
+                    range: 3500,
+                    ..no_stats
+                },
+                12,
+            ),
         ] {
             register(definition);
         }
@@ -356,6 +386,9 @@ impl DevItems {
             black_hull,
             fog_sails,
             abyssal_cannons,
+            fog_crystal,
+            crystal_hull,
+            crystal_cannons,
             treasure_map,
         }
     }
@@ -585,6 +618,7 @@ impl Plugin for ServerNetPlugin {
         app.register_message::<marvyr_protocol::WeatherUpdate>(ChannelDirection::ServerToClient);
         crate::weather::install(app);
         crate::seafaring::install(app);
+        crate::cosmetics::install(app);
         app.register_message::<marvyr_protocol::ReputationUpdate>(ChannelDirection::ServerToClient);
         app.register_message::<marvyr_protocol::WorldEvent>(ChannelDirection::ServerToClient);
         // v15 (MV-061): combate profundo, tripulação, eventos e tesouro.
@@ -602,6 +636,11 @@ impl Plugin for ServerNetPlugin {
         );
         // v17 (MV-065): SEMPRE no fim, espelhado no client.
         app.register_message::<marvyr_protocol::WorldSeed>(ChannelDirection::ServerToClient);
+        // v18 (MV-066): SEMPRE no fim, espelhado no client.
+        app.register_message::<marvyr_protocol::CosmeticsSnapshot>(
+            ChannelDirection::ServerToClient,
+        );
+        app.register_message::<marvyr_protocol::WearCosmetic>(ChannelDirection::ClientToServer);
         app.add_systems(Startup, start_server);
         app.add_systems(Startup, crate::nodes::spawn_dev_nodes.after(start_server));
         app.add_systems(Startup, crate::npc::setup_npcs.after(start_server));
@@ -1116,7 +1155,8 @@ pub(crate) fn spawn_ship_for(
 
 /// Onde um navio salvo reaparece (MV-065): o mundo pode ter trocado de seed
 /// desde o save — atracado volta ao cais do seu porto; no mar, sai de dentro
-/// da terra.
+/// da terra; fora de qualquer mar declarado (o mundo antigo), volta à doca
+/// inicial.
 pub(crate) fn restored_position(
     map: &WorldMap,
     presence: VesselPresence,
@@ -1132,6 +1172,9 @@ pub(crate) fn restored_position(
         {
             return (port.x, port.y);
         }
+    }
+    if map.zone_at(x, y).is_err() {
+        return map.features().spawn;
     }
     map.push_out_of_land(x, y, HULL_CLEARANCE).unwrap_or((x, y))
 }
@@ -2465,6 +2508,19 @@ fn to_ship_state(ship: &ServerShip, catalog: &ItemCatalog) -> ShipState {
         crew_max: marvyr_domain_ships::crew_capacity(ship.kind),
         repairing: ship.sea.repairing,
         dig_progress: ship.sea.dig_progress(),
+        // Preenchidos em `send_snapshots` (`dressed`), do `CaptainCosmetics`.
+        sail_cosmetic: 0,
+        flag_cosmetic: 0,
+    }
+}
+
+/// Veste o `ShipState` com o visual do capitão. Só aparência: nenhum campo
+/// de stat muda (ver `ship_state_populates_battery_cooldowns`).
+fn dressed(state: ShipState, worn: marvyr_domain_ships::ShipCosmetics) -> ShipState {
+    ShipState {
+        sail_cosmetic: worn.sail,
+        flag_cosmetic: worn.flag,
+        ..state
     }
 }
 
@@ -2484,6 +2540,7 @@ fn send_snapshots(
     projectiles: Query<(Entity, &mut ServerProjectile)>,
     wrecks: Query<&ServerWreck>,
     reputation: Res<crate::reputation::Reputation>,
+    cosmetics: Res<crate::cosmetics::CaptainCosmetics>,
 ) {
     if advance_snapshot_clock(&mut clock.accumulator, f64::from(time.delta_secs())) == 0 {
         return;
@@ -2500,9 +2557,14 @@ fn send_snapshots(
         .collect();
     let mut ship_states: Vec<ShipState> = ships
         .iter()
-        .map(|(_, ship)| ShipState {
-            notoriety_tier: reputation.tier(ship.character).wire(),
-            ..to_ship_state(ship, &dev.catalog)
+        .map(|(_, ship)| {
+            dressed(
+                ShipState {
+                    notoriety_tier: reputation.tier(ship.character).wire(),
+                    ..to_ship_state(ship, &dev.catalog)
+                },
+                cosmetics.worn(ship.character),
+            )
         })
         .collect();
     ship_states.extend(
@@ -3084,8 +3146,10 @@ mod tests {
         let map = WorldMap::from_seed(DEFAULT_WORLD_SEED);
         let features = map.features();
         assert_eq!(features.hidden_islands.len(), 4);
-        assert_eq!(features.nodes.len(), 26);
-        assert_eq!(map.regions().len(), 3);
+        // 3 portos fixos + 1-2 portos livres, cada um com sua baía de nós.
+        assert!(features.nodes.len() >= 31);
+        assert!(map.regions().len() >= 4);
+        assert!(features.areas.len() >= 8);
         let spawn = features.spawn;
         assert_eq!(
             map.zone_at(spawn.0, spawn.1).unwrap().tier,
@@ -3101,9 +3165,19 @@ mod tests {
         // Coordenada do porto no mapa antigo: no mundo novo é outro lugar.
         let docked = restored_position(&map, VesselPresence::Docked(mina.id), 600.0, 0.0);
         assert_eq!(docked, (port.x, port.y));
-        let coast = map.land()[0];
+        let coast = map
+            .land()
+            .iter()
+            .find(|m| !m.cliff && m.radius < 40.0)
+            .copied()
+            .unwrap();
         let (x, y) = restored_position(&map, VesselPresence::AtSea, coast.x, coast.y);
         assert!(map.push_out_of_land(x, y, HULL_CLEARANCE - 0.1).is_none());
+        // Coordenada do mapa antigo, hoje fora de qualquer zona: doca inicial.
+        assert_eq!(
+            restored_position(&map, VesselPresence::AtSea, -300.0, 0.0),
+            map.features().spawn
+        );
     }
 
     #[test]
@@ -3243,6 +3317,27 @@ mod tests {
         assert_eq!(state.starboard_cooldown_secs, 0.75);
         assert!(!state.is_npc);
         assert_eq!(state.cargo_capacity, expected_cargo_capacity);
+
+        // MV-066: coisa paga não dá poder — o navio vestido com o catálogo
+        // inteiro é o mesmo navio, stat por stat.
+        let worn = marvyr_domain_ships::ShipCosmetics {
+            sail: marvyr_domain_ships::cosmetic_code("sail-gold").unwrap(),
+            flag: marvyr_domain_ships::cosmetic_code("flag-emerald").unwrap(),
+        };
+        let fancy = dressed(state, worn);
+        assert_eq!(
+            (fancy.sail_cosmetic, fancy.flag_cosmetic),
+            (worn.sail, worn.flag)
+        );
+        assert_eq!(
+            ShipState {
+                sail_cosmetic: 0,
+                flag_cosmetic: 0,
+                ..fancy
+            },
+            state,
+            "cosmético só pode mudar os campos de aparência"
+        );
     }
 
     /// Simulação e snapshot não são a mesma cadência: há ticks de 30 Hz em

@@ -15,9 +15,9 @@ pub mod treasure;
 pub mod zone;
 
 pub use events::{DirectorChange, SeaEvent, SeaEventDirector, SeaEventKind};
-pub use features::{Features, NodeSpot};
+pub use features::{Area, Features, NodeSpot, ZoneExit};
 pub use land::{push_out_of_land, LandMass};
-pub use map::{WorldError, WorldMap};
+pub use map::{arena_layout, ArenaLayout, WorldError, WorldMap};
 pub use node::{GatheringPolicy, ResourceNode};
 pub use portal::{ClosedArena, FogArena, Portal, PortalDirector, PortalKind, PortalTuning};
 pub use region::{Port, Region};

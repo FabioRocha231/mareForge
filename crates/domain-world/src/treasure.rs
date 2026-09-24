@@ -32,11 +32,7 @@ pub const DIG_MAX_SPEED: f32 = 1.5;
 
 impl HiddenIsland {
     pub fn land(&self) -> LandMass {
-        LandMass {
-            x: self.x,
-            y: self.y,
-            radius: self.radius,
-        }
+        LandMass::new(self.x, self.y, self.radius)
     }
 
     pub fn in_sight(&self, x: f32, y: f32) -> bool {

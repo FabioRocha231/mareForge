@@ -202,10 +202,16 @@ impl Plugin for ClientNetPlugin {
         );
         // v17 (MV-065): SEMPRE no fim, espelho do servidor.
         app.register_message::<marvyr_protocol::WorldSeed>(ChannelDirection::ServerToClient);
+        // v18 (MV-066): SEMPRE no fim, espelho do servidor.
+        app.register_message::<marvyr_protocol::CosmeticsSnapshot>(
+            ChannelDirection::ServerToClient,
+        );
+        app.register_message::<marvyr_protocol::WearCosmetic>(ChannelDirection::ClientToServer);
         app.add_event::<PlayerNotice>();
         app.init_resource::<crate::ship::DestroyedShips>();
         app.init_resource::<KnownWrecks>();
         app.init_resource::<MyDocked>();
+        app.init_resource::<MyCosmetics>();
         app.init_resource::<SailLevel>();
         // Intenção contínua (leme/pano) vai no tick fixo; comandos de tecla
         // única ficam no Update — `just_pressed` vale um frame de render e o
@@ -227,6 +233,7 @@ impl Plugin for ClientNetPlugin {
             (
                 handle_handshake,
                 receive_world_seed,
+                receive_cosmetics,
                 handle_dock_result,
                 handle_loadout_result,
                 handle_ship_destroyed,
@@ -697,6 +704,19 @@ fn send_gather_input(
 
 fn autogather_enabled() -> bool {
     std::env::var_os("MARVYR_AUTOGATHER").is_some()
+}
+
+/// Cosméticos do capitão (MV-066): o que possui e o que está usando.
+#[derive(Resource, Debug, Default)]
+pub struct MyCosmetics(pub Option<marvyr_protocol::CosmeticsSnapshot>);
+
+fn receive_cosmetics(
+    mut events: EventReader<ClientReceiveMessage<marvyr_protocol::CosmeticsSnapshot>>,
+    mut mine: ResMut<MyCosmetics>,
+) {
+    if let Some(event) = events.read().last() {
+        mine.0 = Some(event.message().clone());
+    }
 }
 
 /// MV-065: a seed do servidor vira o mapa do client (mesmo gerador).

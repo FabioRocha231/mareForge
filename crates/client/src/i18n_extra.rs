@@ -129,6 +129,10 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Porto da Serra", "Ridge Harbor"),
     ("Porto da Mina", "Mine Harbor"),
     ("Porto do Coral Negro", "Black Coral Harbor"),
+    ("Porto das Gaivotas", "Gull Harbor"),
+    ("Porto do Farol", "Lighthouse Harbor"),
+    ("Porto da Areia Branca", "White Sand Harbor"),
+    ("Porto Santa Luzia", "Santa Luzia Harbor"),
     ("Ilha do Coral Negro", "Black Coral Isle"),
     ("Águas Negras", "Black Waters"),
     ("ÁGUAS NEGRAS", "BLACK WATERS"),
@@ -147,6 +151,33 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Casco Negro", "Black Hull"),
     ("Velas de Cerração", "Fog Sails"),
     ("Canhões Abissais", "Abyssal Cannons"),
+    ("Cristal da Cerração", "Fog Crystal"),
+    ("Casco de Cristal", "Crystal Hull"),
+    ("Canhões de Cristal", "Crystal Cannons"),
+    // Carta náutica (MV-066)
+    ("Carta Náutica", "Nautical Chart"),
+    ("M fecha a carta", "M closes the chart"),
+    (
+        "Carta náutica: o que você já navegou",
+        "Nautical chart: everywhere you have sailed",
+    ),
+    ("Ligar e desligar a música", "Toggle the music"),
+    // Cosméticos (MV-066)
+    ("Velas Esmeralda", "Emerald Sails"),
+    ("Velas de Ouro", "Golden Sails"),
+    ("Velas Azul-Mar", "Sea-Blue Sails"),
+    ("Estandarte de Linho", "Linen Standard"),
+    ("Estandarte Esmeralda", "Emerald Standard"),
+    ("Usar {0}", "Wear {0}"),
+    ("Tirar {0}", "Remove {0}"),
+    ("velas cosméticas", "cosmetic sails"),
+    ("bandeira cosmética", "cosmetic flag"),
+    ("velas do casco", "hull sails"),
+    ("bandeira da casa", "house flag"),
+    (
+        "Visual: {0} · {1} — só aparência",
+        "Look: {0} · {1} — appearance only",
+    ),
 ];
 
 #[cfg(test)]

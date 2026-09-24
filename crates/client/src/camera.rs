@@ -63,6 +63,9 @@ fn next_zoom(current: f32, steps: f32) -> f32 {
     (current * 0.88_f32.powf(steps)).clamp(MIN_ZOOM, MAX_ZOOM)
 }
 
+/// Distância que só um salto de portal explica.
+const TELEPORT_JUMP: f32 = 1500.0;
+
 pub fn follow_camera(
     time: Res<Time>,
     zoom: Res<CameraZoom>,
@@ -88,6 +91,11 @@ pub fn follow_camera(
     // precisa ver o que vem, não o que ficou.
     let lead = Vec2::from_angle(visual.target.heading) * visual.target.speed * 1.6;
     let goal = (ship.translation.truncate() + lead).extend(transform.translation.z);
+    // Portal ou portão de zona: salta junto, sem panorâmica pelo vazio.
+    if transform.translation.truncate().distance(goal.truncate()) > TELEPORT_JUMP {
+        transform.translation = goal;
+        return;
+    }
     transform.translation = transform.translation.lerp(goal, 1.0 - (-3.5 * dt).exp());
 }
 

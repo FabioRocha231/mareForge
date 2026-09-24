@@ -5,7 +5,41 @@
 
 use crate::events::SeaEventKind;
 use crate::map::{MAELSTROM_POINTS, MAELSTROM_X};
+use crate::risk::RiskTier;
 use crate::treasure::HiddenIsland;
+
+/// Uma zona do mundo (MV-066): um mar redondo, cercado de paredão, ligado às
+/// vizinhas por portões. Zonas vivem em regiões distantes do mesmo plano —
+/// a distância entre elas é o que isola AOI, combate e streaming.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Area {
+    pub name: &'static str,
+    pub tier: RiskTier,
+    pub x: f32,
+    pub y: f32,
+    /// Raio navegável (o paredão começa aqui).
+    pub radius: f32,
+    /// Célula na carta de zonas (coluna, linha).
+    pub cell: (i32, i32),
+}
+
+/// Portão de saída: quem entra em (x, y, radius) reaparece em `dest`, já
+/// dentro da zona `to`, aproado para longe do portão de volta.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ZoneExit {
+    pub x: f32,
+    pub y: f32,
+    pub radius: f32,
+    pub from: usize,
+    pub to: usize,
+    pub dest: (f32, f32),
+}
+
+impl ZoneExit {
+    pub fn catches(&self, x: f32, y: f32) -> bool {
+        (x - self.x).powi(2) + (y - self.y).powi(2) <= self.radius * self.radius
+    }
+}
 
 /// Um depósito de recurso: nome do nó, região dona e estoque máximo.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -26,8 +60,12 @@ pub struct Features {
     pub seed: u64,
     /// Doca do Porto da Serra: spawn, respawn e navio novo.
     pub spawn: (f32, f32),
-    /// Caixa do mar principal (fora das instâncias): tempestades nascem aqui.
-    pub bounds: Sector,
+    /// Caixas de mar aberto (dentro das zonas): tempestades e cerrações
+    /// nascem aqui.
+    pub sea_sectors: Vec<Sector>,
+    /// Zonas do mundo (o mapa clássico é uma zona só) e seus portões.
+    pub areas: Vec<Area>,
+    pub exits: Vec<ZoneExit>,
     pub hidden_islands: Vec<HiddenIsland>,
     pub tempest_sites: Vec<(f32, f32)>,
     pub kraken_sites: Vec<(f32, f32)>,
@@ -40,8 +78,11 @@ pub struct Features {
     /// Piratas que rondam a Rota da Costa.
     pub raider_spawns: Vec<(f32, f32)>,
     pub navy_spawns: Vec<(f32, f32)>,
-    /// Serra -> Mina (a volta é a lista invertida).
+    /// Serra -> Mina.
     pub caravan_route: Vec<(f32, f32)>,
+    /// Mina -> Serra. Não é a ida invertida: cada portão só leva num
+    /// sentido (MV-066), a volta usa os portões do outro lado.
+    pub caravan_return: Vec<(f32, f32)>,
     /// Onde os três redemoinhos nascem (ligam aos `MAELSTROM_POINTS`).
     pub whirlpool_sectors: [Sector; 3],
     /// Nomes de águas perigosas que o client escreve no mar.
@@ -100,7 +141,16 @@ impl Features {
         Self {
             seed: 0,
             spawn: (-560.0, 0.0),
-            bounds: (-1400.0, 1400.0, -700.0, 1500.0),
+            sea_sectors: vec![(-1400.0, 1400.0, -700.0, 1500.0)],
+            areas: vec![Area {
+                name: "Mar do Triângulo",
+                tier: RiskTier::Frontier,
+                x: 0.0,
+                y: 450.0,
+                radius: 2700.0,
+                cell: (0, 0),
+            }],
+            exits: Vec::new(),
             hidden_islands: CLASSIC_HIDDEN_ISLANDS.to_vec(),
             tempest_sites: vec![(0.0, 500.0), (-700.0, 700.0), (700.0, 700.0)],
             kraken_sites: vec![(0.0, 1700.0), (-900.0, 1100.0), (900.0, 1100.0)],
@@ -116,6 +166,13 @@ impl Features {
                 (0.0, 0.0),
                 (300.0, 0.0),
                 (560.0, 0.0),
+            ],
+            caravan_return: vec![
+                (560.0, 0.0),
+                (300.0, 0.0),
+                (0.0, 0.0),
+                (-300.0, 0.0),
+                (-560.0, 0.0),
             ],
             whirlpool_sectors: [
                 (-1000.0, -200.0, -500.0, 800.0),

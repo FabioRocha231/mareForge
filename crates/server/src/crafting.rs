@@ -119,6 +119,31 @@ impl DevRecipes {
                     vec![ingredient(dev.ore, 20), ingredient(dev.abyssal_amber, 5)],
                 )
             },
+            // MV-066: tier 3 — cristal dos baús da cerração sobre o tier 2.
+            Recipe {
+                required_station: StationKind::Anvil,
+                ..equipment_recipe(
+                    "Casco de Cristal",
+                    dev.crystal_hull,
+                    vec![
+                        ingredient(dev.timber, 25),
+                        ingredient(dev.abyssal_pearl, 4),
+                        ingredient(dev.fog_crystal, 4),
+                    ],
+                )
+            },
+            Recipe {
+                required_station: StationKind::Anvil,
+                ..equipment_recipe(
+                    "Canhões de Cristal",
+                    dev.crystal_cannons,
+                    vec![
+                        ingredient(dev.ore, 25),
+                        ingredient(dev.abyssal_amber, 4),
+                        ingredient(dev.fog_crystal, 4),
+                    ],
+                )
+            },
         ];
 
         let ships = vec![
