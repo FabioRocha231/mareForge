@@ -1,13 +1,16 @@
-//! HUD do mar (MF-057A/B/C, MF-058) em bevy_ui: espaço de tela, independente
-//! da câmera, do zoom e do tamanho da janela. Painel do navio (topo-esq.),
-//! zona (topo-centro), recarga dos bordos + velas + prompt (base-centro),
-//! toasts (direita-meio), dica de controles (base-dir.), banner de zona e
-//! placa de PvP com fade. Atracado, o HUD do mar esconde; o Port Screen assume.
+//! HUD do mar (MF-057A/B/C, MF-058, MV-062) em bevy_ui: espaço de tela,
+//! independente da câmera, do zoom e do tamanho da janela. Tudo é papel
+//! impresso preso sobre o mar (ver `ui`): bilhete do navio (topo-esq.),
+//! carimbo de zona (topo-centro), bilhete de ação com linha-guia até o alvo
+//! e bilhete dos canhões + velas (base-centro), avisos (direita-meio) e o
+//! lembrete do livreto (base-dir.). Atracado, o HUD do mar esconde; o Port
+//! Screen assume.
 
 use bevy::prelude::*;
 use marvyr_domain_world::RiskTier;
 use marvyr_shared::ids::ItemDefinitionId;
 
+use crate::input::{ContextKey, KeySlot};
 use crate::market::{KnownCatalog, Wallet};
 use crate::net::{KnownWrecks, MyShip, GATHER_RADIUS_SQ, LOOT_RADIUS_SQ};
 use crate::nodes::KnownNodes;
@@ -83,55 +86,78 @@ pub enum HudContext {
     NearPort,
     NearWreck,
     NearNode(ItemDefinitionId),
+    /// Em cima do X de um mapa do tesouro.
+    AtDigSpot,
+    /// Navio avariado (ou parado) ao alcance da abordagem.
+    CanBoard,
+    /// Casco ferido, navio quase parado e sem reparo em curso.
+    CanRepair,
 }
+
+/// Alvo do bilhete de ação no mar, para a linha-guia.
+#[derive(Resource, Debug, Default, Clone, Copy, PartialEq)]
+pub struct PromptTarget(pub Option<Vec2>);
+
+/// Vaga da tecla do bilhete de ação.
+#[derive(Component)]
+pub struct PromptKey;
+
+/// Casinha do nível de pano (0..3): cheia = pano armado.
+#[derive(Component)]
+pub struct SailCell(u8);
 
 /// Recarga de bordo do servidor (`server::net` tuning.cooldown_secs).
 // ponytail: espelha a constante do servidor; mandar no snapshot se virar por navio.
 const BROADSIDE_RELOAD_SECS: f32 = 3.0;
 
-pub const CONTROLS_HINT: &str =
-    "W/S velas | A/D leme | Q/R canhoes | C municao | E atracar | G coletar | F saquear | roda do mouse: zoom";
-
 pub struct HudPlugin;
 
 impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup_hud).add_systems(
-            Update,
-            (
-                update_ship_panel,
-                update_zone_panel,
-                update_cooldown_panel,
-                update_prompt_panel,
-                update_sail_indicator,
-                ui::tick_ui_fades,
-            ),
-        );
+        app.init_resource::<PromptTarget>()
+            .add_systems(Startup, setup_hud)
+            .add_systems(
+                Update,
+                (
+                    update_ship_panel,
+                    update_zone_panel,
+                    update_cooldown_panel,
+                    update_prompt_panel,
+                    update_sail_indicator,
+                    draw_prompt_leader,
+                    explain_silent_cannons,
+                    ui::tick_ui_fades,
+                ),
+            );
     }
 }
 
-/// Nível de pano armado (W/S), lido do `SailLevel` do client.
+/// Nível de pano armado (W/S), lido do `SailLevel` do client: três casas
+/// sempre desenhadas (as vazias também) e o nome do pano embaixo.
 fn update_sail_indicator(
     sail: Res<crate::net::SailLevel>,
+    lang: Option<Res<crate::i18n::Lang>>,
     mut texts: Query<&mut Text, With<SailIndicator>>,
+    mut cells: Query<(&SailCell, &mut BackgroundColor)>,
 ) {
-    if !sail.is_changed() {
+    let lang_changed = lang.is_some_and(|lang| lang.is_changed());
+    if !(sail.is_changed() || lang_changed) {
         return;
     }
     for mut text in &mut texts {
         text.0 = sail_indicator_text(*sail);
     }
+    for (cell, mut bg) in &mut cells {
+        bg.0 = if cell.0 < sail.0 {
+            ui::INK
+        } else {
+            Color::NONE
+        };
+    }
 }
 
 fn sail_indicator_text(sail: crate::net::SailLevel) -> String {
-    let filled = usize::from(sail.0);
-    let empty = usize::from(crate::net::SailLevel::MAX) - filled;
-    format!(
-        "[{}{}]\n{}",
-        "#".repeat(filled),
-        "-".repeat(empty),
-        sail.label()
-    )
+    crate::i18n::tr(sail.label())
 }
 
 fn anchored(node: Node) -> Node {
@@ -150,44 +176,53 @@ fn spawn_stat_row(parent: &mut ChildBuilder, label: &str, text: HudText, fill: H
         })
         .with_children(|row| {
             row.spawn((
-                ui::text(label, 11.0, ui::TEXT_DIM),
+                ui::face(label, ui::FONT_BOLD, 12.0, ui::INK_SOFT),
                 Node {
-                    width: Val::Px(44.0),
+                    width: Val::Px(52.0),
                     ..default()
                 },
             ));
-            ui::spawn_bar(row, 140.0, ui::OK_GREEN, fill);
-            row.spawn((ui::text("-", 12.0, ui::TEXT), text));
+            ui::spawn_bar(row, 150.0, ui::OK_GREEN, fill);
+            row.spawn((ui::face("-", ui::FONT_BOLD, 14.0, ui::INK), text));
         });
 }
 
-fn spawn_reload(parent: &mut ChildBuilder, label: &str, side: Broadside) {
+fn spawn_reload(parent: &mut ChildBuilder, label: &'static str, key: KeyCode, side: Broadside) {
     parent
         .spawn(Node {
             flex_direction: FlexDirection::Column,
-            row_gap: Val::Px(4.0),
-            width: Val::Px(150.0),
+            row_gap: Val::Px(5.0),
+            width: Val::Px(160.0),
             flex_shrink: 0.0,
             ..default()
         })
         .with_children(|col| {
             col.spawn(Node {
                 justify_content: JustifyContent::SpaceBetween,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(6.0),
                 ..default()
             })
             .with_children(|row| {
-                row.spawn(ui::text(label, 11.0, ui::TEXT_DIM));
+                row.spawn((Node::default(), KeySlot(key)));
+                row.spawn(crate::i18n::label_face(
+                    label,
+                    ui::FONT_BOLD,
+                    12.0,
+                    ui::INK_SOFT,
+                ));
                 row.spawn((
-                    ui::text(cooldown_label(0.0), 11.0, ui::OK_GREEN),
+                    ui::face(cooldown_label(0.0), ui::FONT_BOLD, 13.0, ui::OK_GREEN),
                     HudText::Reload(side),
                 ));
             });
-            ui::spawn_bar(col, 150.0, ui::OK_GREEN, HudFill::Reload(side));
+            ui::spawn_bar(col, 160.0, ui::OK_GREEN, HudFill::Reload(side));
         });
 }
 
 pub fn setup_hud(mut commands: Commands) {
-    // Topo-esquerda: painel do navio.
+    // Topo-esquerda: bilhete do navio — tipo do casco em tipo de madeira,
+    // ouro à direita, fio duplo, casco e carga, e a linha de bordo.
     commands
         .spawn((
             ui::panel(anchored(Node {
@@ -195,19 +230,34 @@ pub fn setup_hud(mut commands: Commands) {
                 top: Val::Px(ui::MARGIN),
                 flex_direction: FlexDirection::Column,
                 row_gap: Val::Px(6.0),
+                padding: UiRect::axes(Val::Px(14.0), Val::Px(10.0)),
                 ..default()
             })),
             SeaHud,
             ShipPanel,
         ))
         .with_children(|panel| {
-            panel.spawn((ui::text("-", 15.0, ui::TEXT), HudText::ShipName));
+            panel
+                .spawn(Node {
+                    justify_content: JustifyContent::SpaceBetween,
+                    align_items: AlignItems::FlexEnd,
+                    column_gap: Val::Px(18.0),
+                    ..default()
+                })
+                .with_children(|head| {
+                    head.spawn((ui::display("-", 22.0, ui::INK), HudText::ShipName));
+                    head.spawn((ui::face("0g", ui::FONT_BOLD, 17.0, ui::GOLD), HudText::Gold));
+                });
+            ui::double_rule(panel);
             spawn_stat_row(panel, "CASCO", HudText::Hp, HudFill::Hp);
             spawn_stat_row(panel, "CARGA", HudText::Cargo, HudFill::Cargo);
-            panel.spawn((ui::text("0g", 13.0, ui::GOLD), HudText::Gold));
+            panel.spawn((
+                ui::face("", ui::FONT_REGULAR, 14.0, ui::INK_SOFT),
+                crate::seafaring::SeaStatusText,
+            ));
         });
 
-    // Topo-centro: zona atual.
+    // Topo-centro: nome das águas e o carimbo do risco.
     commands
         .spawn((
             anchored(Node {
@@ -224,13 +274,14 @@ pub fn setup_hud(mut commands: Commands) {
                 ui::panel(Node {
                     flex_direction: FlexDirection::Column,
                     align_items: AlignItems::Center,
-                    row_gap: Val::Px(2.0),
+                    row_gap: Val::Px(4.0),
+                    padding: UiRect::axes(Val::Px(18.0), Val::Px(8.0)),
                     ..default()
                 }),
                 ZonePanel,
             ))
             .with_children(|panel| {
-                panel.spawn((ui::text("-", 16.0, ui::TEXT), HudText::ZoneName));
+                panel.spawn((ui::display("-", 19.0, ui::INK), HudText::ZoneName));
                 panel
                     .spawn(Node {
                         column_gap: Val::Px(8.0),
@@ -238,13 +289,13 @@ pub fn setup_hud(mut commands: Commands) {
                         ..default()
                     })
                     .with_children(|tags| {
-                        tags.spawn((ui::text("", 12.0, ui::OK_GREEN), HudText::ZoneTag));
-                        tags.spawn((ui::text("", 11.0, ui::TEXT_DIM), HudText::ZoneRisk));
+                        tags.spawn((ui::stamp("", ui::OK_GREEN), HudText::ZoneTag));
+                        tags.spawn((ui::text("", 13.0, ui::INK_SOFT), HudText::ZoneRisk));
                     });
             });
         });
 
-    // Base-centro: prompt de contexto acima da recarga + velas.
+    // Base-centro: bilhete de ação acima do bilhete dos canhões e velas.
     commands
         .spawn((
             anchored(Node {
@@ -253,7 +304,7 @@ pub fn setup_hud(mut commands: Commands) {
                 right: Val::Px(0.0),
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
-                row_gap: Val::Px(8.0),
+                row_gap: Val::Px(10.0),
                 ..default()
             }),
             SeaHud,
@@ -262,58 +313,97 @@ pub fn setup_hud(mut commands: Commands) {
             col.spawn((
                 ui::panel(Node {
                     display: Display::None,
+                    column_gap: Val::Px(10.0),
+                    align_items: AlignItems::Center,
+                    padding: UiRect::axes(Val::Px(12.0), Val::Px(7.0)),
                     ..default()
                 }),
                 PromptPanel,
             ))
             .with_children(|panel| {
-                panel.spawn((ui::text("", 14.0, ui::GOLD), HudText::Prompt));
+                panel.spawn((Node::default(), PromptKey, KeySlot(KeyCode::KeyE)));
+                panel.spawn((ui::face("", ui::FONT_BOLD, 17.0, ui::INK), HudText::Prompt));
             });
             col.spawn((
                 ui::panel(Node {
                     align_items: AlignItems::Center,
-                    column_gap: Val::Px(18.0),
+                    column_gap: Val::Px(22.0),
+                    padding: UiRect::axes(Val::Px(16.0), Val::Px(9.0)),
                     ..default()
                 }),
                 CooldownPanel,
             ))
             .with_children(|panel| {
-                spawn_reload(panel, "BOMBORDO (Q)", Broadside::Port);
-                panel.spawn((
-                    ui::text("VELAS: -", 12.0, ui::TEXT),
-                    Node {
-                        min_width: Val::Px(96.0),
+                spawn_reload(panel, "BOMBORDO", KeyCode::KeyQ, Broadside::Port);
+                panel
+                    .spawn(Node {
+                        flex_direction: FlexDirection::Column,
+                        align_items: AlignItems::Center,
+                        row_gap: Val::Px(4.0),
+                        min_width: Val::Px(110.0),
                         flex_shrink: 0.0,
-                        justify_content: JustifyContent::Center,
                         ..default()
-                    },
-                    TextLayout::new_with_justify(JustifyText::Center),
-                    SailIndicator,
-                ));
-                spawn_reload(panel, "BORESTE (R)", Broadside::Starboard);
+                    })
+                    .with_children(|sails| {
+                        sails
+                            .spawn(Node {
+                                column_gap: Val::Px(4.0),
+                                ..default()
+                            })
+                            .with_children(|cells| {
+                                for index in 0..crate::net::SailLevel::MAX {
+                                    cells.spawn((
+                                        Node {
+                                            width: Val::Px(16.0),
+                                            height: Val::Px(10.0),
+                                            border: UiRect::all(Val::Px(1.5)),
+                                            ..default()
+                                        },
+                                        BackgroundColor(Color::NONE),
+                                        BorderColor(ui::INK),
+                                        SailCell(index),
+                                    ));
+                                }
+                            });
+                        sails.spawn((
+                            ui::face("-", ui::FONT_BOLD, 13.0, ui::INK),
+                            TextLayout::new_with_justify(JustifyText::Center),
+                            SailIndicator,
+                        ));
+                    });
+                spawn_reload(panel, "BORESTE", KeyCode::KeyR, Broadside::Starboard);
             });
         });
 
-    // Base-direita: dica de controles.
+    // Base-direita: só o lembrete do livreto — as teclas moram nos
+    // bilhetes de contexto e no F1.
     commands
         .spawn((
             ui::panel(anchored(Node {
                 right: Val::Px(ui::MARGIN),
                 bottom: Val::Px(ui::MARGIN),
-                max_width: Val::Px(240.0),
+                column_gap: Val::Px(8.0),
+                align_items: AlignItems::Center,
+                padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
                 ..default()
             })),
             SeaHud,
         ))
         .with_children(|panel| {
-            panel.spawn(ui::text(CONTROLS_HINT, 11.0, ui::TEXT_DIM));
+            panel.spawn((Node::default(), KeySlot(KeyCode::F1)));
+            panel.spawn(crate::i18n::label_face(
+                "Livreto",
+                ui::FONT_BOLD,
+                14.0,
+                ui::INK,
+            ));
         });
 
-    // Direita-meio: pilha de toasts.
+    // Direita-meio: pilha de avisos (o mais novo em cima, os antigos somem).
     commands.spawn((
         anchored(Node {
             right: Val::Px(ui::MARGIN),
-            top: Val::Percent(40.0),
+            top: Val::Percent(48.0),
             flex_direction: FlexDirection::Column,
             align_items: AlignItems::End,
             row_gap: Val::Px(6.0),
@@ -324,7 +414,7 @@ pub fn setup_hud(mut commands: Commands) {
     ));
 
     // Âncoras de banner de zona e aviso de PvP (acima de tudo).
-    for (top, anchor_zone) in [(22.0, true), (38.0, false)] {
+    for (top, anchor_zone) in [(24.0, true), (38.0, false)] {
         let mut anchor = commands.spawn((
             anchored(Node {
                 top: Val::Percent(top),
@@ -345,7 +435,7 @@ pub fn setup_hud(mut commands: Commands) {
 
 fn cooldown_label(secs: f32) -> String {
     if secs <= 0.0 {
-        String::from("PRONTO")
+        crate::i18n::tr("PRONTO")
     } else {
         format!("{:.0}s", secs.ceil())
     }
@@ -382,7 +472,7 @@ fn ship_kind_label(kind: marvyr_domain_ships::ShipKind) -> &'static str {
     match kind {
         ShipKind::SmallMerchant => "Mercante",
         ShipKind::Patrol => "Patrulha",
-        ShipKind::Corsair => "Corsario",
+        ShipKind::Corsair => "Corsário",
     }
 }
 
@@ -440,11 +530,13 @@ fn hud_context(
     HudContext::Idle
 }
 
+/// Texto do bilhete de ação (a tecla vai num quadrinho ao lado).
 fn context_prompt(context: &HudContext, catalog: &KnownCatalog, port: Option<&str>) -> String {
+    use crate::i18n::{tr, trf};
     match context {
         HudContext::Idle => String::new(),
-        HudContext::NearPort => format!("[E] Atracar em {}", port.unwrap_or("porto")),
-        HudContext::NearWreck => String::from("[F] Saquear destroço"),
+        HudContext::NearPort => trf("Atracar em {0}", &[&tr(port.unwrap_or("porto"))]),
+        HudContext::NearWreck => tr("Saquear destroço"),
         HudContext::NearNode(item) => {
             let name = catalog
                 .0
@@ -452,9 +544,25 @@ fn context_prompt(context: &HudContext, catalog: &KnownCatalog, port: Option<&st
                 .find(|line| line.id == *item)
                 .map(|line| line.name.as_str())
                 .unwrap_or("recurso");
-            format!("[G] Coletar {name}")
+            trf("Coletar {0}", &[&tr(name)])
         }
+        HudContext::AtDigSpot => tr("Cavar o tesouro"),
+        HudContext::CanBoard => tr("Abordar"),
+        HudContext::CanRepair => tr("Reparar o casco"),
     }
+}
+
+/// Tecla que resolve o bilhete (e que o botão A do controle aciona).
+fn context_key(context: &HudContext) -> Option<KeyCode> {
+    Some(match context {
+        HudContext::Idle => return None,
+        HudContext::NearPort => KeyCode::KeyE,
+        HudContext::NearWreck => KeyCode::KeyF,
+        HudContext::NearNode(_) => KeyCode::KeyG,
+        HudContext::AtDigSpot => KeyCode::KeyJ,
+        HudContext::CanBoard => KeyCode::KeyH,
+        HudContext::CanRepair => KeyCode::KeyK,
+    })
 }
 
 fn my_visual<'a>(
@@ -480,7 +588,7 @@ pub fn update_ship_panel(
     };
     for (mut text, kind) in &mut texts {
         let value = match kind {
-            HudText::ShipName => ship_kind_label(state.kind).to_owned(),
+            HudText::ShipName => crate::i18n::tr(ship_kind_label(state.kind)),
             HudText::Hp => format!("{}/{}", state.hp, state.max_hp),
             HudText::Cargo => format!("{}/{}", state.cargo_weight, state.cargo_capacity),
             HudText::Gold => format!("{}g", wallet.0),
@@ -512,23 +620,34 @@ pub fn update_ship_panel(
 
 pub fn update_zone_panel(
     zone: Res<CurrentZone>,
-    mut texts: Query<(&mut Text, &mut TextColor, &HudText)>,
+    lang: Option<Res<crate::i18n::Lang>>,
+    mut texts: Query<(
+        &mut Text,
+        &mut TextColor,
+        &HudText,
+        Option<&mut BorderColor>,
+    )>,
 ) {
-    if !zone.is_changed() {
+    let lang_changed = lang.is_some_and(|lang| lang.is_changed());
+    if !(zone.is_changed() || lang_changed) {
         return;
     }
     let Some(zone) = zone.0.as_ref() else {
         return;
     };
     let (tag, tag_color) = zone_tag(zone.tier);
-    for (mut text, mut color, kind) in &mut texts {
+    for (mut text, mut color, kind, border) in &mut texts {
         match kind {
             HudText::ZoneName => text.0 = short_zone_name(&zone.name),
             HudText::ZoneTag => {
-                text.0 = tag.to_owned();
+                text.0 = crate::i18n::tr(tag);
                 color.0 = tag_color;
+                // O carimbo muda de tinta com o risco.
+                if let Some(mut border) = border {
+                    border.0 = tag_color;
+                }
             }
-            HudText::ZoneRisk => text.0 = risk_tag(zone.tier).to_owned(),
+            HudText::ZoneRisk => text.0 = crate::i18n::tr(risk_tag(zone.tier)),
             _ => {}
         }
     }
@@ -536,15 +655,19 @@ pub fn update_zone_panel(
 
 fn short_zone_name(full: &str) -> String {
     // Servidor manda "Águas do Porto da Serra" etc. — encurtamos para caber
-    // no painel do HUD. Sem acento: a fonte padrão só desenha ASCII.
-    let full = crate::guild::ascii(full);
-    if let Some(rest) = full.strip_prefix("Aguas do Porto ") {
-        return format!("P. {rest}");
+    // no carimbo do HUD (a fonte agora desenha acentos).
+    // O nome do porto vai inteiro e traduzido, igual ao rótulo do mapa.
+    for prefix in ["Águas do Porto ", "Aguas do Porto "] {
+        if let Some(rest) = full.strip_prefix(prefix) {
+            return crate::i18n::tr(&format!("Porto {rest}"));
+        }
     }
-    if let Some(rest) = full.strip_prefix("Aguas da Ilha do ") {
-        return rest.to_owned();
+    for prefix in ["Águas da Ilha do ", "Aguas da Ilha do "] {
+        if let Some(rest) = full.strip_prefix(prefix) {
+            return crate::i18n::tr(rest);
+        }
     }
-    full
+    crate::i18n::tr(full)
 }
 
 pub fn update_cooldown_panel(
@@ -586,24 +709,85 @@ pub fn update_cooldown_panel(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn update_prompt_panel(
     my_ship: Res<MyShip>,
     zone: Res<CurrentZone>,
     wrecks: Res<KnownWrecks>,
     nodes: Res<KnownNodes>,
     catalog: Res<KnownCatalog>,
+    marks: Res<crate::seafaring::TreasureMarks>,
     visuals: Query<&crate::ship::ShipVisual>,
     mut panel: Query<&mut Node, With<PromptPanel>>,
     mut texts: Query<(&mut Text, &HudText)>,
+    mut slot: Query<&mut KeySlot, With<PromptKey>>,
+    mut context_key_res: ResMut<ContextKey>,
+    mut target_res: ResMut<PromptTarget>,
+    mut ports: Local<Vec<(String, Vec2)>>,
 ) {
     let Some(state) = my_visual(&my_ship, &visuals) else {
         return;
     };
+    if ports.is_empty() {
+        *ports = marvyr_domain_world::WorldMap::vertical_slice()
+            .regions()
+            .iter()
+            .filter_map(|region| region.port.as_ref())
+            .map(|port| (port.name.to_owned(), Vec2::new(port.x, port.y)))
+            .collect();
+    }
     let pos = Vec2::new(state.x, state.y);
-    let context = hud_context(pos, &zone, &wrecks, &nodes, &catalog);
     let port = zone.0.as_ref().and_then(|zone| port_of_zone(&zone.name));
+    let nearest = |points: &mut dyn Iterator<Item = Vec2>| {
+        points.min_by(|a, b| {
+            pos.distance_squared(*a)
+                .total_cmp(&pos.distance_squared(*b))
+        })
+    };
+    let dig = nearest(&mut marks.0.iter().map(|mark| Vec2::new(mark.x, mark.y)))
+        .filter(|spot| pos.distance(*spot) <= marvyr_domain_world::treasure::DIG_RADIUS);
+    let others: Vec<marvyr_protocol::ShipState> = visuals.iter().map(|v| v.target).collect();
+    // Só oferece a abordagem que o servidor aceitaria: alvo avariado ou parado.
+    let board = crate::seafaring::board_target(state, &others)
+        .and_then(|id| others.iter().find(|other| other.ship_id == id))
+        .filter(|target| target.hp * 100 <= target.max_hp * 35 || target.speed < 1.0)
+        .map(|target| Vec2::new(target.x, target.y));
+    let (context, target) = match hud_context(pos, &zone, &wrecks, &nodes, &catalog) {
+        HudContext::NearPort => (
+            HudContext::NearPort,
+            port.and_then(|name| ports.iter().find(|(port, _)| port == name))
+                .map(|(_, at)| *at),
+        ),
+        HudContext::NearWreck => (
+            HudContext::NearWreck,
+            nearest(&mut wrecks.0.values().copied()),
+        ),
+        _ if dig.is_some() => (HudContext::AtDigSpot, dig),
+        _ if board.is_some() => (HudContext::CanBoard, board),
+        HudContext::NearNode(item) => (
+            HudContext::NearNode(item),
+            nearest(
+                &mut nodes
+                    .0
+                    .values()
+                    .filter(|node| node.stock > 0)
+                    .map(|node| node.pos),
+            ),
+        ),
+        HudContext::Idle if state.hp < state.max_hp && !state.repairing && state.speed < 2.0 => {
+            (HudContext::CanRepair, None)
+        }
+        other => (other, None),
+    };
     let prompt = context_prompt(&context, &catalog, port);
+    let key = context_key(&context);
+    context_key_res.set_if_neq(ContextKey(key));
+    target_res.set_if_neq(PromptTarget(target));
+    if let (Some(key), Ok(mut slot)) = (key, slot.get_single_mut()) {
+        if slot.0 != key {
+            slot.0 = key;
+        }
+    }
     let display = if prompt.is_empty() {
         Display::None
     } else {
@@ -621,11 +805,58 @@ pub fn update_prompt_panel(
     }
 }
 
+/// O servidor recusa em silêncio o tiro em águas protegidas; o jogador
+/// novo aperta Q e nada acontece. O client explica (sem decidir nada).
+fn explain_silent_cannons(
+    keys: Res<ButtonInput<KeyCode>>,
+    time: Res<Time>,
+    zone: Res<CurrentZone>,
+    docked: Res<crate::net::MyDocked>,
+    mut notices: EventWriter<crate::net::PlayerNotice>,
+    mut last: Local<f32>,
+) {
+    let fired = keys.just_pressed(KeyCode::KeyQ) || keys.just_pressed(KeyCode::KeyR);
+    let protected = zone
+        .0
+        .as_ref()
+        .is_some_and(|zone| zone.tier == RiskTier::Protected);
+    let now = time.elapsed_secs();
+    if fired && protected && !docked.0 && now - *last > 3.0 {
+        *last = now;
+        notices.send(crate::net::PlayerNotice(String::from(
+            "Águas protegidas: os canhões ficam calados aqui.",
+        )));
+    }
+}
+
+/// Linha-guia de tinta do navio até o alvo do bilhete de ação.
+fn draw_prompt_leader(
+    target: Res<PromptTarget>,
+    docked: Res<crate::net::MyDocked>,
+    my_ship: Res<MyShip>,
+    visuals: Query<&crate::ship::ShipVisual>,
+    mut gizmos: Gizmos,
+) {
+    let Some(target) = target.0.filter(|_| !docked.0) else {
+        return;
+    };
+    let Some(state) = my_visual(&my_ship, &visuals) else {
+        return;
+    };
+    let ink = ui::INK.with_alpha(0.8);
+    ui::dashed_line(&mut gizmos, Vec2::new(state.x, state.y), target, 22.0, ink);
+    gizmos.circle_2d(Isometry2d::from_translation(target), 18.0, ink);
+}
+
 pub fn toggle_sea_hud(
     docked: Res<crate::net::MyDocked>,
+    status: Option<Res<crate::session::ConnectionStatus>>,
     mut hud: Query<&mut Visibility, With<SeaHud>>,
 ) {
-    let visibility = if docked.0 {
+    // Antes de entrar no mar (login, conectando) o HUD não existe para o
+    // jogador: o cartaz de entrada fica sozinho sobre o mar.
+    let at_sea = !status.is_some_and(|status| *status != crate::session::ConnectionStatus::InGame);
+    let visibility = if docked.0 || !at_sea {
         Visibility::Hidden
     } else {
         Visibility::Visible
@@ -658,33 +889,43 @@ pub(crate) fn spawn_faded_panel(
                 align_items: AlignItems::Center,
                 row_gap: Val::Px(4.0),
                 padding: UiRect::axes(Val::Px(22.0), Val::Px(10.0)),
-                border: UiRect::all(Val::Px(1.0)),
+                border: UiRect::all(Val::Px(2.0)),
+                max_width: Val::Px(560.0),
                 ..default()
             },
             BackgroundColor(bg.with_alpha(0.0)),
             BorderColor(border.with_alpha(0.0)),
-            BorderRadius::all(Val::Px(6.0)),
+            BorderRadius::all(Val::Px(2.0)),
             UiFade::new(fade.0, fade.1, fade.2, bg, border),
             marker,
         ))
         .with_children(|panel| {
             for (value, size, color) in lines {
-                panel.spawn(ui::text(*value, *size, color.with_alpha(0.0)));
+                // Linha grande vira manchete em tipo de madeira.
+                let font = if *size >= 22.0 {
+                    ui::FONT_DISPLAY
+                } else {
+                    Handle::default()
+                };
+                panel.spawn((
+                    ui::face(*value, font, *size, color.with_alpha(0.0)),
+                    TextLayout::new_with_justify(JustifyText::Center),
+                ));
             }
         })
         .set_parent(parent);
 }
 
-/// Banner momentaneo de zona (fade 0.4s in, até 2.4s, out até 3.2s).
+/// Banner momentâneo de zona (fade 0.4s in, até 2.4s, out até 3.2s).
 pub fn spawn_zone_banner(commands: &mut Commands, anchor: Entity, name: &str) {
-    let display = short_zone_name(name);
+    let display = short_zone_name(name).to_uppercase();
     spawn_faded_panel(
         commands,
         anchor,
         (0.4, 2.4, 3.2),
         ui::PANEL_BORDER,
         ZoneBannerPanel,
-        &[(&display, 30.0, ui::TEXT)],
+        &[(&display, 34.0, ui::INK)],
     );
 }
 
@@ -694,14 +935,14 @@ pub fn spawn_pvp_warning(commands: &mut Commands, anchor: Entity) {
         commands,
         anchor,
         (0.5, 4.0, 5.0),
-        ui::DANGER,
+        ui::VERMILION,
         PvpWarningPanel,
         &[
-            ("AGUAS DE RISCO", 24.0, ui::DANGER),
+            ("ÁGUAS DE RISCO", 30.0, ui::VERMILION_INK),
             (
                 "Seu navio, equipamentos e carga podem ser perdidos.",
-                14.0,
-                ui::TEXT,
+                16.0,
+                ui::INK,
             ),
         ],
     );
@@ -715,8 +956,24 @@ pub fn spawn_context_toast(commands: &mut Commands, stack: Entity, message: &str
         (0.3, 2.0, 2.5),
         ui::PANEL_BORDER,
         ContextToast,
-        &[(message, 13.0, ui::TEXT)],
+        &[(message, 15.0, ui::TEXT)],
     );
+}
+
+#[cfg(test)]
+pub(crate) fn init_systems_for_tests(world: &mut World) {
+    fn init<M>(world: &mut World, system: impl IntoSystem<(), (), M>) {
+        let mut system = IntoSystem::into_system(system);
+        system.initialize(world);
+    }
+    init(world, update_ship_panel);
+    init(world, update_zone_panel);
+    init(world, update_cooldown_panel);
+    init(world, update_prompt_panel);
+    init(world, update_sail_indicator);
+    init(world, draw_prompt_leader);
+    init(world, explain_silent_cannons);
+    init(world, toggle_sea_hud);
 }
 
 #[cfg(test)]
@@ -736,8 +993,8 @@ mod tests {
     #[test]
     fn sail_indicator_shows_level_bar_and_label() {
         use crate::net::SailLevel;
-        assert_eq!(sail_indicator_text(SailLevel(0)), "[---]\nVelas recolhidas");
-        assert_eq!(sail_indicator_text(SailLevel(3)), "[###]\nPano cheio");
+        assert_eq!(sail_indicator_text(SailLevel(0)), "Velas recolhidas");
+        assert_eq!(sail_indicator_text(SailLevel(3)), "Pano cheio");
     }
 
     fn ship_state(port_cooldown: f32, starboard_cooldown: f32) -> marvyr_protocol::ShipState {
@@ -800,14 +1057,14 @@ mod tests {
 
     #[test]
     fn short_zone_name_strips_hulls() {
-        assert_eq!(short_zone_name("Aguas do Porto da Serra"), "P. da Serra");
-        assert_eq!(short_zone_name("Aguas do Porto da Mina"), "P. da Mina");
+        assert_eq!(short_zone_name("Aguas do Porto da Serra"), "Porto da Serra");
+        assert_eq!(short_zone_name("Aguas do Porto da Mina"), "Porto da Mina");
         assert_eq!(
             short_zone_name("Águas da Ilha do Coral Negro"),
             "Coral Negro"
         );
         assert_eq!(short_zone_name("Rota da Costa"), "Rota da Costa");
-        assert_eq!(short_zone_name("Cerração"), "Cerracao");
+        assert_eq!(short_zone_name("Cerração"), "Cerração");
     }
 
     #[test]
@@ -836,7 +1093,8 @@ mod tests {
             &KnownCatalog::default(),
             Some("Porto da Serra"),
         );
-        assert_eq!(prompt, "[E] Atracar em Porto da Serra");
+        assert_eq!(prompt, "Atracar em Porto da Serra");
+        assert_eq!(context_key(&HudContext::NearPort), Some(KeyCode::KeyE));
     }
 
     #[test]
@@ -852,7 +1110,8 @@ mod tests {
             },
         )]));
         let prompt = context_prompt(&HudContext::NearNode(id), &catalog, None);
-        assert_eq!(prompt, "[G] Coletar Madeira");
+        assert_eq!(prompt, "Coletar Madeira");
+        assert_eq!(context_key(&HudContext::NearNode(id)), Some(KeyCode::KeyG));
     }
 
     #[test]

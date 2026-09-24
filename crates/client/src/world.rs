@@ -124,7 +124,7 @@ fn prop(commands: &mut Commands, sprite: Sprite, at: Vec2, scale: f32, z: f32) {
 
 fn label(commands: &mut Commands, text: &str, at: Vec2, size: f32, color: Color) {
     commands.spawn((
-        Text2d::new(text),
+        Text2d::new(crate::i18n::tr(text)),
         TextLayout::new_with_no_wrap(),
         TextFont {
             font_size: size,
@@ -173,11 +173,10 @@ fn spawn_vertical_slice_world(
     }
     spawn_vegetation(&mut commands, &assets, map.land(), &ports);
 
-    // Rótulos em ASCII: a fonte padrão não desenha acentos.
     let danger = Color::srgb(1.0, 0.82, 0.78);
     for (text, at) in [
         ("Ilha do Coral Negro", Vec2::new(0.0, 900.0)),
-        ("AGUAS NEGRAS", Vec2::new(0.0, 1400.0)),
+        ("ÁGUAS NEGRAS", Vec2::new(0.0, 1400.0)),
         (
             "PASSAGEM DO SORVEDOURO",
             Vec2::new(MAELSTROM_X, MAELSTROM_POINTS[0].1 - 180.0),

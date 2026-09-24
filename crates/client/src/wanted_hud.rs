@@ -10,6 +10,7 @@ use marvyr_protocol::{
 };
 
 use crate::hud::{spawn_faded_panel, SeaHud};
+use crate::i18n::{tr, trf};
 use crate::ui;
 
 /// Linhas visíveis no feed; a mais antiga sai quando chega uma nova. Três
@@ -86,11 +87,17 @@ pub fn setup_wanted_hud(mut commands: Commands) {
 pub fn badge_line(reputation: &ReputationUpdate) -> Option<(String, Color)> {
     match reputation.tier {
         TIER_PROCURADO => Some((
-            format!("PROCURADO - cabeca: {}g", reputation.bounty),
+            trf(
+                "PROCURADO - cabeça: {0}g",
+                &[&reputation.bounty.to_string()],
+            ),
             ui::DANGER,
         )),
         TIER_SUSPEITO => Some((
-            format!("SUSPEITO - notoriedade {}", reputation.notoriety),
+            trf(
+                "SUSPEITO - notoriedade {0}",
+                &[&reputation.notoriety.to_string()],
+            ),
             ui::AMBER,
         )),
         _ => None,
@@ -122,13 +129,14 @@ fn update_feed(
     mut world_events: EventReader<ClientReceiveMessage<WorldEvent>>,
     mut dock_results: EventReader<ClientReceiveMessage<DockResult>>,
     mut actions: EventReader<ClientReceiveMessage<marvyr_protocol::ActionResult>>,
+    mut notices: EventReader<crate::net::PlayerNotice>,
     feed: Query<(Entity, Option<&Children>), With<KillFeed>>,
 ) {
     let mut lines: Vec<(String, Color)> = world_events
         .read()
         .map(|event| {
             let message = event.message();
-            (message.text.clone(), event_color(message.kind))
+            (tr(&message.text), event_color(message.kind))
         })
         .collect();
     // Porto da coroa recusou o Procurado: o motivo vai para o feed.
@@ -138,7 +146,7 @@ fn update_feed(
         .filter(|result| !result.success && result.reason.starts_with("Procurado"))
         .last()
     {
-        lines.push((result.reason.clone(), ui::DANGER));
+        lines.push((tr(&result.reason), ui::DANGER));
     }
     // MV-061: veredito de reparo, abordagem, escavação e contratação.
     lines.extend(actions.read().map(|event| {
@@ -148,8 +156,10 @@ fn update_feed(
         } else {
             ui::AMBER
         };
-        (result.reason.clone(), color)
+        (tr(&result.reason), color)
     }));
+    // MV-062: recusas de coleta, saque e fabricação (e avisos do client).
+    lines.extend(notices.read().map(|notice| (tr(&notice.0), ui::DANGER)));
     if lines.is_empty() {
         return;
     }
@@ -240,9 +250,12 @@ mod tests {
         let (text, _) = badge_line(&rep(150, TIER_SUSPEITO, 0)).unwrap();
         assert_eq!(text, "SUSPEITO - notoriedade 150");
         let (text, color) = badge_line(&rep(320, TIER_PROCURADO, 640)).unwrap();
-        assert_eq!(text, "PROCURADO - cabeca: 640g");
+        assert_eq!(text, "PROCURADO - cabeça: 640g");
         assert_eq!(color, ui::DANGER);
-        assert!(text.is_ascii());
+        assert_eq!(
+            crate::i18n::trf_in("PROCURADO - cabeça: {0}g", &["640"], crate::i18n::Lang::En),
+            "WANTED - bounty: 640g"
+        );
     }
 
     #[test]
@@ -261,7 +274,7 @@ mod tests {
         let mut nodes = world.query_filtered::<&Node, With<WantedBadge>>();
         assert_eq!(nodes.single(&world).display, Display::Flex);
         let mut texts = world.query_filtered::<&Text, With<WantedBadgeText>>();
-        assert_eq!(texts.single(&world).0, "PROCURADO - cabeca: 640g");
+        assert_eq!(texts.single(&world).0, "PROCURADO - cabeça: 640g");
 
         world.resource_mut::<MyReputation>().0 = Some(rep(0, 0, 0));
         schedule.run(&mut world);

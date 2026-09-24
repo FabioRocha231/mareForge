@@ -7,7 +7,7 @@ use crate::crafting::{send_craft_input, CraftPlugin};
 use crate::hud::{toggle_sea_hud, HudPlugin};
 use crate::juice::JuicePlugin;
 use crate::market::{send_market_input, MarketPlugin};
-use crate::net::{ClientNetPlugin, MyDocked};
+use crate::net::ClientNetPlugin;
 use crate::nodes::NodePlugin;
 use crate::port_screen::PortPlugin;
 use crate::ship::{
@@ -42,6 +42,10 @@ impl Plugin for ClientPlugin {
             .add_plugins(VfxPlugin)
             .add_plugins(WeatherPlugin)
             .add_plugins(UiThemePlugin)
+            .add_plugins(crate::i18n::I18nPlugin)
+            .add_plugins(crate::input::GamepadPlugin)
+            .add_plugins(crate::help::HelpPlugin)
+            .add_plugins(crate::onboarding::OnboardingPlugin)
             .add_plugins(crate::portals::PortalClientPlugin)
             .add_plugins(JuicePlugin)
             .add_plugins(SoundPlugin)
@@ -68,18 +72,7 @@ impl Plugin for ClientPlugin {
                     follow_camera.after(lerp_ship_visuals),
                     send_craft_input,
                     send_market_input,
-                    close_on_esc,
                 ),
             );
-    }
-}
-
-fn close_on_esc(
-    keys: Res<ButtonInput<KeyCode>>,
-    docked: Res<MyDocked>,
-    mut exit: EventWriter<AppExit>,
-) {
-    if keys.just_pressed(KeyCode::Escape) && !docked.0 {
-        exit.send(AppExit::Success);
     }
 }

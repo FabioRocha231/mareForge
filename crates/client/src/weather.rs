@@ -14,6 +14,7 @@ use marvyr_protocol::{SelectAmmo, StormState, WeatherUpdate};
 
 use crate::assets::layers;
 use crate::hud::SeaHud;
+use crate::i18n::{tr, trf};
 use crate::net::{MyDocked, MyShip, ReliableChannel};
 use crate::ship::ShipVisual;
 use crate::ui;
@@ -205,7 +206,7 @@ fn setup_weather_hud(mut commands: Commands) {
                 })
                 .with_children(|row| {
                     row.spawn((
-                        ui::text("VELAS 100%", 11.0, ui::TEXT_DIM),
+                        ui::text(crate::i18n::trf("VELAS {0}%", &["100"]), 11.0, ui::TEXT_DIM),
                         Node {
                             width: Val::Px(78.0),
                             ..default()
@@ -249,8 +250,8 @@ pub fn point_of_sail_color(theta: f32) -> Color {
 
 pub fn ammo_label(ammo: Ammo) -> &'static str {
     match ammo {
-        Ammo::Round => "MUNICAO: BALA [C]",
-        Ammo::Chain => "MUNICAO: CORRENTE [C]",
+        Ammo::Round => "MUNIÇÃO: BALA",
+        Ammo::Chain => "MUNIÇÃO: CORRENTE",
     }
 }
 
@@ -266,21 +267,21 @@ fn update_weather_hud(
     let storm = state.is_some_and(|s| weather.in_storm(Vec2::new(s.x, s.y)));
     for (mut text, mut color, kind) in &mut texts {
         let (value, tint) = match kind {
-            WeatherText::Strength if storm => ("TEMPESTADE!".to_owned(), ui::DANGER),
+            WeatherText::Strength if storm => (tr("TEMPESTADE!"), ui::DANGER),
             WeatherText::Strength if weather.known => {
-                (strength_label(weather.wind_strength).to_owned(), ui::TEXT)
+                (tr(strength_label(weather.wind_strength)), ui::TEXT)
             }
             WeatherText::Strength => ("-".to_owned(), ui::TEXT_DIM),
             WeatherText::PointOfSail => match theta.filter(|_| weather.known) {
                 Some(theta) => (
-                    point_of_sail_label(point_of_sail(theta)).to_owned(),
+                    tr(point_of_sail_label(point_of_sail(theta))),
                     point_of_sail_color(theta),
                 ),
                 None => ("-".to_owned(), ui::TEXT_DIM),
             },
             WeatherText::Sails => {
                 let pct = state.map_or(100.0, |s| s.sail_hp / SAIL_HP_MAX * 100.0);
-                (format!("VELAS {pct:.0}%"), ui::TEXT_DIM)
+                (trf("VELAS {0}%", &[&format!("{pct:.0}")]), ui::TEXT_DIM)
             }
             WeatherText::Ammo => {
                 let ammo = state.map_or(Ammo::Round, |s| s.ammo);
@@ -289,7 +290,7 @@ fn update_weather_hud(
                 } else {
                     ui::GOLD
                 };
-                (ammo_label(ammo).to_owned(), tint)
+                (format!("{} [C]", tr(ammo_label(ammo))), tint)
             }
         };
         if text.0 != value {
@@ -664,7 +665,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn labels_are_ascii() {
+    fn labels_keep_accents_and_translate() {
+        use crate::i18n::{translate, Lang};
+        assert_eq!(strength_label(0.9), "VENTO FORTE");
+        assert_eq!(ammo_label(Ammo::Chain), "MUNIÇÃO: CORRENTE");
         let all = [
             strength_label(0.9),
             strength_label(0.6),
@@ -676,9 +680,7 @@ mod tests {
             ammo_label(Ammo::Round),
             ammo_label(Ammo::Chain),
         ];
-        assert!(all.iter().all(|s| s.is_ascii()));
-        assert_eq!(strength_label(0.9), "VENTO FORTE");
-        assert_eq!(ammo_label(Ammo::Chain), "MUNICAO: CORRENTE [C]");
+        assert!(all.iter().all(|s| translate(s, Lang::En) != *s));
     }
 
     #[test]

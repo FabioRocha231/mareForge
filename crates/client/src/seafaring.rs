@@ -34,8 +34,14 @@ pub struct TreasureMarks(pub Vec<TreasureHint>);
 #[derive(Resource, Debug, Default)]
 pub struct SeenIslands(pub HashMap<u32, IslandState>);
 
+/// Linha de bordo (tripulação, leme, reparo, escavação) — vive no bilhete
+/// do navio, montado pelo `hud`.
 #[derive(Component)]
-struct SeaStatusText;
+pub struct SeaStatusText;
+#[derive(Component)]
+struct EventHeadline;
+#[derive(Component)]
+struct EventStrip;
 #[derive(Component)]
 struct EventBannerText;
 
@@ -59,34 +65,55 @@ impl Plugin for SeafaringPlugin {
     }
 }
 
+/// Evento de mar como manchete de cartaz: uma tira de papel abaixo do
+/// carimbo de região, o nome do evento em tipo de madeira com a segunda cor
+/// fora de registro e, embaixo, relógio, distância e rumo. É o único
+/// momento tipográfico monumental da tela; some quando o mar está calmo.
 fn setup_sea_hud(mut commands: Commands) {
-    commands
-        .spawn((
-            ui::panel(Node {
-                position_type: PositionType::Absolute,
-                left: Val::Px(ui::MARGIN),
-                bottom: Val::Px(96.0),
-                ..default()
-            }),
-            SeaHud,
-        ))
-        .with_child((ui::text("", 12.0, ui::TEXT), SeaStatusText));
     commands
         .spawn((
             Node {
                 position_type: PositionType::Absolute,
-                top: Val::Px(84.0), // abaixo do painel de região
+                top: Val::Px(96.0), // abaixo do carimbo de região
                 width: Val::Percent(100.0),
                 justify_content: JustifyContent::Center,
                 ..default()
             },
             SeaHud,
         ))
-        .with_child((
-            ui::text("", 15.0, ui::AMBER),
-            TextLayout::new_with_justify(JustifyText::Center),
-            EventBannerText,
-        ));
+        .with_children(|row| {
+            row.spawn((
+                ui::panel(Node {
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Center,
+                    padding: UiRect::axes(Val::Px(22.0), Val::Px(8.0)),
+                    row_gap: Val::Px(2.0),
+                    display: Display::None,
+                    ..default()
+                }),
+                EventStrip,
+            ))
+            .with_children(|strip| {
+                strip.spawn(Node::default()).with_children(|stack| {
+                    stack.spawn((
+                        ui::display("", 30.0, ui::VERMILION),
+                        Node {
+                            position_type: PositionType::Absolute,
+                            left: Val::Px(2.5),
+                            top: Val::Px(2.5),
+                            ..default()
+                        },
+                        EventHeadline,
+                    ));
+                    stack.spawn((ui::display("", 30.0, ui::INK), EventHeadline));
+                });
+                strip.spawn((
+                    ui::face("", ui::FONT_BOLD, 14.0, ui::INK_SOFT),
+                    TextLayout::new_with_justify(JustifyText::Center),
+                    EventBannerText,
+                ));
+            });
+        });
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -137,7 +164,7 @@ fn spawn_island(
         Transform::from_translation(at + Vec3::Z * 0.1),
     ));
     commands.spawn((
-        Text2d::new(ui::fold(&island.name)),
+        Text2d::new(island.name.clone()),
         TextFont {
             font_size: 14.0,
             ..default()
@@ -285,71 +312,130 @@ fn distance_label(meters: f32) -> String {
     }
 }
 
-/// Linha de bordo: tripulação, leme, reparo e escavação.
+/// Linha de bordo: tripulação, leme, reparo e escavação. As teclas moram
+/// nos bilhetes de contexto e no livreto (F1), não aqui.
 pub fn sea_status_line(state: &ShipState) -> String {
+    use crate::i18n::trf;
     let mut line = format!(
-        "Tripulação {}/{}  ·  Leme {:.0}%",
-        state.crew, state.crew_max, state.rudder_hp
+        "{}  ·  {}",
+        trf(
+            "Tripulação {0}/{1}",
+            &[&state.crew.to_string(), &state.crew_max.to_string()]
+        ),
+        trf("Leme {0}%", &[&format!("{:.0}", state.rudder_hp)]),
     );
     if state.repairing {
-        line.push_str("  ·  REPARANDO (K)");
+        line.push_str("  ·  ");
+        line.push_str(&crate::i18n::tr("REPARANDO"));
     }
     if state.dig_progress > 0.0 {
-        line.push_str(&format!("  ·  Cavando {:.0}%", state.dig_progress * 100.0));
+        line.push_str("  ·  ");
+        line.push_str(&trf(
+            "Cavando {0}%",
+            &[&format!("{:.0}", state.dig_progress * 100.0)],
+        ));
     }
-    line.push_str("\nK reparo · H abordar · J cavar · P marujos (porto)");
     line
 }
 
+#[allow(clippy::type_complexity)]
 fn update_sea_hud(
     my_ship: Res<MyShip>,
     events: Res<SeaEvents>,
     marks: Res<TreasureMarks>,
     visuals: Query<&ShipVisual>,
-    mut status: Query<&mut Text, (With<SeaStatusText>, Without<EventBannerText>)>,
-    mut banner: Query<&mut Text, (With<EventBannerText>, Without<SeaStatusText>)>,
+    mut texts: ParamSet<(
+        Query<&mut Text, With<SeaStatusText>>,
+        Query<&mut Text, With<EventBannerText>>,
+        Query<&mut Text, With<EventHeadline>>,
+    )>,
+    mut strip: Query<&mut Node, With<EventStrip>>,
+    announcements: Query<
+        (),
+        Or<(
+            With<crate::hud::ZoneBannerPanel>,
+            With<crate::hud::PvpWarningPanel>,
+        )>,
+    >,
 ) {
     let Some(mine) = my_state(&my_ship, &visuals) else {
         return;
     };
     let here = Vec2::new(mine.x, mine.y);
-    for mut text in &mut status {
-        let line = ui::fold(&sea_status_line(mine));
-        if text.0 != line {
-            text.0 = line;
+    let status = sea_status_line(mine);
+    for mut text in &mut texts.p0() {
+        if text.0 != status {
+            text.0 = status.clone();
         }
     }
-    let mut lines: Vec<String> = events
-        .0
-        .iter()
-        .map(|event| {
-            let there = Vec2::new(event.x, event.y);
-            let secs = event.remaining_secs as u32;
-            format!(
-                "{} — {}:{:02}  ·  {} {}",
-                event.name.to_uppercase(),
-                secs / 60,
-                secs % 60,
-                distance_label(here.distance(there)),
-                bearing_label(here, there)
-            )
-        })
-        .collect();
-    lines.extend(marks.0.iter().map(|mark| {
-        let there = Vec2::new(mark.x, mark.y);
+    let where_is = |x: f32, y: f32| {
+        let there = Vec2::new(x, y);
         format!(
-            "Mapa do Tesouro: {}  ·  {} {}",
-            mark.island,
+            "{} {}",
             distance_label(here.distance(there)),
-            bearing_label(here, there)
+            crate::i18n::tr(bearing_label(here, there))
         )
-    }));
-    let joined = ui::fold(&lines.join("\n"));
-    for mut text in &mut banner {
+    };
+    // Manchete: o primeiro evento; o resto (e os mapas) vira linha miúda.
+    let headline = events
+        .0
+        .first()
+        .map(|event| crate::i18n::tr(&event.name).to_uppercase())
+        .or_else(|| marks.0.first().map(|_| crate::i18n::tr("MAPA DO TESOURO")))
+        .unwrap_or_default();
+    let mut lines: Vec<String> = Vec::new();
+    for (index, event) in events.0.iter().enumerate() {
+        let secs = event.remaining_secs as u32;
+        let clock = format!("{}:{:02}", secs / 60, secs % 60);
+        let detail = format!("{clock}  ·  {}", where_is(event.x, event.y));
+        lines.push(if index == 0 {
+            detail
+        } else {
+            format!("{} — {detail}", crate::i18n::tr(&event.name))
+        });
+    }
+    for mark in &marks.0 {
+        let detail = format!("{}  ·  {}", mark.island, where_is(mark.x, mark.y));
+        lines.push(if events.0.is_empty() && lines.is_empty() {
+            detail
+        } else {
+            format!("{} — {detail}", crate::i18n::tr("Mapa do tesouro"))
+        });
+    }
+    let joined = lines.join("\n");
+    for mut text in &mut texts.p1() {
         if text.0 != joined {
             text.0 = joined.clone();
         }
     }
+    for mut text in &mut texts.p2() {
+        if text.0 != headline {
+            text.0 = headline.clone();
+        }
+    }
+    // Uma manchete por vez: o aviso de zona tem a vez enquanto está na tela.
+    let display = if headline.is_empty() || !announcements.is_empty() {
+        Display::None
+    } else {
+        Display::Flex
+    };
+    for mut node in &mut strip {
+        if node.display != display {
+            node.display = display;
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn init_systems_for_tests(world: &mut World) {
+    fn init<M>(world: &mut World, system: impl IntoSystem<(), (), M>) {
+        let mut system = IntoSystem::into_system(system);
+        system.initialize(world);
+    }
+    init(world, update_sea_hud);
+    init(world, send_sea_input);
+    init(world, receive_sea_state);
+    init(world, draw_sea_marks);
 }
 
 #[cfg(test)]
@@ -417,5 +503,6 @@ mod tests {
         assert!(line.contains("Leme 80%"));
         assert!(line.contains("REPARANDO"));
         assert!(line.contains("Cavando 50%"));
+        assert!(!line.contains('\n'), "teclas saíram da linha de bordo");
     }
 }

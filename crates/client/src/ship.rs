@@ -767,7 +767,7 @@ pub fn update_wanted_markers(
                     Transform::from_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_4)),
                 ));
                 marker.spawn((
-                    Text2d::new("PROCURADO"),
+                    Text2d::new(crate::i18n::tr("PROCURADO")),
                     TextFont {
                         font_size: 13.0,
                         ..default()

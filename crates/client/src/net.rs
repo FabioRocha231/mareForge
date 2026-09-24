@@ -196,6 +196,11 @@ impl Plugin for ClientNetPlugin {
         app.register_message::<marvyr_protocol::SeaEventsUpdate>(ChannelDirection::ServerToClient);
         app.register_message::<marvyr_protocol::TreasureHints>(ChannelDirection::ServerToClient);
         app.register_message::<marvyr_protocol::IslandsInSight>(ChannelDirection::ServerToClient);
+        // v16 (MV-062): SEMPRE no fim — espelho exato do servidor.
+        app.register_message::<marvyr_protocol::OnboardingProgress>(
+            ChannelDirection::ClientToServer,
+        );
+        app.add_event::<PlayerNotice>();
         app.init_resource::<crate::ship::DestroyedShips>();
         app.init_resource::<KnownWrecks>();
         app.init_resource::<MyDocked>();
@@ -553,7 +558,28 @@ fn handle_ship_destroyed(
     }
 }
 
-fn handle_loot_result(mut events: EventReader<ClientReceiveMessage<LootResult>>) {
+/// Aviso curto para o feed do HUD (MV-062): motivo de recusa vindo do
+/// servidor (saque, coleta, fabricação).
+#[derive(Event, Debug, Clone, PartialEq, Eq)]
+pub struct PlayerNotice(pub String);
+
+impl PlayerNotice {
+    /// Só recusas com motivo viram aviso; sucesso e motivo vazio, não.
+    pub fn from_refusal(success: bool, reason: &str) -> Option<Self> {
+        (!success && !reason.is_empty()).then(|| Self(reason.to_owned()))
+    }
+}
+
+/// Relata o progresso do onboarding ao servidor (telemetria MV-062).
+pub fn send_onboarding(connection_manager: &mut ConnectionManager, step: u8, skipped: bool) {
+    let _ = connection_manager
+        .send_message::<ReliableChannel, _>(&marvyr_protocol::OnboardingProgress { step, skipped });
+}
+
+fn handle_loot_result(
+    mut events: EventReader<ClientReceiveMessage<LootResult>>,
+    mut notices: EventWriter<PlayerNotice>,
+) {
     for event in events.read() {
         let result = event.message();
         if result.success {
@@ -562,8 +588,9 @@ fn handle_loot_result(mut events: EventReader<ClientReceiveMessage<LootResult>>)
                 "saque concluído: carga no porão"
             );
         } else {
-            warn!(wreck_id = result.wreck_id, "saque recusado pelo servidor");
+            warn!(wreck_id = result.wreck_id, reason = %result.reason, "saque recusado pelo servidor");
         }
+        notices.send_batch(PlayerNotice::from_refusal(result.success, &result.reason));
     }
 }
 
