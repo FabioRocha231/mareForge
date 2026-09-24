@@ -15,6 +15,8 @@ permissions:
 jobs:
   checks:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -26,14 +28,33 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      - id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then v="$GITHUB_REF_NAME"; else v="$INPUT_VERSION"; fi
+          echo "version=${v#v}" >> "$GITHUB_OUTPUT"
 
-  windows:
+  package:
     needs: checks
-    runs-on: windows-latest
-    permissions:
-      contents: write
-    outputs:
-      version: ${{ steps.version.outputs.version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows
+            os: windows-latest
+            targets: x86_64-pc-windows-msvc
+          # 22.04: glibc mais antiga, o binário roda em mais distros.
+          - platform: linux
+            os: ubuntu-22.04
+            targets: x86_64-unknown-linux-gnu
+          # Runner Apple Silicon; o x86_64 sai por cross e vira universal.
+          - platform: macos
+            os: macos-latest
+            targets: aarch64-apple-darwin,x86_64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.checks.outputs.version }}
     defaults:
       run:
         shell: bash
@@ -45,39 +66,61 @@ jobs:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-pc-windows-msvc
+          targets: ${{ matrix.targets }}
       - uses: Swatinem/rust-cache@v2
-      - id: version
-        env:
-          INPUT_VERSION: ${{ inputs.version }}
-        run: |
-          if [ "$GITHUB_REF_TYPE" = "tag" ]; then v="$GITHUB_REF_NAME"; else v="$INPUT_VERSION"; fi
-          echo "version=${v#v}" >> "$GITHUB_OUTPUT"
+        with:
+          key: ${{ matrix.platform }}
+      - if: matrix.platform == 'linux'
+        name: Install Linux build dependencies
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y pkg-config libasound2-dev libudev-dev
       - name: Package
         env:
-          VERSION: ${{ steps.version.outputs.version }}
           MARVYR_DEFAULT_SERVER: ${{ vars.MARVYR_DEFAULT_SERVER }}
           MARVYR_DEFAULT_AUTH_URL: ${{ vars.MARVYR_DEFAULT_AUTH_URL }}
-        run: bash scripts/package_windows.sh
+        run: bash scripts/package.sh ${{ matrix.platform }}
       - uses: actions/upload-artifact@v4
         with:
-          name: Marvyr-windows
-          path: dist/Marvyr-v${{ steps.version.outputs.version }}-windows-x86_64.zip
+          name: Marvyr-${{ matrix.platform }}
+          path: dist/Marvyr-v${{ env.VERSION }}-${{ matrix.platform }}-*
           if-no-files-found: error
-      - if: github.ref_type == 'tag'
-        uses: softprops/action-gh-release@v2
+
+  # Um job só cria o release: três jobs anexando em paralelo disputam a
+  # criação e podem gerar releases duplicados.
+  publish:
+    needs: [checks, package]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
         with:
-          files: dist/Marvyr-v${{ steps.version.outputs.version }}-windows-x86_64.zip
-          prerelease: ${{ contains(steps.version.outputs.version, '-') }}
+          pattern: Marvyr-*
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          prerelease: ${{ contains(needs.checks.outputs.version, '-') }}
 
   itch:
-    needs: windows
-    # Dispatch manual gera só o artefato; itch só em tag.
+    needs: [checks, package]
+    # Dispatch manual gera só os artefatos; itch só em tag.
     if: github.ref_type == 'tag' && vars.ITCH_TARGET != ''
     runs-on: ubuntu-latest
     environment: itch
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows
+            channel: windows
+          - platform: linux
+            channel: linux
+          - platform: macos
+            channel: mac
     env:
-      VERSION: ${{ needs.windows.outputs.version }}
+      VERSION: ${{ needs.checks.outputs.version }}
     steps:
       - id: gate
         env:
@@ -88,11 +131,17 @@ jobs:
       - if: steps.gate.outputs.ok == 'true'
         uses: actions/download-artifact@v4
         with:
-          name: Marvyr-windows
+          name: Marvyr-${{ matrix.platform }}
           path: dist
       - if: steps.gate.outputs.ok == 'true'
         run: |
-          unzip -q "dist/Marvyr-v${VERSION}-windows-x86_64.zip" -d dist/windows
+          mkdir -p "dist/${{ matrix.platform }}"
+          for archive in dist/Marvyr-v*; do
+            case "$archive" in
+              *.tar.gz) tar -xzf "$archive" -C "dist/${{ matrix.platform }}" ;;
+              *.zip) unzip -q "$archive" -d "dist/${{ matrix.platform }}" ;;
+            esac
+          done
           curl -fsSL -o butler.zip https://broth.itch.zone/butler/linux-amd64/LATEST/archive/default
           unzip -q butler.zip -d butler
           chmod +x butler/butler
@@ -101,4 +150,4 @@ jobs:
         env:
           BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}
           ITCH_TARGET: ${{ vars.ITCH_TARGET }}
-        run: butler/butler push dist/windows "${ITCH_TARGET}:windows" --userversion "$VERSION"
+        run: butler/butler push "dist/${{ matrix.platform }}" "${ITCH_TARGET}:${{ matrix.channel }}" --userversion "$VERSION"
