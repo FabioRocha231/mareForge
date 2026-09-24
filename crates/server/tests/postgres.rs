@@ -477,6 +477,9 @@ fn renown_roundtrips_through_postgres() {
         .save_renown(&[(character, 555)])
         .expect("save_renown de novo");
     assert_eq!(store.load_renown(character).expect("load_renown"), 555);
+    // Sessão que não leu o banco começa do zero: nunca apaga o gravado.
+    store.save_renown(&[(character, 100)]).expect("save menor");
+    assert_eq!(store.load_renown(character).expect("load_renown"), 555);
 }
 
 #[test]

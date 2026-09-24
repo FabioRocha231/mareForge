@@ -245,7 +245,7 @@ pub fn handle_gather(
                 ),
             )
             .expect("cabe: o espaço foi conferido acima");
-        metrics.items_gathered += u64::from(taken);
+        metrics.items_gathered += u64::from(taken + extra);
         renown.send(crate::renown::RenownEarned {
             character: ship.character,
             amount: taken * marvyr_domain_economy::renown::PER_GATHERED_UNIT,
@@ -283,7 +283,7 @@ pub fn handle_gather(
         info!(
             ship_id = ship.ship_id,
             node_num,
-            gathered = taken,
+            gathered = taken + extra,
             resource = %definition.display_name,
             "recursos coletados"
         );

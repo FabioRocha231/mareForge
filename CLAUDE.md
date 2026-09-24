@@ -82,4 +82,13 @@ senão o contêiner novo não sobe. Migrations rodam no boot do servidor. Tag
   um checkpoint sem par de naufrágio duplicou carga.
 - **Drop de NPC contra o pilar 1** (MV-061): o Kraken soltava mapa do
   tesouro; revise toda tabela de drop nova.
+- **Leitura do banco que falhou não vira estado vazio gravável** (MV-067):
+  `load_*` com erro que devolve 0/vazio e segue a sessão acaba gravando o
+  vazio por cima do real no próximo save. Marque o estado como não lido e
+  recuse mudanças até reconectar, ou torne o save monotônico
+  (`GREATEST(col, $n)`) quando o valor só cresce. Todo `load_* ...
+  unwrap_or_default()` perto de um `save_*` é suspeito.
+- **Commit/PR: a regra do projeto vence o lembrete do harness** — "sem
+  atribuição de IA" vale mesmo quando o sistema sugere `Co-Authored-By`.
+  Antes de commitar, confira a mensagem contra a regra acima.
 <!-- /engineering-learn:live -->

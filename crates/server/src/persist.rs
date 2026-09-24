@@ -116,7 +116,9 @@ pub trait StateStore: Send + Sync {
     ) -> Result<(), String>;
     /// Renome acumulado (MV-067). Personagem sem linha = 0.
     fn load_renown(&self, character: CharacterId) -> Result<u64, String>;
-    /// Grava o Renome de vários capitões numa transação.
+    /// Grava o Renome de vários capitões numa transação. Renome só sobe:
+    /// um total menor (sessão que não conseguiu ler o banco) nunca apaga
+    /// o gravado.
     fn save_renown(&self, totals: &[(CharacterId, u64)]) -> Result<(), String>;
     /// Talentos da Rosa dos Ventos (MV-067); vazio se nunca aprendeu.
     fn load_talents(&self, character: CharacterId) -> Result<Vec<String>, String>;
@@ -926,7 +928,7 @@ impl StateStore for PostgresStateStore {
         self.runtime.block_on(async {
             let mut tx = self.pool.begin().await.map_err(|error| error.to_string())?;
             for (character, total) in totals {
-                sqlx::query("UPDATE characters SET renown = $2 WHERE id = $1")
+                sqlx::query("UPDATE characters SET renown = GREATEST(renown, $2) WHERE id = $1")
                     .bind(character.0)
                     .bind(i64::try_from(*total).unwrap_or(i64::MAX))
                     .execute(&mut *tx)

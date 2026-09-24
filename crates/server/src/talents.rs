@@ -32,6 +32,9 @@ struct Learned {
     allocated: Vec<String>,
     /// Conexão que já recebeu o snapshot (reconexão recarrega).
     client: Option<ClientId>,
+    /// O banco não respondeu no connect: a lista em memória não é a
+    /// verdade, então nada muda (nem grava) até reconectar.
+    is_unread: bool,
 }
 
 #[derive(Resource, Default)]
@@ -48,6 +51,9 @@ impl CaptainTalents {
             })
     }
 }
+
+const UNREAD: &str = "Talentos indisponíveis agora; reconecte e tente de novo.";
+const SAVE_FAILED: &str = "Não deu para gravar agora; tente de novo.";
 
 /// O que `apply_to_ships` deixou no navio da última vez.
 #[derive(Component)]
@@ -102,16 +108,22 @@ fn load_on_connect(
             continue;
         }
         // Toda mudança grava na hora: o banco é a verdade na reconexão.
-        let allocated = match store.0.as_ref() {
-            Some(store) => store.load_talents(ship.character).unwrap_or_else(|error| {
-                warn!(%error, "talentos não carregaram: sessão sem bônus");
-                Vec::new()
-            }),
-            None => talents
-                .captains
-                .get(&ship.character)
-                .map(|learned| learned.allocated.clone())
-                .unwrap_or_default(),
+        let (allocated, is_unread) = match store.0.as_ref() {
+            Some(store) => match store.load_talents(ship.character) {
+                Ok(allocated) => (allocated, false),
+                Err(error) => {
+                    warn!(%error, "talentos não carregaram: sessão sem bônus");
+                    (Vec::new(), true)
+                }
+            },
+            None => (
+                talents
+                    .captains
+                    .get(&ship.character)
+                    .map(|learned| learned.allocated.clone())
+                    .unwrap_or_default(),
+                false,
+            ),
         };
         send_snapshot(&mut connection_manager, client_id, &allocated);
         talents.captains.insert(
@@ -119,6 +131,7 @@ fn load_on_connect(
             Learned {
                 allocated,
                 client: Some(client_id),
+                is_unread,
             },
         );
     }
@@ -131,8 +144,68 @@ fn save(store: &StoreHandle, character: CharacterId, allocated: &[String]) -> Re
     }
 }
 
-// System Bevy: params são injeção de dependência, não assinatura.
-#[allow(clippy::too_many_arguments)]
+/// Aprende `node`: valida, grava e só então vale. `Err` é o motivo PT-BR.
+fn learn(
+    learned: &mut Learned,
+    character: CharacterId,
+    node: &str,
+    points: u32,
+    store: &StoreHandle,
+) -> Result<(), &'static str> {
+    if learned.is_unread {
+        return Err(UNREAD);
+    }
+    can_allocate(&learned.allocated, node, points).map_err(|error| error.reason())?;
+    let mut next = learned.allocated.clone();
+    next.push(node.to_owned());
+    save(store, character, &next).map_err(|error| {
+        warn!(%error, "talento não foi gravado");
+        SAVE_FAILED
+    })?;
+    learned.allocated = next;
+    Ok(())
+}
+
+/// Esquece tudo por ouro (sink). Grava antes de cobrar: se o banco falhar,
+/// ninguém paga por nada. Devolve o custo; `Err` é o motivo PT-BR.
+fn forget_all(
+    learned: &mut Learned,
+    character: CharacterId,
+    is_docked: bool,
+    market: &mut ServerMarket,
+    store: &StoreHandle,
+) -> Result<Money, String> {
+    if !is_docked {
+        return Err("Redistribuir só no porto: atraque primeiro.".into());
+    }
+    if learned.is_unread {
+        return Err(UNREAD.into());
+    }
+    if learned.allocated.is_empty() {
+        return Err("Nenhum talento para esquecer.".into());
+    }
+    let cost = Money(respec_cost(learned.allocated.len()));
+    if market.balance(character).0 < cost.0 {
+        return Err(format!(
+            "Ouro insuficiente: redistribuir custa {}g.",
+            cost.0
+        ));
+    }
+    save(store, character, &[]).map_err(|error| {
+        warn!(%error, "respec não foi gravado");
+        String::from(SAVE_FAILED)
+    })?;
+    market
+        .debit(character, cost)
+        .expect("saldo conferido acima, no mesmo tick");
+    market
+        .ledger
+        .record(LedgerKind::Burn, cost, String::from("respec talentos"));
+    market.persist();
+    learned.allocated.clear();
+    Ok(cost)
+}
+
 fn handle_allocate(
     mut events: EventReader<ServerReceiveMessage<AllocateTalent>>,
     ships: Query<&ServerShip>,
@@ -148,38 +221,24 @@ fn handle_allocate(
         };
         let character = ship.character;
         let node = &event.message().node;
-        let learned = talents.captains.entry(character).or_default();
         let points = points_for_level(renown.level(character));
-        if let Err(error) = can_allocate(&learned.allocated, node, points) {
-            send_action(
+        let learned = talents.captains.entry(character).or_default();
+        match learn(learned, character, node, points, &store) {
+            Ok(()) => {
+                info!(?character, node, "talento aprendido");
+                send_snapshot(&mut connection_manager, client_id, &learned.allocated);
+            }
+            Err(reason) => send_action(
                 &mut connection_manager,
                 client_id,
                 ActionKind::Talent,
                 false,
-                error.reason(),
-            );
-            continue;
+                reason,
+            ),
         }
-        learned.allocated.push(node.clone());
-        if let Err(error) = save(&store, character, &learned.allocated) {
-            learned.allocated.pop();
-            warn!(%error, "talento não foi gravado");
-            send_action(
-                &mut connection_manager,
-                client_id,
-                ActionKind::Talent,
-                false,
-                "Não deu para gravar agora; tente de novo.",
-            );
-            continue;
-        }
-        info!(?character, node, "talento aprendido");
-        send_snapshot(&mut connection_manager, client_id, &learned.allocated);
     }
 }
 
-// System Bevy: params são injeção de dependência, não assinatura.
-#[allow(clippy::too_many_arguments)]
 fn handle_respec(
     mut events: EventReader<ServerReceiveMessage<RespecTalents>>,
     ships: Query<&ServerShip>,
@@ -194,57 +253,21 @@ fn handle_respec(
             continue;
         };
         let character = ship.character;
-        let refuse = |connection_manager: &mut ConnectionManager, reason: String| {
-            send_action(
-                connection_manager,
-                client_id,
-                ActionKind::Talent,
-                false,
-                reason,
-            );
-        };
-        if !matches!(ship.presence, VesselPresence::Docked(_)) {
-            refuse(
-                &mut connection_manager,
-                "Redistribuir só no porto: atraque primeiro.".into(),
-            );
-            continue;
-        }
+        let is_docked = matches!(ship.presence, VesselPresence::Docked(_));
         let learned = talents.captains.entry(character).or_default();
-        if learned.allocated.is_empty() {
-            refuse(
-                &mut connection_manager,
-                "Nenhum talento para esquecer.".into(),
-            );
-            continue;
-        }
-        let cost = Money(respec_cost(learned.allocated.len()));
-        if market.balance(character).0 < cost.0 {
-            refuse(
-                &mut connection_manager,
-                format!("Ouro insuficiente: redistribuir custa {}g.", cost.0),
-            );
-            continue;
-        }
-        // Grava antes de cobrar: se o banco falhar, ninguém paga por nada.
-        if let Err(error) = save(&store, character, &[]) {
-            warn!(%error, "respec não foi gravado");
-            refuse(
-                &mut connection_manager,
-                "Não deu para gravar agora; tente de novo.".into(),
-            );
-            continue;
-        }
-        market
-            .debit(character, cost)
-            .expect("saldo conferido acima, no mesmo tick");
-        market.ledger.record(
-            LedgerKind::Burn,
-            cost,
-            format!("respec talentos ship {}", ship.ship_id),
-        );
-        market.persist();
-        learned.allocated.clear();
+        let cost = match forget_all(learned, character, is_docked, &mut market, &store) {
+            Ok(cost) => cost,
+            Err(reason) => {
+                send_action(
+                    &mut connection_manager,
+                    client_id,
+                    ActionKind::Talent,
+                    false,
+                    reason,
+                );
+                continue;
+            }
+        };
         info!(?character, cost = cost.0, "talentos redistribuídos");
         crate::market::send_wallet(
             &mut connection_manager,
@@ -308,7 +331,7 @@ mod tests {
     use crate::crafting::DevShips;
     use crate::net::{spawn_ship_for, ShipIdCounter, DEFAULT_WORLD_SEED};
 
-    fn learn(app: &mut App, character: CharacterId, allocated: &[&str]) {
+    fn teach(app: &mut App, character: CharacterId, allocated: &[&str]) {
         app.world_mut()
             .resource_mut::<CaptainTalents>()
             .captains
@@ -316,7 +339,7 @@ mod tests {
                 character,
                 Learned {
                     allocated: allocated.iter().map(|id| id.to_string()).collect(),
-                    client: None,
+                    ..Learned::default()
                 },
             );
     }
@@ -336,7 +359,7 @@ mod tests {
             .init_resource::<CaptainTalents>()
             .add_systems(Update, apply_to_ships);
         let character = CharacterId::new();
-        learn(&mut app, character, &["com.olho", "com.estiva"]);
+        teach(&mut app, character, &["com.olho", "com.estiva"]);
         app.world_mut()
             .run_system_once(
                 move |mut commands: Commands, dev: Res<DevItems>, ships: Res<DevShips>| {
@@ -371,7 +394,7 @@ mod tests {
             ship.stats.cargo_capacity = base;
             ship.hp = 10;
         }
-        learn(
+        teach(
             &mut app,
             character,
             &["com.olho", "com.estiva", "nav.leme", "nav.costado"],
@@ -381,5 +404,42 @@ mod tests {
         assert_eq!(again.cargo_capacity, base * 105 / 100);
         assert!(again.max_hp > boosted.max_hp);
         assert_eq!(hp, 10, "casco maior não cura");
+    }
+
+    #[test]
+    fn learning_and_respec_charge_only_what_was_saved() {
+        let store = StoreHandle(None);
+        let character = CharacterId::new();
+        let mut learned = Learned::default();
+        assert!(learn(&mut learned, character, "nav.leme", 0, &store).is_err());
+        learn(&mut learned, character, "nav.leme", 2, &store).expect("aprende");
+        learn(&mut learned, character, "nav.pano", 2, &store).expect("aprende");
+        assert_eq!(learned.allocated, ["nav.leme", "nav.pano"]);
+
+        let mut market = ServerMarket::new();
+        market.credit(character, Money(100));
+        // No mar, ou sem ouro: nada muda.
+        assert!(forget_all(&mut learned, character, false, &mut market, &store).is_err());
+        market.debit(character, Money(30)).unwrap();
+        assert!(forget_all(&mut learned, character, true, &mut market, &store).is_err());
+        assert_eq!(
+            (market.balance(character), learned.allocated.len()),
+            (Money(70), 2)
+        );
+        market.credit(character, Money(30));
+        let cost = forget_all(&mut learned, character, true, &mut market, &store).expect("paga");
+        assert_eq!(cost, Money(80));
+        assert_eq!(market.balance(character), Money(20));
+        assert!(learned.allocated.is_empty());
+
+        // Banco não respondeu no connect: nada muda até reconectar.
+        let mut unread = Learned {
+            allocated: vec![String::from("nav.leme")],
+            is_unread: true,
+            ..Learned::default()
+        };
+        assert!(learn(&mut unread, character, "nav.pano", 5, &store).is_err());
+        assert!(forget_all(&mut unread, character, true, &mut market, &store).is_err());
+        assert_eq!(market.balance(character), Money(20));
     }
 }
