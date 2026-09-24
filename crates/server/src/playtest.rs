@@ -7,16 +7,126 @@
 //! cópia `session-summary.json` com a última sessão. Nada aqui toca no
 //! estado persistido do jogo.
 
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use bevy::app::{App, AppExit, TerminalCtrlCHandlerPlugin};
 use bevy::ecs::event::EventReader;
-use bevy::prelude::{IntoSystemConfigs, Query, Res, Resource, Update};
+use bevy::prelude::{IntoSystemConfigs, Query, Res, ResMut, Resource, Time, Update};
+use lightyear::prelude::ServerReceiveMessage;
 use marvyr_domain_economy::{Ledger, LedgerKind};
+use marvyr_protocol::OnboardingProgress;
+use marvyr_shared::ids::CharacterId;
 use serde::Serialize;
 use uuid::Uuid;
 
 use crate::net::{Metrics, ServerShip, TripTelemetry};
+
+/// Último passo do guia de onboarding (1..=6); 0 = boas-vindas.
+const ONBOARDING_LAST_STEP: usize = 6;
+
+/// Funil do onboarding (MV-062): instante (segundos de servidor) em que
+/// cada personagem atingiu cada passo pela PRIMEIRA vez. Telemetria pura —
+/// nada aqui concede ou libera coisa alguma.
+#[derive(Debug, Default, Clone)]
+pub struct OnboardingTelemetry {
+    reached_at: HashMap<CharacterId, [Option<f64>; ONBOARDING_LAST_STEP + 1]>,
+    skipped: HashSet<CharacterId>,
+}
+
+impl OnboardingTelemetry {
+    /// Registra um relato do client. Repetição e passo fora de 0..=6 são
+    /// ignorados; `skipped` marca o pulo sem contar o passo como concluído.
+    pub fn record(&mut self, character: CharacterId, step: u8, skipped: bool, now_secs: f64) {
+        let step = usize::from(step);
+        if step > ONBOARDING_LAST_STEP {
+            return;
+        }
+        if skipped {
+            self.skipped.insert(character);
+            return;
+        }
+        let slot = &mut self.reached_at.entry(character).or_default()[step];
+        slot.get_or_insert(now_secs);
+    }
+
+    /// Personagens que viram as boas-vindas (passo 0).
+    pub fn welcomed(&self) -> usize {
+        self.reached_at
+            .values()
+            .filter(|steps| steps[0].is_some())
+            .count()
+    }
+
+    fn summary(&self) -> OnboardingSummary {
+        let count = |step: usize| {
+            self.reached_at
+                .values()
+                .filter(|steps| steps[step].is_some())
+                .count()
+        };
+        let median_secs_to = |step: usize| {
+            let mut deltas: Vec<f64> = self
+                .reached_at
+                .values()
+                .filter_map(|steps| Some((steps[step]? - steps[0]?).max(0.0)))
+                .collect();
+            median(&mut deltas)
+        };
+        OnboardingSummary {
+            welcomed: self.welcomed(),
+            skipped: self.skipped.len(),
+            reached: std::array::from_fn(|index| count(index + 1)),
+            median_secs_to_step: std::array::from_fn(|index| median_secs_to(index + 1)),
+        }
+    }
+}
+
+fn median(values: &mut [f64]) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    values.sort_by(f64::total_cmp);
+    let mid = values.len() / 2;
+    Some(if values.len() % 2 == 0 {
+        (values[mid - 1] + values[mid]) / 2.0
+    } else {
+        values[mid]
+    })
+}
+
+/// Bloco `onboarding` do relatório (MV-062).
+#[derive(Serialize, Debug, PartialEq)]
+struct OnboardingSummary {
+    welcomed: usize,
+    skipped: usize,
+    /// Personagens que concluíram cada passo 1..=6.
+    reached: [usize; ONBOARDING_LAST_STEP],
+    /// Mediana de segundos das boas-vindas até cada passo; `null` sem dados.
+    median_secs_to_step: [Option<f64>; ONBOARDING_LAST_STEP],
+}
+
+/// Intent `OnboardingProgress` (MV-062): só registra, por personagem.
+pub(crate) fn handle_onboarding(
+    mut events: EventReader<ServerReceiveMessage<OnboardingProgress>>,
+    time: Res<Time>,
+    mut metrics: ResMut<Metrics>,
+    ships: Query<&ServerShip>,
+) {
+    for event in events.read() {
+        let client_id = event.from();
+        let Some(ship) = ships.iter().find(|ship| ship.client_id == Some(client_id)) else {
+            continue;
+        };
+        let progress = event.message();
+        metrics.onboarding.record(
+            ship.character,
+            progress.step,
+            progress.skipped,
+            time.elapsed_secs_f64(),
+        );
+    }
+}
 
 /// Identidade de sessão gerada no boot quando `--playtest` está ativo.
 #[derive(Resource, Debug, Clone, Copy)]
@@ -61,6 +171,7 @@ struct PlaytestReport {
     boardings_won: u64,
     treasures_dug: u64,
     sea_events_started: u64,
+    onboarding: OnboardingSummary,
 }
 
 /// Monta o resumo a partir do `Metrics` e do `Ledger` já existentes. Não
@@ -130,6 +241,7 @@ fn build_report<'a>(
         boardings_won: metrics.boardings_won,
         treasures_dug: metrics.treasures_dug,
         sea_events_started: metrics.sea_events_started,
+        onboarding: metrics.onboarding.summary(),
     }
 }
 
@@ -230,6 +342,37 @@ mod tests {
         assert_eq!(report.gold_burned, 0);
         assert_eq!(report.market_volume, 0);
         assert_eq!(report.npc_bounty_gold_minted, 0);
+    }
+
+    #[test]
+    fn onboarding_summary_counts_first_reach_and_medians() {
+        let (a, b, c) = (CharacterId::new(), CharacterId::new(), CharacterId::new());
+        let mut log = OnboardingTelemetry::default();
+        log.record(a, 0, false, 10.0);
+        log.record(a, 1, false, 20.0);
+        log.record(a, 1, false, 99.0); // repetição: ignorada
+        log.record(b, 0, false, 0.0);
+        log.record(b, 1, false, 30.0);
+        log.record(c, 0, false, 5.0);
+        log.record(c, 1, false, 45.0);
+        log.record(c, 7, false, 50.0); // fora do intervalo: ignorado
+        log.record(c, 2, true, 60.0); // pulou o guia
+        log.record(c, 2, true, 61.0);
+
+        let summary = log.summary();
+        assert_eq!(summary.welcomed, 3);
+        assert_eq!(summary.skipped, 1);
+        assert_eq!(summary.reached, [3, 0, 0, 0, 0, 0]);
+        // Deltas 10, 30, 40 → mediana 30 (a repetição em 99s não conta).
+        assert_eq!(summary.median_secs_to_step[0], Some(30.0));
+        assert_eq!(summary.median_secs_to_step[1], None);
+
+        log.record(a, 2, false, 14.0);
+        log.record(b, 2, false, 6.0);
+        assert_eq!(log.summary().median_secs_to_step[1], Some(5.0));
+
+        let json = serde_json::to_value(log.summary()).unwrap();
+        assert!(json["median_secs_to_step"][2].is_null());
     }
 
     #[test]

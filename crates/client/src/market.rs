@@ -181,7 +181,7 @@ pub struct MarketView {
 pub fn market_view(form: &MarketForm, orders: &[OrderLine], catalog: &KnownCatalog) -> MarketView {
     let item = catalog_items(catalog)
         .get(form.item_index)
-        .map(|line| line.name.clone())
+        .map(|line| crate::i18n::tr(&line.name))
         .unwrap_or_else(|| String::from("—"));
     let or_dash = |value: &str, suffix: &str| {
         if value.is_empty() {
@@ -206,15 +206,19 @@ pub fn market_view(form: &MarketForm, orders: &[OrderLine], catalog: &KnownCatal
 /// Linha de order: número, item, qtd, preço, total, região, dono.
 fn order_label(order: &OrderLine) -> String {
     let total = order.unit_price.saturating_mul(u64::from(order.quantity));
-    let mine = if order.mine { " [MINHA]" } else { "" };
+    let mine = if order.mine {
+        format!(" [{}]", crate::i18n::tr("MINHA"))
+    } else {
+        String::new()
+    };
     format!(
         "#{:<3} {:<12} {:>3}× @{}g  total {}g  {}{}",
         order.order_num,
-        order.item_name,
+        crate::i18n::tr(&order.item_name),
         order.quantity,
         order.unit_price,
         total,
-        order.region,
+        crate::i18n::tr(&order.region),
         mine,
     )
 }
@@ -321,7 +325,7 @@ pub fn spawn_market_body(parent: &mut ChildBuilder, view: &MarketView) {
                 .with_children(|list| {
                     list.spawn(ui::text("ORDENS DO MERCADO", 12.0, ui::PANEL_BORDER));
                     if view.orders.is_empty() {
-                        list.spawn(ui::text("Mercado: sem orders", 13.0, ui::TEXT_DIM));
+                        list.spawn(ui::text("Mercado: sem ordens", 13.0, ui::TEXT_DIM));
                     }
                     // ponytail: sem rolagem; adicionar scroll quando houver mais orders que a tela aguenta.
                     for (index, (label, action)) in view.orders.iter().enumerate() {

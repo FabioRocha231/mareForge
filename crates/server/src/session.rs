@@ -248,6 +248,7 @@ pub fn police_intents(
         Rx<marvyr_protocol::BoardShip>,
         Rx<marvyr_protocol::HireCrew>,
         Rx<marvyr_protocol::DigTreasure>,
+        Rx<marvyr_protocol::OnboardingProgress>,
     ),
 ) {
     let mut reliable: Vec<ClientId> = Vec::new();
@@ -258,7 +259,7 @@ pub fn police_intents(
     }
     drain!(ship.0, ship.1, ship.2, ship.3, ship.4, ship.5, ship.6, ship.7);
     drain!(economy.0, economy.1, economy.2, economy.3, economy.4, economy.5, economy.6, economy.7);
-    drain!(sea.0, sea.1, sea.2, sea.3, sea.4, sea.5);
+    drain!(sea.0, sea.1, sea.2, sea.3, sea.4, sea.5, sea.6);
     let inputs: Vec<ClientId> = input.read().map(|event| event.from()).collect();
     let now = time.elapsed_secs();
     for client_id in budget.charge(now, reliable, inputs) {

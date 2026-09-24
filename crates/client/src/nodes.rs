@@ -57,7 +57,9 @@ pub struct NodePiece;
 fn label_text(state: &NodeState) -> String {
     format!(
         "{} {}/{}",
-        state.resource_name, state.stock, state.max_stock
+        crate::i18n::tr(&state.resource_name),
+        state.stock,
+        state.max_stock
     )
 }
 
@@ -152,17 +154,28 @@ fn spawn_node_visual(commands: &mut Commands, assets: &GameAssets, state: &NodeS
                     NodePiece,
                 ));
             }
+            // Etiqueta impressa: papel sob tinta — legível em água rasa e funda.
+            let label = label_text(state);
+            let width = label.chars().count() as f32 * 4.4 + 8.0;
+            parent.spawn((
+                Sprite {
+                    color: crate::ui::PAPER.with_alpha(0.92),
+                    custom_size: Some(Vec2::new(width, 11.0)),
+                    ..default()
+                },
+                Transform::from_xyz(0.0, -19.0, layers::LABELS - layers::RESOURCES - 0.01),
+            ));
             parent.spawn((
                 NodeLabel {
                     node_id: state.node_id,
                 },
-                Text2d::new(label_text(state)),
+                Text2d::new(label),
                 TextLayout::new_with_no_wrap(),
                 TextFont {
                     font_size: 8.0,
                     ..default()
                 },
-                TextColor(Color::srgba(1.0, 0.98, 0.88, 0.85)),
+                TextColor(crate::ui::INK),
                 Anchor::Center,
                 Transform::from_xyz(0.0, -19.0, layers::LABELS - layers::RESOURCES),
             ));
@@ -241,7 +254,10 @@ fn handle_node_updated(
     }
 }
 
-fn handle_gather_result(mut events: EventReader<ClientReceiveMessage<GatherResult>>) {
+fn handle_gather_result(
+    mut events: EventReader<ClientReceiveMessage<GatherResult>>,
+    mut notices: EventWriter<crate::net::PlayerNotice>,
+) {
     for event in events.read() {
         let result = event.message();
         if result.success {
@@ -251,7 +267,11 @@ fn handle_gather_result(mut events: EventReader<ClientReceiveMessage<GatherResul
                 "coleta no porão"
             );
         } else {
-            warn!(node_id = result.node_id, "coleta recusada pelo servidor");
+            warn!(node_id = result.node_id, reason = %result.reason, "coleta recusada pelo servidor");
         }
+        notices.send_batch(crate::net::PlayerNotice::from_refusal(
+            result.success,
+            &result.reason,
+        ));
     }
 }

@@ -4,11 +4,16 @@ pub mod camera;
 pub mod config;
 pub mod crafting;
 pub mod guild;
+pub mod help;
 pub mod hud;
+pub mod i18n;
+pub mod i18n_extra;
+pub mod input;
 pub mod juice;
 pub mod market;
 pub mod net;
 pub mod nodes;
+pub mod onboarding;
 pub mod playtest;
 pub mod plugin;
 pub mod port_screen;
@@ -41,7 +46,7 @@ pub fn windowed_app() -> App {
             .set(WindowPlugin {
                 primary_window: Some(Window {
                     title: format!("Marvyr {}", marvyr_protocol::VERSION_LABEL),
-                    resolution: (1280.0_f32, 720.0_f32).into(),
+                    resolution: dev_window_size().into(),
                     // Captura de dev não rouba o foco (nem o teclado) de
                     // quem está usando a máquina.
                     focused: std::env::var_os("MARVYR_SHOT").is_none(),
@@ -55,6 +60,17 @@ pub fn windowed_app() -> App {
         app.add_plugins(shots);
     }
     app
+}
+
+/// Tamanho lógico da janela; MARVYR_WINDOW=1366x768 testa telas de notebook.
+fn dev_window_size() -> (f32, f32) {
+    std::env::var("MARVYR_WINDOW")
+        .ok()
+        .and_then(|value| {
+            let (w, h) = value.split_once('x')?;
+            Some((w.trim().parse().ok()?, h.trim().parse().ok()?))
+        })
+        .unwrap_or((1280.0, 720.0))
 }
 
 fn asset_root() -> String {

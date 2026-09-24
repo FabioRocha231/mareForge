@@ -25,6 +25,7 @@ use crate::guild::{
     contracts_view, guild_view, spawn_contracts_body, spawn_guild_body, ContractFeedback,
     ContractsView, GuildPlugin, GuildView, KnownContracts, KnownGuildPrices,
 };
+use crate::i18n::{tr, trf, Lang};
 use crate::market::{
     market_view, spawn_market_body, KnownCatalog, KnownOrders, MarketFeedback, MarketForm,
     MarketView, Wallet,
@@ -336,7 +337,7 @@ fn handle_craft_result(
     mut feedback: ResMut<CraftFeedback>,
 ) {
     for event in events.read() {
-        feedback.0 = Some(*event.message());
+        feedback.0 = Some(event.message().clone());
     }
 }
 
@@ -395,7 +396,7 @@ fn spawn_port_screen(mut commands: Commands) {
                         ..default()
                     })
                     .with_children(|header| {
-                        header.spawn((ui::text("Porto", 22.0, ui::TEXT), PortText::Title));
+                        header.spawn((ui::display("Porto", 28.0, ui::INK), PortText::Title));
                         header
                             .spawn(Node {
                                 align_items: AlignItems::Center,
@@ -410,7 +411,7 @@ fn spawn_port_screen(mut commands: Commands) {
                                         UndockButton,
                                     ))
                                     .with_children(|b| {
-                                        b.spawn(ui::text("Desatracar [ESC]", 13.0, ui::TEXT));
+                                        b.spawn(crate::i18n::label("Desatracar [ESC]", 13.0, ui::TEXT));
                                     });
                             });
                     });
@@ -424,21 +425,18 @@ fn spawn_port_screen(mut commands: Commands) {
                         for tab in PortTab::ALL {
                             tabs.spawn((ui::button(Node::default(), ui::BUTTON_BG), TabButton(tab)))
                                 .with_children(|b| {
-                                    b.spawn(ui::text(tab.label(), 14.0, ui::TEXT));
+                                    b.spawn(crate::i18n::label(tab.label(), 14.0, ui::TEXT));
                                 });
                         }
                     });
-                panel.spawn((
-                    Node {
-                        height: Val::Px(1.0),
-                        ..default()
-                    },
-                    BackgroundColor(ui::PANEL_BORDER.with_alpha(0.4)),
-                ));
+                ui::double_rule(panel);
                 panel.spawn((
                     Node {
                         flex_direction: FlexDirection::Column,
                         flex_grow: 1.0,
+                        // Sem isto o flexbox não encolhe o corpo abaixo do
+                        // conteúdo e a lista empurra os botões para fora.
+                        min_height: Val::Px(0.0),
                         row_gap: Val::Px(4.0),
                         overflow: Overflow::clip_y(),
                         ..default()
@@ -454,7 +452,7 @@ fn spawn_port_screen(mut commands: Commands) {
                     })
                     .with_children(|footer| {
                         footer.spawn((ui::text("", 13.0, ui::TEXT), PortText::Status));
-                        footer.spawn(ui::text(
+                        footer.spawn(crate::i18n::label(
                             "Tab/Shift+Tab: abas · Setas: escolher · Enter: executar · ESC: desatracar",
                             11.0,
                             ui::TEXT_DIM,
@@ -638,34 +636,37 @@ fn handle_port_clicks(
 
 fn action_label(action: &PortAction, recipes: &[RecipeEntry]) -> String {
     match action {
-        PortAction::DepositAll => String::from("Depositar tudo"),
-        PortAction::WithdrawAll => String::from("Retirar tudo"),
-        PortAction::Unequip(slot) => format!("Desequipar {}", slot_label(*slot)),
-        PortAction::Equip(_, slot, item_name) => {
-            format!("{}: {item_name} [Equipar]", slot_label(*slot))
-        }
+        PortAction::DepositAll => tr("Depositar tudo"),
+        PortAction::WithdrawAll => tr("Retirar tudo"),
+        PortAction::Unequip(slot) => trf("Desequipar {0}", &[&tr(slot_label(*slot))]),
+        PortAction::Equip(_, slot, item_name) => format!(
+            "{}: {} [{}]",
+            tr(slot_label(*slot)),
+            tr(item_name),
+            tr("Equipar")
+        ),
         PortAction::Craft(recipe_id) => {
             let entry = recipes.iter().find(|entry| entry.recipe_id == *recipe_id);
             let verb = if entry.is_some_and(|entry| entry.station == StationKind::Dock) {
-                "Construir"
+                "Construir {0}"
             } else {
-                "Fabricar"
+                "Fabricar {0}"
             };
             let name = entry
                 .map(|entry| entry.display_name.as_str())
                 .unwrap_or("receita");
-            format!("{verb} {name}")
+            trf(verb, &[&tr(name)])
         }
-        PortAction::Undock => String::from("Desatracar"),
+        PortAction::Undock => tr("Desatracar"),
     }
 }
 
 fn slot_label(slot: EquipmentSlot) -> &'static str {
     match slot {
-        EquipmentSlot::Hull => "Hull",
-        EquipmentSlot::Sail => "Sail",
-        EquipmentSlot::Weapon => "Weapon",
-        EquipmentSlot::Aux => "Aux",
+        EquipmentSlot::Hull => "Casco",
+        EquipmentSlot::Sail => "Velas",
+        EquipmentSlot::Weapon => "Armas",
+        EquipmentSlot::Aux => "Auxiliar",
     }
 }
 
@@ -683,17 +684,23 @@ fn clamped_selection(actions: &[PortAction], selected: usize) -> usize {
 }
 
 fn feedback_line(success: bool, reason: &str) -> String {
-    format!("{}: {reason}", if success { "OK" } else { "ERRO" })
+    format!(
+        "{}: {}",
+        tr(if success { "OK" } else { "ERRO" }),
+        tr(reason)
+    )
 }
 
 fn storage_lines(cargo_weight: Option<u32>, cargo_capacity: Option<u32>) -> Vec<String> {
     vec![
-        format!(
-            "Porão: {} / {}",
-            cargo_weight.map_or_else(|| String::from("—"), |weight| weight.to_string()),
-            cargo_capacity.map_or_else(|| String::from("—"), |capacity| capacity.to_string()),
+        trf(
+            "Porão: {0} / {1}",
+            &[
+                &cargo_weight.map_or_else(|| String::from("—"), |weight| weight.to_string()),
+                &cargo_capacity.map_or_else(|| String::from("—"), |capacity| capacity.to_string()),
+            ],
         ),
-        String::from("Storage: conteúdo oculto — use Depositar/Retirar tudo"),
+        tr("Armazém: conteúdo oculto — use Depositar/Retirar tudo"),
     ]
 }
 
@@ -707,15 +714,15 @@ fn loadout_lines(
         .iter()
         .map(|line| {
             let name = if line.item_name.is_empty() {
-                String::from("(vazio)")
+                tr("(vazio)")
             } else {
-                line.item_name.clone()
+                tr(&line.item_name)
             };
-            format!("{}: {name}", slot_label(line.slot))
+            format!("{}: {name}", tr(slot_label(line.slot)))
         })
         .collect::<Vec<_>>();
     if compatible_equip(storage, catalog, loadout, ship_kind).is_empty() {
-        lines.push(String::from("Storage: nada compatível com este casco"));
+        lines.push(tr("Armazém: nada compatível com este casco"));
     }
     lines
 }
@@ -723,34 +730,40 @@ fn loadout_lines(
 fn recipe_lines(recipes: &[RecipeEntry], dock: bool) -> Vec<String> {
     let mut lines = Vec::new();
     if dock {
-        lines.push(String::from(
-            "Receitas de casco — custos saem do storage do porto.",
-        ));
+        lines.push(tr("Receitas de casco — custos saem do armazém do porto."));
     }
     for entry in recipes_for_station(recipes, dock) {
         let ingredients = entry
             .ingredients
             .iter()
-            .map(|ingredient| format!("{}x {}", ingredient.quantity, ingredient.name))
+            .map(|ingredient| format!("{}x {}", ingredient.quantity, tr(&ingredient.name)))
             .collect::<Vec<_>>()
             .join(", ");
-        lines.push(format!(
-            "{} — Estação: {}",
-            entry.display_name,
-            station_label(entry.station)
-        ));
-        lines.push(format!(
-            "  Insumos: {}",
-            if ingredients.is_empty() {
-                String::from("—")
-            } else {
-                ingredients
-            }
-        ));
-        lines.push(format!(
-            "  Saída: {} x{}",
-            entry.output_name, entry.output_quantity
-        ));
+        let ingredients = if ingredients.is_empty() {
+            String::from("—")
+        } else {
+            ingredients
+        };
+        // Uma linha por receita: a lista cabe no papel junto dos botões.
+        let mut line = trf(
+            "{0} · {1} · {2}",
+            &[
+                &tr(&entry.display_name),
+                &tr(station_label(entry.station)),
+                &ingredients,
+            ],
+        );
+        // A saída só aparece quando diz algo além do nome da receita.
+        if entry.output_quantity != 1 || entry.output_name != entry.display_name {
+            line.push_str(&format!(
+                " · {}",
+                trf(
+                    "rende {0} x{1}",
+                    &[&tr(&entry.output_name), &entry.output_quantity.to_string()],
+                )
+            ));
+        }
+        lines.push(line);
     }
     lines
 }
@@ -772,7 +785,7 @@ fn info_lines(
         PortTab::Loadout => loadout_lines(loadout, storage, catalog, ship_kind),
         PortTab::Crafting => recipe_lines(recipes, false),
         PortTab::Shipyard => recipe_lines(recipes, true),
-        PortTab::Market => vec![String::from("Mercado regional")],
+        PortTab::Market => vec![tr("Mercado regional")],
         PortTab::Guild | PortTab::Contracts => Vec::new(),
     }
 }
@@ -800,48 +813,76 @@ fn status_line(
                 .find(|entry| entry.recipe_id == result.recipe_id)
                 .map(|entry| entry.display_name.as_str())
                 .unwrap_or("receita");
-            (result.success, feedback_line(result.success, name))
+            // Recusa diz o porquê (v16); sucesso só nomeia a receita.
+            let detail = if result.success || result.reason.is_empty() {
+                tr(name)
+            } else {
+                format!("{} · {}", tr(name), tr(&result.reason))
+            };
+            (result.success, feedback_line(result.success, &detail))
         }),
     }
 }
 
+/// Informação em cima (encolhe e corta quando a lista é longa, como as
+/// receitas da Fabricação) e ações embaixo, sempre inteiras dentro do
+/// papel. Com mais de quatro ações, elas vão em duas colunas.
 fn spawn_port_body(
     parent: &mut ChildBuilder,
     info: &[String],
     actions: &[String],
     selected: usize,
 ) {
-    for line in info {
-        parent.spawn(ui::text(line.as_str(), 14.0, ui::TEXT));
-    }
-    parent.spawn((
-        ui::text("AÇÕES", 12.0, ui::PANEL_BORDER),
-        Node {
-            margin: UiRect::top(Val::Px(8.0)),
+    parent
+        .spawn(Node {
+            flex_direction: FlexDirection::Column,
+            flex_shrink: 1.0,
+            min_height: Val::Px(0.0),
+            row_gap: Val::Px(2.0),
+            overflow: Overflow::clip_y(),
             ..default()
-        },
-    ));
-    for (index, label) in actions.iter().enumerate() {
-        let base = if index == selected {
-            ui::BUTTON_SELECTED
-        } else {
-            ui::BUTTON_BG
-        };
-        parent
-            .spawn((
-                ui::button(
-                    Node {
-                        justify_content: JustifyContent::Start,
-                        ..default()
-                    },
-                    base,
-                ),
-                PortActionButton(index),
-            ))
-            .with_children(|b| {
-                b.spawn(ui::text(label.as_str(), 14.0, ui::TEXT));
-            });
-    }
+        })
+        .with_children(|info_col| {
+            for line in info {
+                info_col.spawn(ui::text(line.as_str(), 14.0, ui::TEXT));
+            }
+        });
+    let two_columns = actions.len() > 4;
+    parent
+        .spawn(Node {
+            flex_wrap: FlexWrap::Wrap,
+            column_gap: Val::Px(8.0),
+            row_gap: Val::Px(6.0),
+            flex_shrink: 0.0,
+            ..default()
+        })
+        .with_children(|grid| {
+            for (index, label) in actions.iter().enumerate() {
+                let base = if index == selected {
+                    ui::BUTTON_SELECTED
+                } else {
+                    ui::BUTTON_BG
+                };
+                grid.spawn((
+                    ui::button(
+                        Node {
+                            justify_content: JustifyContent::Start,
+                            width: if two_columns {
+                                Val::Percent(49.0)
+                            } else {
+                                Val::Percent(100.0)
+                            },
+                            ..default()
+                        },
+                        base,
+                    ),
+                    PortActionButton(index),
+                ))
+                .with_children(|b| {
+                    b.spawn(ui::text(label.as_str(), 14.0, ui::TEXT));
+                });
+            }
+        });
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -865,7 +906,12 @@ fn update_port_screen(
     mut texts: Query<(&mut Text, &mut TextColor, &PortText)>,
     mut tabs: Query<(&TabButton, &mut UiButton, &mut BackgroundColor)>,
     mut last_view: Local<Option<BodyView>>,
+    lang: Res<Lang>,
 ) {
+    // Troca de idioma: remonta o corpo com os textos novos.
+    if lang.is_changed() {
+        *last_view = None;
+    }
     let tab = state.active_tab;
     let view = if tab == PortTab::Market {
         BodyView::Market(market_view(&market.0, &market.1 .0, &data.catalog))
@@ -939,8 +985,8 @@ fn update_port_screen(
     };
     for (mut text, mut color, kind) in &mut texts {
         let value = match kind {
-            PortText::Title if port_name.0.is_empty() => String::from("Porto: ?"),
-            PortText::Title => port_name.0.clone(),
+            PortText::Title if port_name.0.is_empty() => tr("Porto: ?"),
+            PortText::Title => tr(&port_name.0),
             PortText::Gold => format!("{}g", wallet.0),
             PortText::Status => {
                 color.0 = match &status {
@@ -1190,11 +1236,11 @@ mod tests {
             None,
         );
         for expected in [
-            "Hull: Casco Reforçado",
-            "Sail: (vazio)",
-            "Weapon: Canhão de Bronze",
-            "Aux: (vazio)",
-            "Storage: nada compatível com este casco",
+            "Casco: Casco Reforçado",
+            "Velas: (vazio)",
+            "Armas: Canhão de Bronze",
+            "Auxiliar: (vazio)",
+            "Armazém: nada compatível com este casco",
         ] {
             assert!(text.contains(expected), "{text}");
         }
@@ -1285,7 +1331,7 @@ mod tests {
         assert!(text.contains("Receita 2"), "{text}");
         assert!(!text.contains("Receita 1"), "{text}");
         assert!(
-            text.contains("Receitas de casco — custos saem do storage do porto."),
+            text.contains("Receitas de casco — custos saem do armazém do porto."),
             "{text}"
         );
 
@@ -1341,6 +1387,7 @@ mod tests {
         world.init_resource::<KnownContracts>();
         world.init_resource::<ContractFeedback>();
         world.init_resource::<Time>();
+        world.init_resource::<Lang>();
         world.run_system_once(spawn_port_screen).unwrap();
         let mut schedule = bevy::ecs::schedule::Schedule::default();
         schedule.add_systems(update_port_screen);
@@ -1368,6 +1415,26 @@ mod tests {
         assert_eq!(
             status,
             Some((false, String::from("ERRO: atraca primeiro (E)")))
+        );
+    }
+
+    #[test]
+    fn failed_craft_result_surfaces_reason_in_status_line() {
+        let feedback = CraftResult {
+            recipe_id: 99,
+            success: false,
+            reason: String::from("Armazém vazio neste porto: deposite materiais com Z."),
+        };
+
+        let status = status_line(PortTab::Crafting, &[], None, Some(&feedback), None);
+        assert_eq!(
+            status,
+            Some((
+                false,
+                String::from(
+                    "ERRO: receita · Armazém vazio neste porto: deposite materiais com Z."
+                )
+            ))
         );
     }
 
@@ -1411,7 +1478,7 @@ mod tests {
             None,
         );
 
-        assert!(text.contains("Hull: Casco Reforçado [Equipar]"), "{text}");
+        assert!(text.contains("Casco: Casco Reforçado [Equipar]"), "{text}");
         assert!(!text.contains("use T/Y/U (debug)"), "{text}");
     }
 

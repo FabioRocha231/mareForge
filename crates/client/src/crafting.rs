@@ -36,7 +36,10 @@ fn handle_recipes_snapshot(
     }
 }
 
-fn handle_craft_result(mut events: EventReader<ClientReceiveMessage<CraftResult>>) {
+fn handle_craft_result(
+    mut events: EventReader<ClientReceiveMessage<CraftResult>>,
+    mut notices: EventWriter<crate::net::PlayerNotice>,
+) {
     for event in events.read() {
         let result = event.message();
         if result.success {
@@ -47,9 +50,14 @@ fn handle_craft_result(mut events: EventReader<ClientReceiveMessage<CraftResult>
         } else {
             warn!(
                 recipe_id = result.recipe_id,
-                "fabricação recusada (estação, ingredientes ou porão)"
+                reason = %result.reason,
+                "fabricação recusada pelo servidor"
             );
         }
+        notices.send_batch(crate::net::PlayerNotice::from_refusal(
+            result.success,
+            &result.reason,
+        ));
     }
 }
 

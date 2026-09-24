@@ -38,13 +38,23 @@ pub fn setup_camera(mut commands: Commands) {
     ));
 }
 
-pub fn zoom_from_wheel(mut wheel: EventReader<MouseWheel>, mut zoom: ResMut<CameraZoom>) {
+pub fn zoom_from_wheel(
+    time: Res<Time>,
+    mut wheel: EventReader<MouseWheel>,
+    gamepads: Query<&bevy::input::gamepad::Gamepad>,
+    mut zoom: ResMut<CameraZoom>,
+) {
     for event in wheel.read() {
         let steps = match event.unit {
             MouseScrollUnit::Line => event.y,
             MouseScrollUnit::Pixel => event.y / 40.0,
         };
         zoom.0 = next_zoom(zoom.0, steps);
+    }
+    // Analógico direito: ~4 passos de roda por segundo com ele no fim.
+    let stick = crate::input::stick_zoom(&gamepads);
+    if stick != 0.0 {
+        zoom.0 = next_zoom(zoom.0, stick * 4.0 * time.delta_secs());
     }
 }
 

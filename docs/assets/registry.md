@@ -39,6 +39,8 @@ Toda asset externa usada no Marvyr vive aqui. Nada entra em
 | Kenney RPG Audio | Kenney | https://kenney.nl/assets/rpg-audio | CC0 1.0 | false | `assets/external/kenney-rpg-audio/creak1.ogg`, `assets/external/kenney-rpg-audio/handleCoins.ogg` | nenhuma | 2026-09-23 |
 | Kenney Impact Sounds | Kenney | https://kenney.nl/assets/impact-sounds | CC0 1.0 | false | `assets/external/kenney-impact-sounds/impactBell_heavy_000.ogg` | nenhuma | 2026-09-23 |
 | Kenney Interface Sounds | Kenney | https://kenney.nl/assets/interface-sounds | CC0 1.0 | false | `assets/external/kenney-interface-sounds/click_002.ogg` | nenhuma | 2026-09-23 |
+| Alfa Slab One (fonte) | JM Solé | https://fonts.google.com/specimen/Alfa+Slab+One | SIL OFL 1.1 — **aguarda revisão do maintainer** (política: licença fora de CC0) | false (OFL exige manter o `OFL-AlfaSlabOne.txt` junto) | `assets/external/fonts/AlfaSlabOne-Regular.ttf`, `assets/external/fonts/OFL-AlfaSlabOne.txt` | nenhuma (embutida no binário do client) | 2026-09-24 |
+| Zilla Slab (fonte) | Typotheque para a Mozilla Foundation | https://fonts.google.com/specimen/Zilla+Slab | SIL OFL 1.1 — **aguarda revisão do maintainer** (política: licença fora de CC0) | false (OFL exige manter o `OFL-ZillaSlab.txt` junto) | `assets/external/fonts/ZillaSlab-Regular.ttf`, `assets/external/fonts/ZillaSlab-SemiBold.ttf`, `assets/external/fonts/ZillaSlab-Bold.ttf`, `assets/external/fonts/OFL-ZillaSlab.txt` | nenhuma (embutida no binário do client) | 2026-09-24 |
 
 ## Assets geradas pelo próprio Marvyr
 

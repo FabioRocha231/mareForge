@@ -13,6 +13,7 @@ use marvyr_protocol::{
 use marvyr_shared::ids::ItemDefinitionId;
 
 use crate::hud::SeaHud;
+use crate::i18n::{tr, trf};
 use crate::net::ReliableChannel;
 use crate::ui;
 
@@ -155,37 +156,18 @@ pub fn active_contract(known: &KnownContracts, now: f32) -> Option<ContractLine>
     Some(line)
 }
 
-/// A fonte padrão só desenha ASCII: tira acentos dos nomes vindos do
-/// servidor ("Minério" → "Minerio").
-pub fn ascii(text: &str) -> String {
-    text.chars()
-        .map(|c| match c {
-            'á' | 'à' | 'â' | 'ã' => 'a',
-            'Á' | 'À' | 'Â' | 'Ã' => 'A',
-            'é' | 'ê' => 'e',
-            'É' | 'Ê' => 'E',
-            'í' => 'i',
-            'Í' => 'I',
-            'ó' | 'ô' | 'õ' => 'o',
-            'Ó' | 'Ô' | 'Õ' => 'O',
-            'ú' => 'u',
-            'Ú' => 'U',
-            'ç' => 'c',
-            'Ç' => 'C',
-            c => c,
-        })
-        .collect()
-}
-
 fn clock(secs: u32) -> String {
     format!("{}:{:02}", secs / 60, secs % 60)
 }
 
 fn progress_label(line: &ContractLine) -> String {
     if line.hunt {
-        format!("abates {}/{}", line.progress, line.target)
+        trf(
+            "abates {0}/{1}",
+            &[&line.progress.to_string(), &line.target.to_string()],
+        )
     } else {
-        String::from("entregue ao atracar no destino")
+        tr("entregue ao atracar no destino")
     }
 }
 
@@ -233,7 +215,7 @@ pub fn guild_view(prices: Option<&GuildPrices>, storage: &[StorageLine], here: &
     let other_index = (0..prices.ports.len()).find(|index| *index != here_index);
     GuildView {
         other_port: other_index
-            .map(|index| ascii(&prices.ports[index]))
+            .map(|index| tr(&prices.ports[index]))
             .unwrap_or_default(),
         rows: prices
             .lines
@@ -245,7 +227,7 @@ pub fn guild_view(prices: Option<&GuildPrices>, storage: &[StorageLine], here: &
                     .unwrap_or(here);
                 GuildRow {
                     item: line.item,
-                    name: ascii(&line.item_name),
+                    name: tr(&line.item_name),
                     stored: quantity_of(storage, line.item),
                     in_cargo: quantity_of(&prices.cargo, line.item),
                     here,
@@ -289,13 +271,13 @@ fn guild_button(parent: &mut ChildBuilder, label: &str, action: GuildButton, col
 
 pub fn spawn_guild_body(parent: &mut ChildBuilder, view: &GuildView) {
     parent.spawn(ui::text(
-        "GUILDA MERCANTE - compra do armazem deste porto (item vendido e destruido)",
+        "GUILDA MERCANTE - compra do armazém deste porto (item vendido é destruído)",
         12.0,
         ui::PANEL_BORDER,
     ));
     if view.rows.is_empty() {
         parent.spawn(ui::text(
-            "Aguardando precos da guilda...",
+            "Aguardando preços da guilda...",
             13.0,
             ui::TEXT_DIM,
         ));
@@ -308,9 +290,9 @@ pub fn spawn_guild_body(parent: &mut ChildBuilder, view: &GuildView) {
         })
         .with_children(|header| {
             cell(header, "Item", 150.0, ui::TEXT_DIM);
-            cell(header, "Armazem", 70.0, ui::TEXT_DIM);
-            cell(header, "Porao", 60.0, ui::TEXT_DIM);
-            cell(header, "Preco aqui", 80.0, ui::TEXT_DIM);
+            cell(header, "Armazém", 70.0, ui::TEXT_DIM);
+            cell(header, "Porão", 60.0, ui::TEXT_DIM);
+            cell(header, "Preço aqui", 80.0, ui::TEXT_DIM);
             cell(header, view.other_port.as_str(), 150.0, ui::TEXT_DIM);
         });
     for row in &view.rows {
@@ -344,7 +326,7 @@ pub fn spawn_guild_body(parent: &mut ChildBuilder, view: &GuildView) {
             });
     }
     parent.spawn(ui::text(
-        "Vender muito derruba o preco; ele se recupera com o tempo. Deposite o porao para vender.",
+        "Vender muito derruba o preço; ele se recupera com o tempo. Deposite o porão para vender.",
         11.0,
         ui::TEXT_DIM,
     ));
@@ -380,13 +362,12 @@ pub fn spawn_contracts_body(parent: &mut ChildBuilder, view: &ContractsView) {
                     ..default()
                 })
                 .with_children(|line| {
-                    line.spawn(ui::text(ascii(&active.title), 14.0, ui::TEXT));
+                    line.spawn(ui::text(tr(&active.title), 14.0, ui::TEXT));
                     line.spawn(ui::text(format!("{}g", active.reward), 14.0, ui::GOLD));
                     line.spawn(ui::text(
-                        format!(
-                            "{} restantes - {}",
-                            clock(active.remaining_secs),
-                            progress_label(active)
+                        trf(
+                            "{0} restantes - {1}",
+                            &[&clock(active.remaining_secs), &progress_label(active)],
                         ),
                         13.0,
                         ui::AMBER,
@@ -421,7 +402,7 @@ pub fn spawn_contracts_body(parent: &mut ChildBuilder, view: &ContractsView) {
             })
             .with_children(|line| {
                 line.spawn((
-                    ui::text(ascii(&offer.title), 14.0, ui::TEXT),
+                    ui::text(tr(&offer.title), 14.0, ui::TEXT),
                     Node {
                         width: Val::Px(470.0),
                         ..default()
@@ -440,7 +421,7 @@ pub fn spawn_contracts_body(parent: &mut ChildBuilder, view: &ContractsView) {
             });
     }
     parent.spawn(ui::text(
-        "1 contrato por vez. Entrega: a carga vai no porao e pode ser saqueada no caminho.",
+        "1 contrato por vez. Entrega: a carga vai no porão e pode ser saqueada no caminho.",
         11.0,
         ui::TEXT_DIM,
     ));
@@ -487,12 +468,14 @@ fn update_contract_hud(
     let Some(active) = active else {
         return;
     };
-    let value = format!(
-        "CONTRATO: {}\n{} - {} - {}g",
-        ascii(&active.title),
-        clock(active.remaining_secs),
-        progress_label(&active),
-        active.reward
+    let value = trf(
+        "CONTRATO: {0}\n{1} - {2} - {3}g",
+        &[
+            &tr(&active.title),
+            &clock(active.remaining_secs),
+            &progress_label(&active),
+            &active.reward.to_string(),
+        ],
     );
     for mut text in &mut texts {
         if text.0 != value {
@@ -563,9 +546,5 @@ mod tests {
         assert_eq!(active_contract(&known, 40.0).unwrap().remaining_secs, 70);
         assert_eq!(active_contract(&known, 500.0).unwrap().remaining_secs, 0);
         assert_eq!(clock(70), "1:10");
-        assert_eq!(
-            ascii("Canhão de Bronze, Minério"),
-            "Canhao de Bronze, Minerio"
-        );
     }
 }

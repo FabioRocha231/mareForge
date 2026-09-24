@@ -6,7 +6,9 @@
 use bevy::ecs::prelude::*;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
-use marvyr_domain_crafting::{can_construct, Ingredient, Recipe, ShipConstructionJob, StationKind};
+use marvyr_domain_crafting::{
+    can_construct, CraftError, Ingredient, Recipe, ShipConstructionJob, StationKind,
+};
 use marvyr_domain_items::ItemCatalog;
 use marvyr_domain_ships::{ShipDefinition, ShipKind, VesselPresence};
 use marvyr_domain_world::map::PIRATE_PORT;
@@ -269,7 +271,14 @@ pub fn handle_craft(
                 ship_id = ship.ship_id,
                 "craft recusado: atraca primeiro (E) — oficina é serviço de porto"
             );
-            send_craft_result(&mut connection_manager, client_id, recipe_num, false);
+            send_craft_result(
+                &mut connection_manager,
+                client_id,
+                recipe_num,
+                Err(String::from(
+                    "Precisa estar atracado num porto com oficina: atraque com E.",
+                )),
+            );
             continue;
         };
         let character = ship.character;
@@ -291,7 +300,7 @@ pub fn handle_craft(
                         output = %name,
                         "equipamento fabricado no storage do porto"
                     );
-                    send_craft_result(&mut connection_manager, client_id, recipe_num, true);
+                    send_craft_result(&mut connection_manager, client_id, recipe_num, Ok(()));
                 }
                 Err(error) => {
                     warn!(
@@ -300,7 +309,12 @@ pub fn handle_craft(
                         error = %error,
                         "craft recusado (insumo no storage? deposite com Z)"
                     );
-                    send_craft_result(&mut connection_manager, client_id, recipe_num, false);
+                    send_craft_result(
+                        &mut connection_manager,
+                        client_id,
+                        recipe_num,
+                        Err(craft_error_reason(&error, &dev.catalog)),
+                    );
                 }
             }
             continue;
@@ -327,7 +341,14 @@ pub fn handle_craft(
         }
 
         warn!(recipe_num, "receita desconhecida (fail-closed)");
-        send_craft_result(&mut connection_manager, client_id, recipe_num, false);
+        send_craft_result(
+            &mut connection_manager,
+            client_id,
+            recipe_num,
+            Err(String::from(
+                "Receita desconhecida: reabra a oficina e escolha outra.",
+            )),
+        );
     }
 }
 
@@ -349,7 +370,7 @@ fn build_ship_for_job(
     old_entity: Entity,
     old_ship: &mut ServerShip,
     region: RegionId,
-) -> bool {
+) -> Result<(), String> {
     let character = old_ship.character;
     let station = effective_station(map, region, job.required_station);
     // Insumos contam contra o STORAGE (MF-037) — não contra o porão.
@@ -365,7 +386,7 @@ fn build_ship_for_job(
             error = %error,
             "construção recusada (insumos no storage? deposite com Z)"
         );
-        return false;
+        return Err(craft_error_reason(&error, &dev.catalog));
     }
     // A carga atual precisa caber no casco novo (§38) — ela migra inteira.
     let used = old_ship
@@ -381,7 +402,10 @@ fn build_ship_for_job(
             capacity = new_definition.cargo_capacity,
             "carga não cabe no casco novo; descarregue antes"
         );
-        return false;
+        return Err(format!(
+            "Carga não cabe no casco novo ({used}/{}): guarde carga no porto antes.",
+            new_definition.cargo_capacity
+        ));
     }
 
     let cargo: Vec<_> = old_ship.hold.items().to_vec();
@@ -391,7 +415,9 @@ fn build_ship_for_job(
             market.consume_from_storage(character, region, ingredient.item, ingredient.quantity)
         {
             warn!(error = %error, "consumo do storage falhou após validação; construção abortada");
-            return false;
+            return Err(String::from(
+                "Materiais mudaram no armazém: confira e tente de novo.",
+            ));
         }
     }
 
@@ -431,17 +457,66 @@ fn build_ship_for_job(
         ?station,
         "navio construído no Dock com insumos do storage"
     );
-    true
+    Ok(())
+}
+
+/// Motivo curto e acionável (PT-BR) para o jogador a partir do erro de craft.
+fn craft_error_reason(error: &CraftError, catalog: &ItemCatalog) -> String {
+    let name = |item| {
+        catalog
+            .get(item)
+            .map(|definition| definition.display_name.clone())
+            .unwrap_or_else(|| String::from("material"))
+    };
+    match error {
+        CraftError::MissingIngredient {
+            item,
+            needed,
+            available,
+        } => format!(
+            "Faltam materiais: {} {} ({available}/{needed} no armazém). Deposite com Z.",
+            needed - available,
+            name(*item)
+        ),
+        CraftError::WrongStation { required, .. } => match required {
+            StationKind::Workbench => {
+                String::from("Precisa da oficina: atraque no Porto da Serra.")
+            }
+            StationKind::Anvil => {
+                String::from("Precisa da Forja Pirata: atraque no porto das Águas Negras.")
+            }
+            _ => String::from("Precisa estar atracado num porto com estaleiro."),
+        },
+        CraftError::EmptyStorage => {
+            String::from("Armazém vazio neste porto: deposite materiais com Z.")
+        }
+        CraftError::NoRoomForOutput | CraftError::Cargo(_) => {
+            String::from("Sem espaço para o item: libere espaço no armazém.")
+        }
+        CraftError::UnknownOutputItem { .. } => {
+            String::from("Receita indisponível: escolha outra.")
+        }
+    }
 }
 
 fn send_craft_result(
     connection_manager: &mut ConnectionManager,
     client_id: ClientId,
     recipe_id: u32,
-    success: bool,
+    outcome: Result<(), String>,
 ) {
-    let _ = connection_manager
-        .send_message::<ReliableChannel, _>(client_id, &CraftResult { recipe_id, success });
+    let (success, reason) = match outcome {
+        Ok(()) => (true, String::new()),
+        Err(reason) => (false, reason),
+    };
+    let _ = connection_manager.send_message::<ReliableChannel, _>(
+        client_id,
+        &CraftResult {
+            recipe_id,
+            success,
+            reason,
+        },
+    );
 }
 
 #[cfg(test)]

@@ -80,35 +80,46 @@ impl ConnectionStatus {
 
     /// Texto da tela de conexão (`None` = em jogo, sem tela).
     pub fn message(&self, target: Option<&ServerTarget>) -> Option<(String, Color)> {
+        use crate::i18n::{tr, trf};
         let server = target.map(ToString::to_string).unwrap_or_default();
-        let retry = "\n\nEnter tenta de novo  ·  Esc sai";
+        let retry = format!("\n\n{}", tr("Enter tenta de novo  ·  Esc sai"));
+        let quit = tr("Esc sai");
         Some(match self {
             Self::InGame | Self::Login => return None,
-            Self::Authenticating => (String::from("Verificando a conta…"), ui::TEXT),
-            Self::Connecting { .. } => (format!("Conectando a {server}…"), ui::TEXT),
+            Self::Authenticating => (tr("Verificando a conta…"), ui::TEXT),
+            Self::Connecting { .. } => (trf("Conectando a {0}…", &[&server]), ui::TEXT),
             Self::Lost => (
                 format!(
-                    "Conexão perdida.\nSeu navio fica 60 s no mar antes de ancorar no porto.{retry}"
+                    "{}{retry}",
+                    tr("Conexão perdida.\nSeu navio fica 60 s no mar antes de ancorar no porto.")
                 ),
                 ui::AMBER,
             ),
             Self::Unavailable(reason) => (
-                format!("Servidor indisponível ({server}).\n{reason}{retry}"),
+                format!(
+                    "{}\n{}{retry}",
+                    trf("Servidor indisponível ({0}).", &[&server]),
+                    tr(reason)
+                ),
                 ui::DANGER,
             ),
             Self::Incompatible { server_protocol, .. } => (
                 format!(
-                    "Esta versão do Marvyr está desatualizada.\n\nAtualize o jogo pelo itch.io.\n\n\
-                     Client protocol: {PROTOCOL_VERSION}\nServer protocol: {server_protocol}\n\n\
-                     Esc sai"
+                    "{}\n\nClient protocol: {PROTOCOL_VERSION}\nServer protocol: {server_protocol}\n\n{quit}",
+                    tr("Esta versão do Marvyr está desatualizada.\n\nAtualize o jogo pelo itch.io.")
                 ),
                 ui::DANGER,
             ),
-            Self::Rejected(reason) => (format!("Conexão recusada.\n{reason}{retry}"), ui::DANGER),
+            Self::Rejected(reason) => (
+                format!("{}\n{}{retry}", tr("Conexão recusada."), tr(reason)),
+                ui::DANGER,
+            ),
             Self::NotConfigured(reason) => (
                 format!(
-                    "Servidor do Marvyr não configurado.\n{reason}\n\n\
-                     Crie marvyr.toml ao lado do Marvyr.exe com:\nserver = \"host:porta\"\n\nEsc sai"
+                    "{}\n{}\n\n{}\nserver = \"host:porta\"\n\n{quit}",
+                    tr("Servidor do Marvyr não configurado."),
+                    tr(reason),
+                    tr("Crie marvyr.toml ao lado do Marvyr.exe com:")
                 ),
                 ui::DANGER,
             ),
@@ -210,9 +221,14 @@ enum LoginButton {
     Login,
     Register,
     Remember,
+    Language,
 }
 #[derive(Component)]
 struct RememberLabel;
+#[derive(Component)]
+struct LanguageLabel;
+#[derive(Component)]
+struct RememberBox;
 
 pub struct SessionPlugin;
 
@@ -403,6 +419,9 @@ fn retry_on_enter(
     }
 }
 
+/// Tela de entrada como cartaz de porto: o mar continua vivo atrás, e no
+/// centro um cartaz de papel com "MARVYR" em tipo de madeira (a segunda cor
+/// fora de registro), o formulário em linhas de preencher e o idioma.
 fn spawn_screens(mut commands: Commands) {
     commands
         .spawn((
@@ -412,106 +431,178 @@ fn spawn_screens(mut commands: Commands) {
                 height: Val::Percent(100.0),
                 align_items: AlignItems::Center,
                 justify_content: JustifyContent::Center,
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(14.0),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.02, 0.05, 0.09, 0.97)),
+            BackgroundColor(ui::INK.with_alpha(0.62)),
             GlobalZIndex(50),
             ConnectionOverlay,
         ))
         .with_children(|root| {
-            root.spawn(ui::text("MARVYR", 54.0, ui::GOLD));
-            root.spawn(ui::text(
-                "O transporte arriscado de riqueza fabricada por jogadores",
-                14.0,
-                ui::TEXT_DIM,
-            ));
-            root.spawn((
-                ui::text("", 18.0, ui::TEXT),
-                TextLayout::new_with_justify(JustifyText::Center),
-                ConnectionText,
-            ));
-            root.spawn((
-                ui::panel(Node {
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(10.0),
-                    width: Val::Px(340.0),
-                    padding: UiRect::all(Val::Px(18.0)),
-                    ..default()
-                }),
-                LoginPanel,
-            ))
-            .with_children(|panel| {
-                panel.spawn(ui::text("Capitão", 12.0, ui::TEXT_DIM));
-                field(panel, LoginField::Username);
-                panel.spawn(ui::text("Senha", 12.0, ui::TEXT_DIM));
-                field(panel, LoginField::Password);
-                panel
+            root.spawn(ui::panel(Node {
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                row_gap: Val::Px(12.0),
+                width: Val::Px(480.0),
+                max_width: Val::Percent(94.0),
+                max_height: Val::Percent(96.0),
+                padding: UiRect::axes(Val::Px(34.0), Val::Px(24.0)),
+                overflow: Overflow::clip(),
+                ..default()
+            }))
+            .with_children(|poster| {
+                ui::masthead(poster, "MARVYR", 76.0);
+                ui::double_rule(poster);
+                poster.spawn((
+                    crate::i18n::label_face(
+                        "O transporte arriscado de riqueza fabricada por jogadores",
+                        ui::FONT_REGULAR,
+                        17.0,
+                        ui::INK,
+                    ),
+                    TextLayout::new_with_justify(JustifyText::Center),
+                ));
+                poster.spawn((
+                    ui::face("", ui::FONT_BOLD, 17.0, ui::INK),
+                    TextLayout::new_with_justify(JustifyText::Center),
+                    ConnectionText,
+                ));
+                poster
                     .spawn((
-                        ui::button(Node::default(), ui::BUTTON_BG),
-                        LoginButton::Remember,
+                        Node {
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(8.0),
+                            width: Val::Percent(100.0),
+                            ..default()
+                        },
+                        LoginPanel,
                     ))
-                    .with_child((ui::text("", 12.0, ui::TEXT), RememberLabel));
-                panel
-                    .spawn(Node {
-                        column_gap: Val::Px(10.0),
-                        justify_content: JustifyContent::Center,
-                        ..default()
-                    })
-                    .with_children(|row| {
-                        row.spawn((
-                            ui::button(Node::default(), ui::BUTTON_SELECTED),
-                            LoginButton::Login,
-                        ))
-                        .with_child(ui::text(
-                            "Entrar (Enter)",
-                            14.0,
-                            ui::TEXT,
+                    .with_children(|panel| {
+                        panel.spawn(crate::i18n::label_face("Capitão", ui::FONT_BOLD, 13.0, ui::INK_SOFT));
+                        field(panel, LoginField::Username);
+                        panel.spawn(crate::i18n::label_face("Senha", ui::FONT_BOLD, 13.0, ui::INK_SOFT));
+                        field(panel, LoginField::Password);
+                        panel
+                            .spawn(Node {
+                                justify_content: JustifyContent::SpaceBetween,
+                                align_items: AlignItems::Center,
+                                margin: UiRect::top(Val::Px(4.0)),
+                                ..default()
+                            })
+                            .with_children(|row| {
+                                row.spawn((
+                                    ui::button(
+                                        Node {
+                                            column_gap: Val::Px(8.0),
+                                            ..default()
+                                        },
+                                        ui::PAPER,
+                                    ),
+                                    LoginButton::Remember,
+                                ))
+                                .with_children(|button| {
+                                    button.spawn((
+                                        Node {
+                                            width: Val::Px(14.0),
+                                            height: Val::Px(14.0),
+                                            border: UiRect::all(Val::Px(2.0)),
+                                            ..default()
+                                        },
+                                        BorderColor(ui::INK),
+                                        BackgroundColor(Color::NONE),
+                                        RememberBox,
+                                    ));
+                                    button.spawn((
+                                        crate::i18n::label("Lembrar de mim", 14.0, ui::INK),
+                                        RememberLabel,
+                                    ));
+                                });
+                                row.spawn((
+                                    ui::button(Node::default(), ui::PAPER),
+                                    LoginButton::Language,
+                                ))
+                                .with_child((ui::text("", 14.0, ui::INK), LanguageLabel));
+                            });
+                        panel
+                            .spawn(Node {
+                                column_gap: Val::Px(12.0),
+                                justify_content: JustifyContent::Center,
+                                margin: UiRect::top(Val::Px(6.0)),
+                                ..default()
+                            })
+                            .with_children(|row| {
+                                row.spawn((
+                                    ui::button(
+                                        Node {
+                                            padding: UiRect::axes(Val::Px(22.0), Val::Px(9.0)),
+                                            ..default()
+                                        },
+                                        ui::BUTTON_SELECTED,
+                                    ),
+                                    LoginButton::Login,
+                                ))
+                                .with_child(crate::i18n::label_face(
+                                    "Entrar",
+                                    ui::FONT_BOLD,
+                                    18.0,
+                                    ui::INK,
+                                ));
+                                row.spawn((
+                                    ui::button(
+                                        Node {
+                                            padding: UiRect::axes(Val::Px(18.0), Val::Px(9.0)),
+                                            ..default()
+                                        },
+                                        ui::PAPER_SHADE,
+                                    ),
+                                    LoginButton::Register,
+                                ))
+                                .with_child(crate::i18n::label_face(
+                                    "Criar conta",
+                                    ui::FONT_BOLD,
+                                    18.0,
+                                    ui::INK,
+                                ));
+                            });
+                        panel.spawn((
+                            ui::face("", ui::FONT_BOLD, 14.0, ui::VERMILION_INK),
+                            TextLayout::new_with_justify(JustifyText::Center),
+                            LoginMessage,
                         ));
-                        row.spawn((
-                            ui::button(Node::default(), ui::BUTTON_BG),
-                            LoginButton::Register,
-                        ))
-                        .with_child(ui::text(
-                            "Criar conta",
-                            14.0,
-                            ui::TEXT,
+                        panel.spawn((
+                            crate::i18n::label_face(
+                                "Tab troca de campo · nome: 3 a 20 letras, números ou _ · senha: 8+",
+                                ui::FONT_REGULAR,
+                                13.0,
+                                ui::INK_SOFT,
+                            ),
+                            TextLayout::new_with_justify(JustifyText::Center),
                         ));
                     });
-                panel.spawn((
-                    ui::text("", 12.0, ui::AMBER),
-                    TextLayout::new_with_justify(JustifyText::Center),
-                    LoginMessage,
-                ));
-                panel.spawn(ui::text(
-                    "Tab troca de campo · nome: 3–20 letras, números ou _ · senha: 8+",
-                    10.0,
-                    ui::TEXT_DIM,
+                ui::rule(poster);
+                poster.spawn(ui::text(
+                    format!(
+                        "Marvyr {VERSION_LABEL} · build {BUILD_SHA} · protocolo {PROTOCOL_VERSION}"
+                    ),
+                    12.0,
+                    ui::INK_SOFT,
                 ));
             });
-            root.spawn(ui::text(
-                format!(
-                    "Marvyr {VERSION_LABEL} · build {BUILD_SHA} · protocolo {PROTOCOL_VERSION}"
-                ),
-                11.0,
-                ui::TEXT_DIM,
-            ));
         });
 }
 
+/// Campo de preencher: linha de tinta embaixo, como num formulário impresso.
 fn field(panel: &mut ChildBuilder, kind: LoginField) {
     panel.spawn((
         Node {
-            border: UiRect::all(Val::Px(1.0)),
-            padding: UiRect::axes(Val::Px(8.0), Val::Px(6.0)),
-            min_height: Val::Px(30.0),
+            border: UiRect::bottom(Val::Px(2.0)),
+            padding: UiRect::axes(Val::Px(6.0), Val::Px(5.0)),
+            min_height: Val::Px(34.0),
             ..default()
         },
-        BackgroundColor(ui::BAR_TRACK),
-        BorderColor(ui::PANEL_BORDER.with_alpha(0.5)),
-        BorderRadius::all(Val::Px(4.0)),
-        ui::text("", 16.0, ui::TEXT),
+        BackgroundColor(ui::PAPER_SHADE.with_alpha(0.6)),
+        BorderColor(ui::INK),
+        Interaction::None,
+        ui::face("", ui::FONT_BOLD, 19.0, ui::INK),
         kind,
     ));
 }
@@ -566,6 +657,7 @@ fn type_into_form(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn click_login_buttons(
     buttons: Query<(&Interaction, &LoginButton), Changed<Interaction>>,
     fields: Query<(&Interaction, &LoginField), Changed<Interaction>>,
@@ -573,6 +665,8 @@ fn click_login_buttons(
     mut status: ResMut<ConnectionStatus>,
     mut pending: ResMut<PendingAuth>,
     launch: Option<Res<Launch>>,
+    lang: Res<crate::i18n::Lang>,
+    mut change_lang: EventWriter<crate::i18n::ChangeLang>,
 ) {
     if *status != ConnectionStatus::Login {
         return;
@@ -605,6 +699,9 @@ fn click_login_buttons(
                 true,
             ),
             LoginButton::Remember => form.remember = !form.remember,
+            LoginButton::Language => {
+                change_lang.send(crate::i18n::ChangeLang(lang.toggled()));
+            }
         }
     }
 }
@@ -749,17 +846,20 @@ fn draw_screens(
             Without<RememberLabel>,
         ),
     >,
-    mut remember: Query<
+    mut remember: Query<&mut BackgroundColor, With<RememberBox>>,
+    mut language: Query<
         &mut Text,
         (
-            With<RememberLabel>,
+            With<LanguageLabel>,
             Without<ConnectionText>,
             Without<LoginField>,
             Without<LoginMessage>,
+            Without<RememberLabel>,
         ),
     >,
+    lang: Res<crate::i18n::Lang>,
 ) {
-    if !status.is_changed() && !form.is_changed() {
+    if !status.is_changed() && !form.is_changed() && !lang.is_changed() {
         return;
     }
     let in_game = *status == ConnectionStatus::InGame;
@@ -781,7 +881,7 @@ fn draw_screens(
     let target = launch.as_ref().and_then(|launch| launch.0.server.as_ref());
     for (mut text, mut color) in &mut texts {
         let (message, tint) = status.message(target).unwrap_or_default();
-        text.0 = ui::fold(&message);
+        text.0 = crate::i18n::tr(&message);
         color.0 = tint;
     }
     for (kind, mut text, mut border) in &mut fields {
@@ -789,20 +889,37 @@ fn draw_screens(
             LoginField::Username => (form.username.clone(), form.focus == 0),
             LoginField::Password => ("*".repeat(form.password.chars().count()), form.focus == 1),
         };
-        let value = ui::fold(&value);
         text.0 = if focused { format!("{value}|") } else { value };
-        border.0 = if focused {
-            ui::GOLD
-        } else {
-            ui::PANEL_BORDER.with_alpha(0.5)
-        };
+        border.0 = if focused { ui::VERMILION } else { ui::INK };
     }
     for mut text in &mut messages {
-        text.0 = ui::fold(&form.message.clone().unwrap_or_default());
+        text.0 = crate::i18n::tr(&form.message.clone().unwrap_or_default());
     }
-    for mut text in &mut remember {
-        text.0 = format!("[{}] Lembrar de mim", if form.remember { "x" } else { " " });
+    for mut check in &mut remember {
+        check.0 = if form.remember { ui::INK } else { Color::NONE };
     }
+    for mut text in &mut language {
+        // O botão oferece o OUTRO idioma, escrito nele mesmo.
+        text.0 = String::from(match *lang {
+            crate::i18n::Lang::Pt => "Play in English",
+            crate::i18n::Lang::En => "Jogar em português",
+        });
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn init_systems_for_tests(world: &mut World) {
+    fn init<M>(world: &mut World, system: impl IntoSystem<(), (), M>) {
+        let mut system = IntoSystem::into_system(system);
+        system.initialize(world);
+    }
+    init(world, draw_screens);
+    init(world, click_login_buttons);
+    init(world, type_into_form);
+    init(world, start_connection);
+    init(world, finish_connection);
+    init(world, handshake_timeout);
+    init(world, retry_on_enter);
 }
 
 #[cfg(test)]

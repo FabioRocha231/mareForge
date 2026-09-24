@@ -99,16 +99,17 @@ fn clock(secs: f32) -> String {
     format!("{}:{:02}", secs / 60, secs % 60)
 }
 
-/// Texto curto do portal (ASCII: a fonte padrão não tem acentos).
+/// Texto curto do portal no idioma ativo.
 fn portal_label(portal: &PortalState, remaining: f32) -> String {
+    use crate::i18n::{tr, trf};
     let uses = portal
         .uses_left
-        .map(|n| format!(" - {n} vaga(s)"))
+        .map(|n| format!(" · {}", trf("{0} vaga(s)", &[&n.to_string()])))
         .unwrap_or_default();
     match portal.kind {
-        PortalKindWire::FogGate => format!("Cerracao {}{uses}", clock(remaining)),
-        PortalKindWire::FogExit => format!("Saida da Cerracao {}", clock(remaining)),
-        PortalKindWire::Whirlpool => format!("Sorvedouro{uses}"),
+        PortalKindWire::FogGate => format!("{} {}{uses}", tr("Cerração"), clock(remaining)),
+        PortalKindWire::FogExit => format!("{} {}", tr("Saída da Cerração"), clock(remaining)),
+        PortalKindWire::Whirlpool => format!("{}{uses}", tr("Sorvedouro")),
     }
 }
 
@@ -117,6 +118,14 @@ fn portal_color(kind: PortalKindWire) -> Color {
         PortalKindWire::FogGate => Color::srgb(0.86, 0.9, 0.95),
         PortalKindWire::FogExit => Color::srgb(0.7, 1.0, 0.8),
         PortalKindWire::Whirlpool => Color::srgb(0.55, 0.85, 1.0),
+    }
+}
+
+/// Fio da etiqueta de borda no papel (as cores do mar são claras demais).
+fn portal_ink(kind: PortalKindWire) -> Color {
+    match kind {
+        PortalKindWire::FogGate | PortalKindWire::FogExit => ui::INK_SOFT,
+        PortalKindWire::Whirlpool => ui::TEAL,
     }
 }
 
@@ -224,14 +233,17 @@ fn animate_orbiters(time: Res<Time>, mut orbiters: Query<(&mut Orbiter, &mut Tra
 
 /// Setas na borda da tela para portais fora de vista (até 2,5 km): é o que
 /// faz o jogador largar a rota e ir atrás da cerração.
+#[allow(clippy::too_many_arguments)]
 fn update_edge_markers(
     mut commands: Commands,
+    docked: Res<crate::net::MyDocked>,
     known: Res<KnownPortals>,
     my_ship: Res<crate::net::MyShip>,
     ships: Query<&ShipVisual>,
     camera: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
     mut markers: Query<(Entity, &EdgeMarker, &mut Node, &Children)>,
     mut texts: Query<&mut Text>,
+    ui_scale: Res<UiScale>,
 ) {
     let Ok((camera, camera_transform)) = camera.get_single() else {
         return;
@@ -244,6 +256,8 @@ fn update_edge_markers(
         .and_then(|id| ships.iter().find(|ship| ship.target.ship_id == id))
         .map(|ship| Vec2::new(ship.target.x, ship.target.y));
     let mut wanted: HashMap<u32, (Vec2, String)> = HashMap::new();
+    // Atracado, a tela de porto é o mundo: nada de etiqueta de borda.
+    let me = me.filter(|_| !docked.0);
     if let Some(me) = me {
         for portal in known.portals.values() {
             let at = Vec2::new(portal.x, portal.y);
@@ -255,21 +269,38 @@ fn update_edge_markers(
                 continue;
             };
             // Faixa livre entre os painéis do HUD (topo e rodapé ocupados;
-            // o painel de vento desce até ~140 px).
-            let area = Rect::new(60.0, 150.0, viewport.x - 60.0, viewport.y - 130.0);
+            // o painel de vento desce até ~140 px, a manchete de evento até ~180
+            // e o bilhete de ação sobe até ~135 px do rodapé).
+            let area = Rect::new(60.0, 190.0, viewport.x - 60.0, viewport.y - 165.0);
             if area.contains(screen) {
                 continue;
             }
-            let pos = edge_position(screen, area);
+            // O viewport é lógico; `Node` em px é multiplicado pelo UiScale.
+            let pos = edge_position(screen, area) / ui_scale.0;
             let name = match portal.kind {
-                PortalKindWire::FogGate => "CERRACAO",
-                PortalKindWire::FogExit => "SAIDA",
-                PortalKindWire::Whirlpool => "SORVEDOURO",
+                PortalKindWire::FogGate => "Cerração",
+                PortalKindWire::FogExit => "Saída",
+                PortalKindWire::Whirlpool => "Sorvedouro",
             };
             wanted.insert(
                 portal.portal_id,
-                (pos, format!("{name} {}m", distance as u32)),
+                (
+                    pos,
+                    format!(
+                        "{} {}m",
+                        crate::i18n::tr(name).to_uppercase(),
+                        distance as u32
+                    ),
+                ),
             );
+        }
+    }
+    // Etiquetas na mesma borda empilham em vez de se cobrir.
+    let mut placed: Vec<(u32, Vec2)> = wanted.iter().map(|(id, (pos, _))| (*id, *pos)).collect();
+    stack_tags(&mut placed);
+    for (id, pos) in placed {
+        if let Some(entry) = wanted.get_mut(&id) {
+            entry.0 = pos;
         }
     }
     for (entity, marker, mut node, children) in &mut markers {
@@ -292,11 +323,12 @@ fn update_edge_markers(
         }
     }
     for (id, (pos, label)) in wanted {
-        let color = known
+        // Etiqueta de papel: tinta preta, fio na cor do portal.
+        let accent = known
             .portals
             .get(&id)
-            .map(|p| portal_color(p.kind))
-            .unwrap_or(ui::TEXT);
+            .map(|p| portal_ink(p.kind))
+            .unwrap_or(ui::INK);
         commands
             .spawn((
                 EdgeMarker(id),
@@ -304,13 +336,35 @@ fn update_edge_markers(
                     position_type: PositionType::Absolute,
                     left: Val::Px(pos.x - 40.0),
                     top: Val::Px(pos.y - 10.0),
-                    padding: UiRect::axes(Val::Px(6.0), Val::Px(2.0)),
+                    padding: UiRect::axes(Val::Px(7.0), Val::Px(2.0)),
                     ..default()
                 }),
             ))
+            // `insert` troca o fio do papel (um bundle com BorderColor
+            // duplicado derruba o app).
+            .insert(BorderColor(accent))
             .with_children(|panel| {
-                panel.spawn(ui::text(label, 11.0, color));
+                panel.spawn(ui::face(label, ui::FONT_BOLD, 12.0, ui::INK));
             });
+    }
+}
+
+/// Empurra para baixo cada etiqueta que colide com qualquer uma já posta
+/// (ordem por altura). Etiquetas têm ~200 px: perto na horizontal já colide.
+fn stack_tags(placed: &mut [(u32, Vec2)]) {
+    const WIDTH: f32 = 240.0;
+    const GAP: f32 = 32.0;
+    placed.sort_by(|a, b| a.1.y.total_cmp(&b.1.y).then(a.0.cmp(&b.0)));
+    for index in 1..placed.len() {
+        let mut pos = placed[index].1;
+        // ponytail: O(n²) com n = portais a 2,5 km (poucos); basta.
+        while let Some(hit) = placed[..index]
+            .iter()
+            .find(|(_, other)| (pos.x - other.x).abs() < WIDTH && (pos.y - other.y).abs() < GAP)
+        {
+            pos.y = hit.1.y + GAP;
+        }
+        placed[index].1 = pos;
     }
 }
 
@@ -485,6 +539,22 @@ fn snap_camera_on_teleport(
 mod tests {
     use super::*;
 
+    #[test]
+    fn three_tags_on_one_edge_never_overlap() {
+        // A e C colidem mas não são vizinhos na ordem (B fica entre eles).
+        let mut placed = vec![
+            (1, Vec2::new(640.0, 190.0)),
+            (2, Vec2::new(1060.0, 190.0)),
+            (3, Vec2::new(700.0, 190.0)),
+        ];
+        stack_tags(&mut placed);
+        for (i, (_, a)) in placed.iter().enumerate() {
+            for (_, b) in &placed[i + 1..] {
+                assert!((a.x - b.x).abs() >= 240.0 || (a.y - b.y).abs() >= 32.0);
+            }
+        }
+    }
+
     fn portal(kind: PortalKindWire, uses_left: Option<u32>) -> PortalState {
         PortalState {
             portal_id: 1,
@@ -498,12 +568,11 @@ mod tests {
     }
 
     #[test]
-    fn labels_are_ascii_and_show_time_and_seats() {
+    fn labels_show_time_and_seats() {
         let label = portal_label(&portal(PortalKindWire::FogGate, Some(2)), 125.0);
-        assert_eq!(label, "Cerracao 2:05 - 2 vaga(s)");
-        assert!(label.is_ascii());
+        assert_eq!(label, "Cerração 2:05 · 2 vaga(s)");
         let exit = portal_label(&portal(PortalKindWire::FogExit, None), 61.0);
-        assert_eq!(exit, "Saida da Cerracao 1:01");
+        assert_eq!(exit, "Saída da Cerração 1:01");
     }
 
     #[test]

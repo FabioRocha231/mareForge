@@ -26,4 +26,20 @@ faz o jogo esquecer o login neste computador.
 
 ## Controles
 
-Veja a seção de controles no [README](../README.md).
+Aperte **F1** (ou **Esc** no mar) para abrir o livreto do marujo: ele lista
+todos os controles, explica os rótulos do mar e tem as opções. O bilhete de
+ação no rodapé sempre mostra a tecla do que dá para fazer agora (atracar,
+coletar, saquear, abordar, cavar).
+
+Na primeira viagem, um guia de seis passos acompanha você: zarpar, coletar,
+atracar, vender ou guardar, fabricar e levar carga a outro porto. Dá para
+recomeçar o guia em **Livreto → Opções**.
+
+Controle (gamepad) funciona: analógico esquerdo ou direcional para velas e
+leme, **A** para a ação do bilhete, **LB/RB** para os canhões e **Start** para
+o livreto.
+
+## Idioma
+
+O jogo tem português e inglês. Aperte **L** no mar para trocar, ou use o botão
+na tela de entrada. A escolha fica salva.

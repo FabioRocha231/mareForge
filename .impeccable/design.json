@@ -1,0 +1,381 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-24T12:00:00Z",
+  "title": "Design System: Marvyr",
+  "extensions": {
+    "colorMeta": {
+      "rag-paper": {
+        "role": "neutral",
+        "displayName": "Rag Paper",
+        "canonical": "#e9dcc0",
+        "tonalRamp": [
+          "#100a02",
+          "#2e240c",
+          "#4b4129",
+          "#6b6047",
+          "#8d8167",
+          "#b0a489",
+          "#d5c8ac",
+          "#f6eedd"
+        ]
+      },
+      "aged-paper": {
+        "role": "neutral",
+        "displayName": "Aged Paper",
+        "canonical": "#d8c7a2",
+        "tonalRamp": [
+          "#110a00",
+          "#302301",
+          "#4e401f",
+          "#6f5f3e",
+          "#90815e",
+          "#b4a37f",
+          "#d8c7a2",
+          "#f8eed7"
+        ]
+      },
+      "press-ink": {
+        "role": "primary",
+        "displayName": "Press Ink",
+        "canonical": "#16202b",
+        "tonalRamp": [
+          "#070c11",
+          "#1c2631",
+          "#38434f",
+          "#576370",
+          "#778492",
+          "#9aa7b5",
+          "#bdcbda",
+          "#e7eff9"
+        ]
+      },
+      "thin-ink": {
+        "role": "neutral",
+        "displayName": "Thin Ink",
+        "canonical": "#4a4f54",
+        "tonalRamp": [
+          "#090b0e",
+          "#21262a",
+          "#3e4347",
+          "#5d6267",
+          "#7e8388",
+          "#a0a6ab",
+          "#c4cad0",
+          "#ebeff3"
+        ]
+      },
+      "vermilion": {
+        "role": "primary",
+        "displayName": "Vermilion",
+        "canonical": "#c2362b",
+        "tonalRamp": [
+          "#2a0000",
+          "#620000",
+          "#890000",
+          "#b0221a",
+          "#d84c3e",
+          "#ff7161",
+          "#ff9784",
+          "#ffd3c5"
+        ]
+      },
+      "vermilion-ink": {
+        "role": "tertiary",
+        "displayName": "Vermilion Ink",
+        "canonical": "#a8281f",
+        "tonalRamp": [
+          "#280000",
+          "#5e0000",
+          "#840000",
+          "#ab2c22",
+          "#d35244",
+          "#fc7766",
+          "#ff9b89",
+          "#ffd6c8"
+        ]
+      },
+      "sea-teal": {
+        "role": "secondary",
+        "displayName": "Sea Teal",
+        "canonical": "#1f5f73",
+        "tonalRamp": [
+          "#000e18",
+          "#002b3e",
+          "#004a5d",
+          "#2c6a7e",
+          "#4f8ca1",
+          "#72afc5",
+          "#96d4eb",
+          "#d1f6ff"
+        ]
+      },
+      "brass": {
+        "role": "secondary",
+        "displayName": "Brass",
+        "canonical": "#d9a441",
+        "tonalRamp": [
+          "#1b0400",
+          "#441600",
+          "#653500",
+          "#875600",
+          "#ab7800",
+          "#cf9b36",
+          "#f5bf5f",
+          "#ffeab4"
+        ]
+      },
+      "brass-ink": {
+        "role": "tertiary",
+        "displayName": "Brass Ink",
+        "canonical": "#7a4e0e",
+        "tonalRamp": [
+          "#190500",
+          "#401800",
+          "#613700",
+          "#83561a",
+          "#a6783f",
+          "#cb9b62",
+          "#f1bf85",
+          "#ffe9c6"
+        ]
+      },
+      "ochre-ink": {
+        "role": "tertiary",
+        "displayName": "Ochre Ink",
+        "canonical": "#9a5a0c",
+        "tonalRamp": [
+          "#1e0200",
+          "#490d00",
+          "#6b2f00",
+          "#8e4f00",
+          "#b3712d",
+          "#d99452",
+          "#ffb876",
+          "#ffe5bf"
+        ]
+      },
+      "brass-wash": {
+        "role": "neutral",
+        "displayName": "Brass Wash",
+        "canonical": "#e7c374",
+        "tonalRamp": [
+          "#170700",
+          "#3b1d00",
+          "#5b3b00",
+          "#7c5b00",
+          "#9f7d2b",
+          "#c3a051",
+          "#e8c475",
+          "#ffecbe"
+        ]
+      },
+      "bar-track": {
+        "role": "neutral",
+        "displayName": "Bar Track",
+        "canonical": "rgba(22, 32, 43, 0.16)"
+      },
+      "paper-shadow": {
+        "role": "neutral",
+        "displayName": "Paper Shadow",
+        "canonical": "rgba(5, 13, 23, 0.45)"
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "Login title only (MARVYR, 76px)."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Mastheads and alert headlines, 30-40px."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Slip titles, 19-28px."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Prose in posters, pamphlet and hints, 14-18px."
+      },
+      "action": {
+        "displayName": "Action",
+        "purpose": "Verb on action slips and buttons."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Uppercase stat labels and stamps, 12-13px."
+      },
+      "default": {
+        "displayName": "Default",
+        "purpose": "Zilla Slab SemiBold replaces the Bevy default font for all unstyled text."
+      }
+    },
+    "shadows": [
+      {
+        "name": "paper-lift",
+        "value": "0 3px 6px 0 rgba(5,13,23,0.45)",
+        "purpose": "Every slip; paper resting on water."
+      }
+    ],
+    "motion": [
+      {
+        "name": "fade-banner",
+        "value": "in 0.4s, hold to 2.4s, out to 3.2s",
+        "purpose": "Zone banner and toasts (UiFade)."
+      },
+      {
+        "name": "fade-warning",
+        "value": "in 0.5s, hold to 4s, out to 5s",
+        "purpose": "PvP warning slip."
+      },
+      {
+        "name": "button-hover",
+        "value": "instant, base mixed 55% toward brass-wash",
+        "purpose": "Hover state; pressed fills brass."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "ui-scale-floor",
+        "value": "0.85 (min(w/1280,h/720) clamped 0.85..1.6)"
+      },
+      {
+        "name": "reference",
+        "value": "1280x720 logical"
+      },
+      {
+        "name": "min-supported",
+        "value": "1366x768"
+      }
+    ],
+    "provenance": {
+      "imagery": "No generated imagery. All visuals are code-drawn (Bevy UI nodes, gizmos) over pre-existing game sprites.",
+      "fonts": "Alfa Slab One, Zilla Slab (Regular, SemiBold, Bold); SIL OFL, license files in assets/external/fonts, embedded via include_bytes."
+    },
+    "knownGaps": [
+      "Deckled paper edge (procedural 9-slice torn border) deferred; slips ship with clean 2px ink borders.",
+      "Rotated ink stamps for zone state deferred; stamps render upright.",
+      "Port-screen title is plain display type, not a misregistered masthead.",
+      "Eyebrow \"PRIMEIRA VIAGEM · N DE 6\" still sits above the objective heading in the guide slip; defect, not a pattern.",
+      "Sea-event headline hides while a zone banner or PvP warning shows, but zone banner and PvP warning can still share a viewport, breaking one-headline-per-screen."
+    ]
+  },
+  "components": [
+    {
+      "name": "Slip",
+      "kind": "card",
+      "refersTo": "slip",
+      "description": "Rag-paper slip pinned over the sea; the unit of every HUD surface.",
+      "html": "<div class=\"ds-slip\"><div class=\"ds-slip-title\">Mercante</div><div class=\"ds-dbl\"></div><div class=\"ds-slip-body\">Tripulação 4/8 · Leme 100%</div></div>",
+      "css": ".ds-slip{background:#e9dcc0;color:#16202b;border:2px solid #16202b;border-radius:2px;padding:8px 12px;box-shadow:0 3px 6px 0 rgba(5,13,23,.45);width:260px;font-family:'Zilla Slab',serif;} .ds-slip-title{font-family:'Alfa Slab One',serif;font-size:22px;line-height:1.1} .ds-dbl{border-top:3px solid #16202b;border-bottom:1px solid #16202b;height:2px;margin:6px 0} .ds-slip-body{font-size:14px;color:#4a4f54}"
+    },
+    {
+      "name": "Masthead",
+      "kind": "custom",
+      "refersTo": "typography.headline",
+      "description": "Wood-type headline with a vermilion second pass out of register; one per screen.",
+      "html": "<div class=\"ds-mast\"><span class=\"ds-mast-2\">BEM-VINDO A BORDO</span><span class=\"ds-mast-1\">BEM-VINDO A BORDO</span></div>",
+      "css": ".ds-mast{position:relative;display:inline-block;font-family:'Alfa Slab One',serif;font-size:40px;line-height:1} .ds-mast-2{position:absolute;left:2.5px;top:2.5px;color:#c2362b} .ds-mast-1{position:relative;color:#16202b}"
+    },
+    {
+      "name": "Button",
+      "kind": "button",
+      "refersTo": "button",
+      "description": "Paper button; hover mixes toward brass wash, pressed fills brass.",
+      "html": "<button class=\"ds-btn\"><span class=\"ds-key\">Esc</span>Já sei navegar</button>",
+      "css": ".ds-btn{display:inline-flex;align-items:center;gap:10px;background:#d8c7a2;color:#16202b;border:1px solid rgba(22,32,43,.45);border-radius:4px;padding:8px 14px;font-family:'Zilla Slab',serif;font-weight:700;font-size:17px;cursor:pointer} .ds-btn:hover{background:#e0c78b} .ds-btn:active{background:#d9a441} .ds-btn:focus-visible{outline:2px solid #c2362b;outline-offset:2px} .ds-key{background:#d8c7a2;border:1.5px solid #16202b;border-radius:3px;padding:2px 7px;min-width:16px;text-align:center;font-size:15px}"
+    },
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Brass-wash default action with its keycap printed at the left.",
+      "html": "<button class=\"ds-btn-p\"><span class=\"ds-key-p\">Enter</span>Zarpar com o guia</button>",
+      "css": ".ds-btn-p{display:inline-flex;align-items:center;gap:10px;background:#e7c374;color:#16202b;border:1px solid rgba(22,32,43,.45);border-radius:4px;padding:8px 14px;font-family:'Zilla Slab',serif;font-weight:700;font-size:17px;cursor:pointer} .ds-btn-p:hover{background:#e7c374;filter:brightness(1.03)} .ds-btn-p:active{background:#d9a441} .ds-btn-p:focus-visible{outline:2px solid #c2362b;outline-offset:2px} .ds-key-p{background:#d8c7a2;border:1.5px solid #16202b;border-radius:3px;padding:2px 7px;font-size:15px}"
+    },
+    {
+      "name": "Keycap",
+      "kind": "chip",
+      "refersTo": "keycap",
+      "description": "Printed key glyph, swapped per input device.",
+      "html": "<span class=\"ds-keycap\">G</span> <span class=\"ds-keycap\">LB</span>",
+      "css": ".ds-keycap{display:inline-block;min-width:16px;text-align:center;background:#d8c7a2;color:#16202b;border:1.5px solid #16202b;border-radius:3px;padding:2px 7px;font-family:'Zilla Slab',serif;font-weight:700;font-size:15px}"
+    },
+    {
+      "name": "Stamp",
+      "kind": "chip",
+      "refersTo": "stamp",
+      "description": "State mark: border and uppercase text in the state color, no fill.",
+      "html": "<span class=\"ds-stamp ds-safe\">PROTEGIDO</span> <span class=\"ds-stamp ds-front\">FRONTEIRA</span>",
+      "css": ".ds-stamp{display:inline-block;border:2px solid currentColor;border-radius:2px;padding:1px 6px;font-family:'Zilla Slab',serif;font-weight:700;font-size:13px;text-transform:uppercase} .ds-safe{color:#1f5f73} .ds-front{color:#9a5a0c}"
+    },
+    {
+      "name": "Field",
+      "kind": "input",
+      "refersTo": "field",
+      "description": "Login field: aged-paper wash, ink underline, vermilion on focus.",
+      "html": "<input class=\"ds-field\" value=\"capitao\" aria-label=\"Capitão\">",
+      "css": ".ds-field{background:rgba(216,199,162,.6);color:#16202b;border:none;border-bottom:2px solid #16202b;border-radius:0;padding:5px 6px;min-height:34px;font-family:'Zilla Slab',serif;font-weight:700;font-size:19px} .ds-field:focus-visible{outline:none;border-bottom-color:#c2362b}"
+    },
+    {
+      "name": "Bar",
+      "kind": "custom",
+      "refersTo": "bar",
+      "description": "8px ink-tint track with a teal fill (hull, reload).",
+      "html": "<div class=\"ds-bar\"><div class=\"ds-bar-fill\"></div></div>",
+      "css": ".ds-bar{width:150px;height:8px;border-radius:3px;background:rgba(22,32,43,.16)} .ds-bar-fill{width:70%;height:100%;border-radius:3px;background:#1f5f73}"
+    }
+  ],
+  "narrative": {
+    "northStar": "Tipografia do Porto",
+    "overview": "**Creative North Star: \"Tipografia do Porto\"**\n\nThe HUD is the harbor's printed matter: notices, bounties and manifests that sail with you. Each element is a slip of rag paper pinned over the living sea. It is printed in press ink with a second pass of vermilion, and the headlines are set in wood type. The sea is the stage and fills the screen. Slips stay small and sit at the corners and bottom edge, so the ship and water stay readable between them.\n\nThe world rejects the genre default of dark translucent panels with metal borders. Depth is paper lifted off water by a soft shadow. Hierarchy comes from wood type against slab text and from the two-color press, never from glow or gradient. Every visual is drawn in code (Bevy UI nodes and gizmos) over the game's existing sprites. The project uses no generated imagery.",
+    "keyCharacteristics": [
+      "Opaque paper slips, 2px ink border, near-square corners, soft downward shadow.",
+      "Two-color press: ink for everything, vermilion only for danger, stamps and the misregistered masthead.",
+      "Wood-type display (Alfa Slab One) over a slab text family (Zilla Slab) in three weights.",
+      "Keycaps printed inline wherever an action is named, swapped per input device.",
+      "Woodcut double rules under mastheads and slip headers."
+    ],
+    "rules": [
+      {
+        "name": "The Two-Pass Press Rule",
+        "body": "Only two inks ever touch the paper: press ink and vermilion, plus their darkened text variants. Teal, brass and ochre are state colors and must carry meaning.",
+        "section": "colors"
+      },
+      {
+        "name": "The Ink-Variant Rule",
+        "body": "A fill color never sets small text on paper. For text, use its `-ink` variant (vermilion-ink, brass-ink, ochre-ink).",
+        "section": "colors"
+      },
+      {
+        "name": "The Wood-Type-Is-Rare Rule",
+        "body": "Alfa Slab One is used only for headlines, titles and the masthead. Running text, labels and numbers are always set in Zilla Slab.",
+        "section": "typography"
+      },
+      {
+        "name": "The Translated-Key Rule",
+        "body": "Every string goes through `i18n::tr`, with the PT-BR text as the key and EN as its value. Layouts must survive EN strings being about 10-20% longer or shorter.",
+        "section": "typography"
+      },
+      {
+        "name": "The Paper-On-Water Rule",
+        "body": "Depth is always a soft offset blur, never a hard offset block, a glow or a halo.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do build every surface from `ui::panel`, `ui::masthead`, `ui::double_rule`, `ui::keycap`, `ui::stamp` and `ui::button`. Never restate their values inline.",
+      "Do print the device-correct keycap next to every named action.",
+      "Do anchor HUD slips to the 16px margin and keep the sea center clear.",
+      "Do use the `-ink` color variants for any text under 20px on paper.",
+      "Do route every string through `i18n::tr` with a PT-BR key and an EN value."
+    ],
+    "donts": [
+      "Don't use dark translucent panels with metal borders. The ink scrim behind modals is the only dark surface.",
+      "Don't set running text, labels or numbers in Alfa Slab One.",
+      "Don't add a third press color or gradients. Vermilion stays reserved for danger, stamps and the masthead's second pass.",
+      "Don't replace the soft paper-lift shadow with a hard offset, glow or halo.",
+      "Don't put more than one masthead on a screen."
+    ]
+  }
+}

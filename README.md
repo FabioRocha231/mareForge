@@ -61,7 +61,13 @@ Essential controls: `W`/`S` raise or lower sail (3 levels), `A`/`D` rudder,
 mouse wheel zoom, `E` dock or undock, `G` gather, `Q`/`R` fire
 broadside weapons, and `F` loot a wreck. At sea: `K` repair (spends timber),
 `H` board a crippled ship, `J` dig at a treasure-map spot, and `P` hire crew
-while docked. The checklist covers the complete UI flow.
+while docked. `F1` (or `Esc` at sea) opens the in-game handbook with every
+control; the action slip at the bottom always shows the key for what you can
+do right now. A gamepad works too (left stick/D-pad sail and rudder, `A` the
+slip's action, `LB`/`RB` broadsides, `Start` handbook). The game speaks
+Brazilian Portuguese and English: `L` switches in game, or start with
+`--lang en` / `MARVYR_LANG=en`. New players get a six-step guided first
+voyage, which can be restarted from the handbook's Options page.
 
 To run the pieces separately against a remote server (login and all):
 
