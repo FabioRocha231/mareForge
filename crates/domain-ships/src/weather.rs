@@ -49,6 +49,8 @@ pub struct Storm {
     pub radius: f32,
     pub age: f32,
     pub lifetime: f32,
+    /// MV-061: tempestade de evento — além do pano, racha o casco.
+    pub tempest: bool,
 }
 
 impl Storm {
@@ -206,7 +208,7 @@ impl Weather {
         self.next_storm_in -= dt;
         if self.next_storm_in <= 0.0 {
             self.next_storm_in = self.uniform(STORM_INTERVAL.0, STORM_INTERVAL.1);
-            if self.storms.len() < MAX_STORMS {
+            if self.storms.iter().filter(|storm| !storm.tempest).count() < MAX_STORMS {
                 self.try_spawn_storm(bounds, &allowed);
             }
         }
@@ -226,6 +228,7 @@ impl Weather {
                     radius,
                     age: 0.0,
                     lifetime,
+                    tempest: false,
                 });
                 self.next_storm_id += 1;
                 return;
@@ -248,8 +251,35 @@ impl Weather {
             radius,
             age: 0.0,
             lifetime,
+            tempest: false,
         });
         self.next_storm_id += 1;
+    }
+
+    /// MV-061: tempestade de evento (a Tormenta). Não conta no limite de
+    /// tempestades comuns; devolve o id da célula.
+    pub fn spawn_tempest_at(&mut self, x: f32, y: f32, radius: f32, lifetime: f32) -> u32 {
+        let id = self.next_storm_id;
+        self.storms.push(Storm {
+            id,
+            x,
+            y,
+            radius,
+            age: 0.0,
+            lifetime,
+            tempest: true,
+        });
+        self.next_storm_id += 1;
+        id
+    }
+
+    /// Influência só das tempestades de evento (dano de casco).
+    pub fn tempest_influence(&self, x: f32, y: f32) -> f32 {
+        self.storms
+            .iter()
+            .filter(|storm| storm.tempest)
+            .map(|storm| storm.influence_at(x, y))
+            .fold(0.0, f32::max)
     }
 }
 
@@ -352,5 +382,40 @@ mod tests {
             weather.wind_at(storm.x + 500.0, storm.y),
             weather.base_wind()
         );
+    }
+
+    #[test]
+    fn tempest_hits_hull_only_inside_its_cell() {
+        let mut weather = Weather::new(3);
+        weather.spawn_storm_at(0.0, 0.0, 300.0, 200.0);
+        assert_eq!(weather.tempest_influence(0.0, 0.0), 0.0, "tempestade comum");
+        let id = weather.spawn_tempest_at(1000.0, 0.0, 300.0, 200.0);
+        assert!(weather
+            .storms()
+            .iter()
+            .any(|storm| storm.id == id && storm.tempest));
+        assert_eq!(
+            weather.tempest_influence(1000.0, 0.0),
+            0.0,
+            "nasce em fade-in"
+        );
+        weather.step(30.0, BOUNDS, |_, _| true);
+        assert!(weather.tempest_influence(weather.storms()[1].x, weather.storms()[1].y) > 0.0);
+    }
+
+    #[test]
+    fn tempest_is_separate_from_common_storms() {
+        let mut weather = Weather::new(3);
+        weather.spawn_storm_at(0.0, 0.0, 300.0, 200.0);
+        assert_eq!(weather.tempest_influence(0.0, 0.0), 0.0, "tempestade comum");
+        let id = weather.spawn_tempest_at(1000.0, 0.0, 300.0, 200.0);
+        assert!(weather
+            .storms()
+            .iter()
+            .any(|storm| storm.id == id && storm.tempest));
+        let tempest = *weather.storms().iter().find(|storm| storm.tempest).unwrap();
+        let mut aged = tempest;
+        aged.age = 60.0;
+        assert!(aged.influence_at(aged.x, aged.y) > 0.0);
     }
 }
