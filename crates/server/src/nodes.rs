@@ -31,76 +31,6 @@ pub struct ServerNode {
 #[derive(Resource, Default)]
 pub struct NodeIdCounter(pub u32);
 
-/// Layout dev (PRD §6/§7): (nome do node, região, x, y, estoque máximo).
-/// Coordenadas dentro das águas da própria região — madeira em Protected do
-/// Porto da Serra, minério no Porto da Mina, coral em Lawless na ilha. O
-/// "Bosque/Mina do Caminho" fica na saída de cada baía, na rota leste-oeste.
-const NODE_LAYOUT: &[(&str, &str, f32, f32, u32)] = &[
-    ("Bosque da Serra", "Porto da Serra", -620.0, 175.0, 60),
-    ("Bosque da Serra", "Porto da Serra", -500.0, 130.0, 60),
-    ("Bosque da Serra", "Porto da Serra", -610.0, -165.0, 60),
-    ("Bosque da Serra", "Porto da Serra", -470.0, -70.0, 60),
-    ("Bosque do Caminho", "Porto da Serra", -430.0, 20.0, 60),
-    ("Mina Profunda", "Porto da Mina", 620.0, 175.0, 60),
-    ("Mina Profunda", "Porto da Mina", 500.0, 130.0, 60),
-    ("Mina Profunda", "Porto da Mina", 610.0, -165.0, 60),
-    ("Mina Profunda", "Porto da Mina", 470.0, -70.0, 60),
-    ("Mina do Caminho", "Porto da Mina", 430.0, 20.0, 60),
-    ("Recife do Coral", "Ilha do Coral Negro", 0.0, 855.0, 30),
-    ("Recife do Coral", "Ilha do Coral Negro", -125.0, 950.0, 30),
-    ("Recife do Coral", "Ilha do Coral Negro", 135.0, 1000.0, 30),
-    // MF-059: recursos raros nas zonas de alto risco (todas sem lei).
-    ("Recife Abissal", "Ilha do Coral Negro", -140.0, 1620.0, 12),
-    ("Recife Abissal", "Ilha do Coral Negro", 120.0, 1760.0, 12),
-    ("Recife Abissal", "Ilha do Coral Negro", -110.0, 2000.0, 12),
-    (
-        "Coração da Cerração",
-        "Ilha do Coral Negro",
-        4000.0,
-        -1250.0,
-        10,
-    ),
-    (
-        "Coração da Cerração",
-        "Ilha do Coral Negro",
-        4380.0,
-        -1500.0,
-        10,
-    ),
-    (
-        "Coração da Cerração",
-        "Ilha do Coral Negro",
-        4020.0,
-        160.0,
-        10,
-    ),
-    (
-        "Coração da Cerração",
-        "Ilha do Coral Negro",
-        4380.0,
-        -120.0,
-        10,
-    ),
-    (
-        "Coração da Cerração",
-        "Ilha do Coral Negro",
-        4020.0,
-        1560.0,
-        10,
-    ),
-    (
-        "Coração da Cerração",
-        "Ilha do Coral Negro",
-        4050.0,
-        1200.0,
-        10,
-    ),
-    ("Veio Abissal", "Ilha do Coral Negro", -4280.0, -700.0, 10),
-    ("Veio Abissal", "Ilha do Coral Negro", -4120.0, -300.0, 10),
-    ("Veio Abissal", "Ilha do Coral Negro", -4280.0, 300.0, 10),
-    ("Veio Abissal", "Ilha do Coral Negro", -4120.0, 700.0, 10),
-];
-
 /// Recurso de cada node: os raros (MF-059) são do próprio depósito; o
 /// resto segue a região do slice (MF-020: disponibilidade distinta).
 fn resource_of_node(name: &str, region: &str, dev: &DevItems) -> Option<ItemDefinitionId> {
@@ -126,32 +56,34 @@ pub fn spawn_dev_nodes(
     policy: Res<ServerGatherPolicy>,
     mut node_ids: ResMut<NodeIdCounter>,
 ) {
-    for (name, region_name, x, y, max_stock) in NODE_LAYOUT {
+    // MV-065: o layout vem do mapa (clássico ou gerado pela seed).
+    let spots = &map.0.features().nodes;
+    for spot in spots {
         let region = map
             .0
-            .region_by_name(region_name)
-            .unwrap_or_else(|_| panic!("mapa do slice declara a região {region_name}"));
-        let resource = resource_of_node(name, region_name, &dev)
-            .unwrap_or_else(|| panic!("região {region_name} tem recurso dev definido"));
+            .region_by_name(spot.region)
+            .unwrap_or_else(|_| panic!("mapa declara a região {}", spot.region));
+        let resource = resource_of_node(spot.name, spot.region, &dev)
+            .unwrap_or_else(|| panic!("região {} tem recurso dev definido", spot.region));
         let node_num = node_ids.0;
         node_ids.0 += 1;
         commands.spawn((ServerNode {
             node_num,
             node: ResourceNode {
                 id: ResourceNodeId::new(),
-                name,
-                x: *x,
-                y: *y,
+                name: spot.name,
+                x: spot.x,
+                y: spot.y,
                 region: region.id,
                 resource,
-                stock: *max_stock,
-                max_stock: *max_stock,
+                stock: spot.max_stock,
+                max_stock: spot.max_stock,
             },
             respawn_at: None,
         },));
     }
     info!(
-        nodes = NODE_LAYOUT.len(),
+        nodes = spots.len(),
         radius = policy.0.interact_radius,
         "mundo semeado de recursos"
     );
@@ -381,9 +313,11 @@ pub fn respawn_nodes(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::net::DEV_SPAWN;
-    use marvyr_domain_world::WorldMap;
+    use marvyr_domain_world::{NodeSpot, WorldMap};
+
+    fn classic_nodes() -> Vec<NodeSpot> {
+        WorldMap::vertical_slice().features().nodes.clone()
+    }
 
     /// MF-058: terra é obstáculo — node, spawn de jogador e spawn de NPC
     /// precisam estar na água, com folga de casco.
@@ -391,15 +325,17 @@ mod tests {
     fn nodes_and_spawns_are_on_open_water() {
         let map = WorldMap::vertical_slice();
         let clearance = crate::net::HULL_CLEARANCE;
-        for (name, _, x, y, _) in NODE_LAYOUT {
+        for spot in classic_nodes() {
             assert!(
-                map.push_out_of_land(*x, *y, clearance).is_none(),
-                "{name} ({x},{y})"
+                map.push_out_of_land(spot.x, spot.y, clearance).is_none(),
+                "{} ({},{})",
+                spot.name,
+                spot.x,
+                spot.y
             );
         }
-        assert!(map
-            .push_out_of_land(DEV_SPAWN.0, DEV_SPAWN.1, clearance)
-            .is_none());
+        let spawn = map.features().spawn;
+        assert!(map.push_out_of_land(spawn.0, spawn.1, clearance).is_none());
         for (x, y) in crate::npc::NpcSpawnConfig::default().spawn_positions {
             assert!(
                 map.push_out_of_land(x, y, clearance).is_none(),
@@ -414,12 +350,8 @@ mod tests {
     #[test]
     fn layout_matches_triangular_economy() {
         let map = WorldMap::vertical_slice();
-        let count = |region: &str| {
-            NODE_LAYOUT
-                .iter()
-                .filter(|(_, region_name, ..)| *region_name == region)
-                .count()
-        };
+        let nodes = classic_nodes();
+        let count = |region: &str| nodes.iter().filter(|spot| spot.region == region).count();
         assert_eq!(count("Porto da Serra"), 5);
         assert_eq!(count("Porto da Mina"), 5);
         // Coral na ilha + raros das zonas de alto risco (MF-059).
@@ -427,11 +359,18 @@ mod tests {
 
         // Cada node fica dentro de uma zona declarada da sua região —
         // madeira/minério em águas protegidas, coral em lawless.
-        for (name, region_name, x, y, stock) in NODE_LAYOUT {
+        for NodeSpot {
+            name,
+            region,
+            x,
+            y,
+            max_stock,
+        } in nodes
+        {
             let zone = map
-                .zone_at(*x, *y)
+                .zone_at(x, y)
                 .unwrap_or_else(|_| panic!("node {name} fora do mar declarado"));
-            let expected_tier = if *region_name == "Ilha do Coral Negro" {
+            let expected_tier = if region == "Ilha do Coral Negro" {
                 marvyr_domain_world::RiskTier::Lawless
             } else {
                 marvyr_domain_world::RiskTier::Protected
@@ -440,7 +379,7 @@ mod tests {
                 zone.tier, expected_tier,
                 "node {name} ({x}, {y}) na zona errada"
             );
-            assert!(*stock > 0);
+            assert!(max_stock > 0);
         }
     }
 
@@ -448,12 +387,16 @@ mod tests {
     /// smoke (AUTOSAIL) cruza em faixa de coleta sem manobra.
     #[test]
     fn route_node_is_on_the_dev_sail_path() {
-        let (_, _, x, y, _) = NODE_LAYOUT
-            .iter()
-            .find(|(name, ..)| *name == "Bosque do Caminho")
+        let map = WorldMap::vertical_slice();
+        let road = classic_nodes()
+            .into_iter()
+            .find(|spot| spot.name == "Bosque do Caminho")
             .expect("node do caminho existe");
-        let (spawn_x, spawn_y) = DEV_SPAWN;
-        assert!((*x - spawn_x).abs() < 200.0, "node perto da doca");
-        assert!((*y - spawn_y).abs() < 30.0, "node na linha de navegação");
+        let (spawn_x, spawn_y) = map.features().spawn;
+        assert!((road.x - spawn_x).abs() < 200.0, "node perto da doca");
+        assert!(
+            (road.y - spawn_y).abs() < 30.0,
+            "node na linha de navegação"
+        );
     }
 }

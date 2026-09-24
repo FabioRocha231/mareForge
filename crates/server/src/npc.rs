@@ -203,26 +203,28 @@ pub struct NpcSpawnConfig {
 }
 
 impl Default for NpcSpawnConfig {
+    /// Tuning padrão com os pontos do mapa clássico.
     fn default() -> Self {
+        Self::for_map(&WorldMap::vertical_slice())
+    }
+}
+
+impl NpcSpawnConfig {
+    /// Pontos de spawn e rota vêm do mapa (MV-065); o resto é tuning.
+    pub fn for_map(map: &WorldMap) -> Self {
+        let features = map.features();
         Self {
             count: 3,
             // Águas da Ilha do Coral Negro: lawless e longe dos portos.
-            // Em volta da ilha, nunca dentro dela (MF-058: a ilha tem terra).
-            spawn_positions: vec![(0.0, 800.0), (-190.0, 860.0), (190.0, 950.0)],
+            spawn_positions: features.pirate_spawns.clone(),
             respawn_after_secs: 30.0,
             // Na Rota da Costa, entre os portos (fronteira).
-            raider_positions: vec![(-240.0, 60.0), (180.0, -60.0)],
+            raider_positions: features.raider_spawns.clone(),
             // Beira das águas protegidas, patrulhando para a fronteira.
-            navy_positions: vec![(-430.0, 60.0), (430.0, -60.0)],
+            navy_positions: features.navy_spawns.clone(),
             navy_respawn_secs: 90.0,
             caravan_count: 3,
-            caravan_route: vec![
-                (-560.0, 0.0),
-                (-300.0, 0.0),
-                (0.0, 0.0),
-                (300.0, 0.0),
-                (560.0, 0.0),
-            ],
+            caravan_route: features.caravan_route.clone(),
             caravan_respawn_secs: 25.0,
             caravan_plunder_gold: 80,
             caravan_flee_secs: 12.0,
@@ -231,9 +233,7 @@ impl Default for NpcSpawnConfig {
             kraken_bounty_gold: 300,
         }
     }
-}
 
-impl NpcSpawnConfig {
     fn route(&self, reverse: bool) -> Vec<(f32, f32)> {
         let mut route = self.caravan_route.clone();
         if reverse {
@@ -356,7 +356,7 @@ pub(crate) fn spawn_treasure_fleet(
         config,
         ids,
         NpcRole::TreasureGalleon,
-        marvyr_domain_world::FLEET_ROUTE[0],
+        map.features().fleet_route[0],
     );
     place_on_route(&mut galleon, 0);
     let (gx, gy) = (galleon.motion.x, galleon.motion.y);
@@ -426,7 +426,7 @@ pub(crate) fn build_npc(
         ),
         NpcRole::TreasureGalleon => (
             NpcState::Travel,
-            marvyr_domain_world::FLEET_ROUTE.to_vec(),
+            map.features().fleet_route.clone(),
             0.0,
             0.0,
             0,

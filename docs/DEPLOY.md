@@ -59,6 +59,7 @@ Atenção: o Docker escreve regras de iptables que ignoram o `ufw`. Por isso a
 | `MARVYR_MAX_CLIENTS` | `64` | padrão 64 |
 | `RUST_LOG` | `info,marvyr_server=info` | |
 | `MARVYR_REPORT_DIR` | `/data/reports` | `session-summary.json` é gravado aqui no desligamento |
+| `MARVYR_WORLD_SEED` | *(não definir)* ou um número | seed do mundo procedural; sem ela, a seed padrão do código. `0` = mapa clássico feito à mão. **Trocar a seed é trocar o mundo**: faça wipe junto (navios atracados voltam ao próprio porto, mas carga e rotas perdem o sentido) |
 | `MARVYR_SEA_EVENT` | *(não definir)* | `tempest`/`fleet`/`kraken`/`tide` força um evento de mar no boot — só teste |
 
 Monte um volume persistente em `/data` (relatórios de sessão).

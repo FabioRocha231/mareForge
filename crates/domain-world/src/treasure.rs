@@ -21,46 +21,6 @@ pub struct HiddenIsland {
     pub dig_y: f32,
 }
 
-/// As ilhas ocultas do slice — todas em águas de fronteira ou sem lei.
-pub const HIDDEN_ISLANDS: [HiddenIsland; 4] = [
-    HiddenIsland {
-        id: 1,
-        name: "Ilhota da Caveira",
-        x: -600.0,
-        y: 1250.0,
-        radius: 55.0,
-        dig_x: -600.0,
-        dig_y: 1180.0,
-    },
-    HiddenIsland {
-        id: 2,
-        name: "Recife dos Afogados",
-        x: 650.0,
-        y: 1300.0,
-        radius: 50.0,
-        dig_x: 650.0,
-        dig_y: 1235.0,
-    },
-    HiddenIsland {
-        id: 3,
-        name: "Baixio do Enforcado",
-        x: -300.0,
-        y: -950.0,
-        radius: 45.0,
-        dig_x: -300.0,
-        dig_y: -885.0,
-    },
-    HiddenIsland {
-        id: 4,
-        name: "Atol Sem Nome",
-        x: 820.0,
-        y: 1450.0,
-        radius: 60.0,
-        dig_x: 820.0,
-        dig_y: 1375.0,
-    },
-];
-
 /// Distância (m) em que a vigia avista uma ilha oculta.
 pub const SIGHT_RADIUS: f32 = 320.0;
 /// Distância máxima (m) do ponto de escavação.
@@ -89,10 +49,11 @@ impl HiddenIsland {
 }
 
 /// Ilha para onde um mapa aponta. Derivada do id da instância do mapa —
-/// cada mapa é um tesouro fixo, sem estado extra para persistir.
-pub fn island_for_map(map_seed: u128) -> &'static HiddenIsland {
-    let index = (map_seed % HIDDEN_ISLANDS.len() as u128) as usize;
-    &HIDDEN_ISLANDS[index]
+/// cada mapa é um tesouro fixo, sem estado extra para persistir. `None` só
+/// num mundo sem ilhas ocultas.
+pub fn island_for_map(islands: &[HiddenIsland], map_seed: u128) -> Option<&HiddenIsland> {
+    let index = map_seed.checked_rem(islands.len() as u128)? as usize;
+    islands.get(index)
 }
 
 /// Chance (%) de um lance de coleta trazer um mapa do tesouro junto.
@@ -117,7 +78,7 @@ mod tests {
     #[test]
     fn islands_sit_in_risky_water_with_dig_spot_off_the_beach() {
         let map = WorldMap::vertical_slice();
-        for island in &HIDDEN_ISLANDS {
+        for island in &map.features().hidden_islands {
             let tier = map.zone_at(island.x, island.y).unwrap().tier;
             assert_ne!(tier, RiskTier::Protected, "{}", island.name);
             assert!(!island.land().contains(island.dig_x, island.dig_y, 0.0));
@@ -133,10 +94,13 @@ mod tests {
 
     #[test]
     fn map_points_to_a_fixed_island() {
-        assert_eq!(island_for_map(7).id, island_for_map(7).id);
-        let ids: std::collections::HashSet<u32> =
-            (0..8u128).map(|seed| island_for_map(seed).id).collect();
-        assert_eq!(ids.len(), HIDDEN_ISLANDS.len());
+        let map = WorldMap::vertical_slice();
+        let islands = &map.features().hidden_islands;
+        let id = |seed| island_for_map(islands, seed).map(|island| island.id);
+        assert_eq!(id(7), id(7));
+        let ids: std::collections::HashSet<_> = (0..8u128).map(id).collect();
+        assert_eq!(ids.len(), islands.len());
+        assert!(island_for_map(&[], 7).is_none());
     }
 
     #[test]

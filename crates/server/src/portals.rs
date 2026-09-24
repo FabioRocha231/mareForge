@@ -11,7 +11,7 @@ use marvyr_domain_world::{PortalDirector, PortalKind, PortalTuning};
 use marvyr_protocol::{PortalKindWire, PortalState, PortalsUpdate};
 use tracing::info;
 
-use crate::net::{ReliableChannel, ServerShip, ServerWorldMap, DEV_SPAWN};
+use crate::net::{dev_spawn_point, ReliableChannel, ServerShip, ServerWorldMap};
 use crate::sets::SimulationSet;
 
 #[derive(Resource)]
@@ -78,7 +78,7 @@ fn advance_portals(
                 ship_id = ship.ship_id,
                 "navio preso em cerração fechada: resgatado"
             );
-            (ship.motion.x, ship.motion.y) = DEV_SPAWN;
+            (ship.motion.x, ship.motion.y) = dev_spawn_point(&map.0);
             continue;
         }
         if let Some((dest_x, dest_y)) = portals.0.transit(ship.ship_id, x, y, now) {

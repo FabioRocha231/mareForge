@@ -61,7 +61,9 @@ use serde::{Deserialize, Serialize};
 /// v16: MV-062 — onboarding. `LootResult`/`GatherResult`/`CraftResult`
 ///      ganham `reason` (motivo PT-BR da recusa, vazio no sucesso) e o
 ///      client reporta `OnboardingProgress` (telemetria, nunca concede nada).
-pub const PROTOCOL_VERSION: u16 = 16;
+/// v17: MV-065 — mundo procedural. `WorldSeed` (registrada no fim) chega
+///      logo após o `ServerWelcome` aceito; o client monta o mesmo mapa.
+pub const PROTOCOL_VERSION: u16 = 17;
 
 /// Rótulo de versão da build (`MARVYR_VERSION_LABEL` no build de release,
 /// senão a versão do Cargo). Client e servidor mostram no log e no HUD.
@@ -111,6 +113,13 @@ impl ClientHello {
             identity: identity.into(),
         }
     }
+}
+
+/// Seed do mundo (v17, MV-065): o client monta o mesmo
+/// `WorldMap::from_seed(seed)` do servidor — nada de geografia na rede.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorldSeed {
+    pub seed: u64,
 }
 
 /// Resposta do servidor. Conexão recusada (`accepted == false`) é encerrada
@@ -833,8 +842,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn current_protocol_version_is_sixteen() {
-        assert_eq!(PROTOCOL_VERSION, 16);
+    fn current_protocol_version_is_seventeen() {
+        assert_eq!(PROTOCOL_VERSION, 17);
         assert_eq!(
             ClientHello::current("token").protocol_version,
             PROTOCOL_VERSION

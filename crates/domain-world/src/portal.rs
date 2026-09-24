@@ -124,14 +124,6 @@ pub struct PortalDirector {
     rng: Rng,
 }
 
-/// Setores do mapa principal onde os redemoinhos nascem: oeste, leste e
-/// Águas Negras (x0, x1, y0, y1).
-const WHIRLPOOL_SECTORS: [(f32, f32, f32, f32); 3] = [
-    (-1000.0, -200.0, -500.0, 800.0),
-    (200.0, 1000.0, -500.0, 800.0),
-    (-600.0, 600.0, 1300.0, 2150.0),
-];
-
 impl PortalDirector {
     pub fn new(seed: u64, tuning: PortalTuning) -> Self {
         Self {
@@ -238,7 +230,7 @@ impl PortalDirector {
         let Some(slot) = self.arenas.iter().position(Option::is_none) else {
             return;
         };
-        let Some(origin) = self.sample_open_sea(map, (-1000.0, 1000.0, -500.0, 2150.0)) else {
+        let Some(origin) = self.sample_open_sea(map, map.features().bounds) else {
             return;
         };
         let center = FOG_SLOTS[slot];
@@ -277,7 +269,7 @@ impl PortalDirector {
     fn reroll_maelstrom(&mut self, now: f64, map: &WorldMap) {
         self.portals.retain(|p| p.kind != PortalKind::Whirlpool);
         let expires_at = now + self.tuning.maelstrom_reroll_every;
-        for (i, sector) in WHIRLPOOL_SECTORS.into_iter().enumerate() {
+        for (i, sector) in map.features().whirlpool_sectors.into_iter().enumerate() {
             let Some(world) = self.sample_open_sea(map, sector) else {
                 continue;
             };

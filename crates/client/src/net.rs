@@ -200,6 +200,8 @@ impl Plugin for ClientNetPlugin {
         app.register_message::<marvyr_protocol::OnboardingProgress>(
             ChannelDirection::ClientToServer,
         );
+        // v17 (MV-065): SEMPRE no fim, espelho do servidor.
+        app.register_message::<marvyr_protocol::WorldSeed>(ChannelDirection::ServerToClient);
         app.add_event::<PlayerNotice>();
         app.init_resource::<crate::ship::DestroyedShips>();
         app.init_resource::<KnownWrecks>();
@@ -224,6 +226,7 @@ impl Plugin for ClientNetPlugin {
             Update,
             (
                 handle_handshake,
+                receive_world_seed,
                 handle_dock_result,
                 handle_loadout_result,
                 handle_ship_destroyed,
@@ -694,6 +697,24 @@ fn send_gather_input(
 
 fn autogather_enabled() -> bool {
     std::env::var_os("MARVYR_AUTOGATHER").is_some()
+}
+
+/// MV-065: a seed do servidor vira o mapa do client (mesmo gerador).
+fn receive_world_seed(
+    mut commands: Commands,
+    mut seeds: EventReader<ClientReceiveMessage<marvyr_protocol::WorldSeed>>,
+    world: Option<Res<crate::world::ClientWorld>>,
+) {
+    let Some(seed) = seeds.read().last().map(|event| event.message().seed) else {
+        return;
+    };
+    if world.is_some_and(|world| world.0.features().seed == seed) {
+        return;
+    }
+    info!(seed, "mundo do servidor recebido");
+    commands.insert_resource(crate::world::ClientWorld(
+        marvyr_domain_world::WorldMap::from_seed(seed),
+    ));
 }
 
 fn handle_handshake(

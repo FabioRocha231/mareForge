@@ -17,9 +17,7 @@ use marvyr_protocol::{AssignShip, CraftItem, CraftResult, RecipeEntry, RecipesSn
 use marvyr_shared::ids::{ItemDefinitionId, RecipeId, RegionId};
 use tracing::{info, warn};
 
-use crate::net::{
-    spawn_ship_for, DevItems, ReliableChannel, ServerShip, ServerWorldMap, DEV_SPAWN,
-};
+use crate::net::{spawn_ship_for, DevItems, ReliableChannel, ServerShip, ServerWorldMap};
 
 /// Registro dev de definições de navio (MF-022): os três cascos do §11.
 /// Sem `Default` de propósito: cada instância carrega ids próprios, e um
@@ -445,8 +443,8 @@ fn build_ship_for_job(
                 kind: job.kind,
             },
         );
-        if let Some(zone) = crate::net::zone_changed_for(map, new_ship_id, DEV_SPAWN.0, DEV_SPAWN.1)
-        {
+        let spawn = crate::net::dev_spawn_point(map);
+        if let Some(zone) = crate::net::zone_changed_for(map, new_ship_id, spawn.0, spawn.1) {
             let _ = connection_manager.send_message::<ReliableChannel, _>(client_id, &zone);
         }
     }

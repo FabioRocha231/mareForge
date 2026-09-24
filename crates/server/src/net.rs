@@ -40,8 +40,8 @@ use marvyr_protocol::{
     GatherResult, LoadoutResult, LoadoutSnapshot, LootResult, LootWreck, MarketResult, NodeUpdated,
     NodesSnapshot, OrdersSnapshot, PortStorageSnapshot, ProjectileState, RecipesSnapshot,
     SelectAmmo, ServerWelcome, ShipDestroyed, ShipInput, ShipState, StorageDepositAll, StorageLine,
-    StorageWithdrawAll, Undock, UnequipItem, WalletUpdated, WorldSnapshot, WreckState, ZoneChanged,
-    PROTOCOL_VERSION,
+    StorageWithdrawAll, Undock, UnequipItem, WalletUpdated, WorldSeed, WorldSnapshot, WreckState,
+    ZoneChanged, PROTOCOL_VERSION,
 };
 use marvyr_shared::ids::{
     CharacterId, DestructionEventId, ItemDefinitionId, ItemInstanceId, RegionId, ShipInstanceId,
@@ -387,15 +387,23 @@ pub struct ServerGatherPolicy(pub GatheringPolicy);
 #[derive(Resource, Clone, Copy, Default)]
 pub struct ServerDockPolicy(pub DockPolicy);
 
-/// Doca do Porto da Serra (mapa do triângulo, PRD §6): dentro das águas
-/// protegidas. Jogadores nascem em segurança e escolhem quando se arriscar
-/// (Pilar 3). O mapa fixa em teste que este ponto é Protected.
-pub const DEV_SPAWN: (f32, f32) = (-560.0, 0.0);
+/// Seed do mundo quando `MARVYR_WORLD_SEED` não está definida (MV-065).
+/// O mapa-base é fixo por servidor: trocar a seed é trocar o mundo (wipe).
+pub const DEFAULT_WORLD_SEED: u64 = 0x4D41_5256_5952_0001;
 
-/// Dev tooling (MF-059): `MARVYR_DEV_SPAWN=x,y` faz o navio novo nascer
-/// em outro ponto — revisar zonas distantes sem navegar até lá.
-fn dev_spawn_point() -> (f32, f32) {
-    parse_spawn(std::env::var("MARVYR_DEV_SPAWN").ok().as_deref()).unwrap_or(DEV_SPAWN)
+/// `MARVYR_WORLD_SEED`: número (0 = mapa clássico feito à mão).
+pub fn world_seed() -> u64 {
+    std::env::var("MARVYR_WORLD_SEED")
+        .ok()
+        .and_then(|value| value.trim().parse().ok())
+        .unwrap_or(DEFAULT_WORLD_SEED)
+}
+
+/// Doca do Porto da Serra: dentro das águas protegidas. Jogadores nascem em
+/// segurança e escolhem quando se arriscar (Pilar 3). Dev tooling (MF-059):
+/// `MARVYR_DEV_SPAWN=x,y` faz o navio novo nascer em outro ponto.
+pub fn dev_spawn_point(map: &WorldMap) -> (f32, f32) {
+    parse_spawn(std::env::var("MARVYR_DEV_SPAWN").ok().as_deref()).unwrap_or(map.features().spawn)
 }
 
 fn parse_spawn(value: Option<&str>) -> Option<(f32, f32)> {
@@ -465,16 +473,28 @@ impl Plugin for ServerNetPlugin {
         app.init_resource::<CombatTuning>();
         app.init_resource::<ShipIdCounter>();
         app.init_resource::<crate::npc::NpcIdCounter>();
-        app.init_resource::<crate::npc::NpcSpawnConfig>();
         app.init_resource::<crate::npc::NpcRespawnQueue>();
         app.init_resource::<crate::reputation::Reputation>();
         app.init_resource::<ProjectileIdCounter>();
         app.init_resource::<WreckIdCounter>();
         app.insert_resource(ServerLootPolicy(LootPolicy::default()));
         app.insert_resource(ServerWreckPolicy(WreckPolicy::default()));
-        app.insert_resource(ServerWorldMap(
-            WorldMap::vertical_slice().with_hidden_islands(),
-        ));
+        // Teste pode fixar o mundo (e a config de NPC) antes do plugin.
+        if !app.world().contains_resource::<ServerWorldMap>() {
+            let seed = world_seed();
+            tracing::info!(seed, "mundo gerado");
+            app.insert_resource(ServerWorldMap(
+                WorldMap::from_seed(seed).with_hidden_islands(),
+            ));
+        }
+        if !app
+            .world()
+            .contains_resource::<crate::npc::NpcSpawnConfig>()
+        {
+            let map = &app.world().resource::<ServerWorldMap>().0;
+            let npc_config = crate::npc::NpcSpawnConfig::for_map(map);
+            app.insert_resource(npc_config);
+        }
         app.insert_resource(ServerRiskPolicy(RiskPolicy::default()));
         app.insert_resource(ServerGatherPolicy(GatheringPolicy::default()));
         app.insert_resource(ServerDockPolicy::default());
@@ -573,6 +593,8 @@ impl Plugin for ServerNetPlugin {
         app.register_message::<marvyr_protocol::OnboardingProgress>(
             ChannelDirection::ClientToServer,
         );
+        // v17 (MV-065): SEMPRE no fim, espelhado no client.
+        app.register_message::<marvyr_protocol::WorldSeed>(ChannelDirection::ServerToClient);
         app.add_systems(Startup, start_server);
         app.add_systems(Startup, crate::nodes::spawn_dev_nodes.after(start_server));
         app.add_systems(Startup, crate::npc::setup_npcs.after(start_server));
@@ -1046,7 +1068,7 @@ pub(crate) fn spawn_ship_for(
 
     // Nasce na doca do Porto da Serra, em águas protegidas (Pilar 3: o
     // risco é escolha do jogador, não condição de nascimento).
-    let spawn = dev_spawn_point();
+    let spawn = dev_spawn_point(map);
     let zone = map.zone_at(spawn.0, spawn.1).ok().map(|z| z.id);
 
     commands.spawn((ServerShip {
@@ -1083,6 +1105,28 @@ pub(crate) fn spawn_ship_for(
         sea: crate::seafaring::SeaCondition::fresh(marvyr_domain_ships::SKELETON_CREW),
     },));
     ship_id
+}
+
+/// Onde um navio salvo reaparece (MV-065): o mundo pode ter trocado de seed
+/// desde o save — atracado volta ao cais do seu porto; no mar, sai de dentro
+/// da terra.
+pub(crate) fn restored_position(
+    map: &WorldMap,
+    presence: VesselPresence,
+    x: f32,
+    y: f32,
+) -> (f32, f32) {
+    if let VesselPresence::Docked(region) = presence {
+        if let Some(port) = map
+            .regions()
+            .iter()
+            .find(|candidate| candidate.id == region)
+            .and_then(|region| region.port.as_ref())
+        {
+            return (port.x, port.y);
+        }
+    }
+    map.push_out_of_land(x, y, HULL_CLEARANCE).unwrap_or((x, y))
 }
 
 /// Recria um navio a partir do registro persistido (MF-035: reconnect pós-
@@ -1131,7 +1175,8 @@ pub(crate) fn restore_ship_from_record(
     )
     .expect("loadout restaurado contém definições do catálogo");
     hold.set_capacity(equipped_stats.cargo_capacity);
-    let zone = map.zone_at(record.x, record.y).ok().map(|z| z.id);
+    let (x, y) = restored_position(map, record.presence, record.x, record.y);
+    let zone = map.zone_at(x, y).ok().map(|z| z.id);
     // MF-049: presença persistida é a verdade — restore mantém Docked se
     // estava atracado, AtSea se estava fora. Trip só começa por evento
     // explícito, então AtSea restaurado abre nova medição em `now` (não
@@ -1157,8 +1202,8 @@ pub(crate) fn restore_ship_from_record(
         battery: BroadsideBattery::default(),
         stats: equipped_stats,
         motion: ShipMotion {
-            x: record.x,
-            y: record.y,
+            x,
+            y,
             heading: record.heading,
             ..ShipMotion::default()
         },
@@ -1375,6 +1420,12 @@ fn handle_hello(
                 .send_message::<ReliableChannel, _>(client_id, &ServerWelcome::accepted());
             let _ = connection_manager.send_message::<ReliableChannel, _>(
                 client_id,
+                &WorldSeed {
+                    seed: map.0.features().seed,
+                },
+            );
+            let _ = connection_manager.send_message::<ReliableChannel, _>(
+                client_id,
                 &AssignShip {
                     ship_id,
                     kind: reclaimed_kind,
@@ -1415,7 +1466,7 @@ fn handle_hello(
             .and_then(|store| store.load_ship(character).ok().flatten());
         let (ship_id, position, restored_equipped, ship_kind) = match restored {
             Some(record) => {
-                let position = (record.x, record.y);
+                let position = restored_position(&map.0, record.presence, record.x, record.y);
                 let equipped = record.equipped.clone();
                 let ship_kind = record.kind;
                 let ship_id = restore_ship_from_record(
@@ -1451,7 +1502,7 @@ fn handle_hello(
                 );
                 (
                     ship_id,
-                    dev_spawn_point(),
+                    dev_spawn_point(&map.0),
                     Vec::new(),
                     ShipKind::SmallMerchant,
                 )
@@ -1459,6 +1510,12 @@ fn handle_hello(
         };
         let _ = connection_manager
             .send_message::<ReliableChannel, _>(client_id, &ServerWelcome::accepted());
+        let _ = connection_manager.send_message::<ReliableChannel, _>(
+            client_id,
+            &WorldSeed {
+                seed: map.0.features().seed,
+            },
+        );
         let _ = connection_manager.send_message::<ReliableChannel, _>(
             client_id,
             &AssignShip {
@@ -2354,7 +2411,7 @@ fn respawn_destroyed_ships(
                 kind: ShipKind::SmallMerchant,
             },
         );
-        let spawn = dev_spawn_point();
+        let spawn = dev_spawn_point(&map.0);
         if let Some(zone) = zone_changed_for(&map.0, new_ship_id, spawn.0, spawn.1) {
             let _ = connection_manager.send_message::<ReliableChannel, _>(victim_client_id, &zone);
         }
@@ -3004,6 +3061,19 @@ mod tests {
         assert_eq!(parse_spawn(Some("10, -20.5")), Some((10.0, -20.5)));
         assert_eq!(parse_spawn(Some("oops")), None);
         assert_eq!(parse_spawn(None), None);
+    }
+
+    #[test]
+    fn saved_ship_reappears_at_its_port_or_out_of_land_in_a_new_world() {
+        let map = WorldMap::from_seed(DEFAULT_WORLD_SEED);
+        let mina = map.region_by_name("Porto da Mina").unwrap();
+        let port = mina.port.as_ref().unwrap();
+        // Coordenada do porto no mapa antigo: no mundo novo é outro lugar.
+        let docked = restored_position(&map, VesselPresence::Docked(mina.id), 600.0, 0.0);
+        assert_eq!(docked, (port.x, port.y));
+        let coast = map.land()[0];
+        let (x, y) = restored_position(&map, VesselPresence::AtSea, coast.x, coast.y);
+        assert!(map.push_out_of_land(x, y, HULL_CLEARANCE - 0.1).is_none());
     }
 
     #[test]

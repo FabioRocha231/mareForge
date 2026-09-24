@@ -16,10 +16,10 @@ use marvyr_domain_ships::{
     casualties, crew_capacity, repair_step, VesselPresence, CREW_WAGE, REPAIR_COMBAT_LOCK_SECS,
     RUDDER_HP_MAX,
 };
-use marvyr_domain_world::treasure::{
-    finds_map, island_for_map, DIG_MAX_SPEED, DIG_SECS, HIDDEN_ISLANDS,
+use marvyr_domain_world::treasure::{finds_map, island_for_map, DIG_MAX_SPEED, DIG_SECS};
+use marvyr_domain_world::{
+    DirectorChange, ResourceNode, SeaEvent, SeaEventDirector, SeaEventKind, WorldMap,
 };
-use marvyr_domain_world::{DirectorChange, ResourceNode, SeaEvent, SeaEventDirector, SeaEventKind};
 use marvyr_protocol::{
     ActionKind, ActionResult, BoardShip, DigTreasure, HireCrew, IslandState, IslandsInSight,
     NodesSnapshot, SeaEventState, SeaEventsUpdate, SetRepair, TreasureHint, TreasureHints,
@@ -114,7 +114,9 @@ const TREASURE_CORAL: u32 = 6;
 
 pub fn install(app: &mut App) {
     app.init_resource::<NpcBoardings>();
-    app.insert_resource(ServerSeaEvents::from_env());
+    // O mapa já está no app (ServerNetPlugin o insere antes de instalar).
+    let events = ServerSeaEvents::from_env(&app.world().resource::<ServerWorldMap>().0);
+    app.insert_resource(events);
     app.add_systems(
         FixedUpdate,
         (
@@ -565,6 +567,7 @@ fn handle_dig(
     mut events: EventReader<ServerReceiveMessage<DigTreasure>>,
     mut connection_manager: ResMut<ConnectionManager>,
     dev: Res<DevItems>,
+    world: Res<ServerWorldMap>,
     mut ships: Query<&mut ServerShip>,
 ) {
     for event in events.read() {
@@ -598,7 +601,7 @@ fn handle_dig(
         }
         let (x, y) = (ship.motion.x, ship.motion.y);
         let Some((map, island)) = maps.iter().find_map(|map| {
-            let island = island_for_map(map.0.as_u128());
+            let island = island_for_map(&world.0.features().hidden_islands, map.0.as_u128())?;
             island.at_dig_spot(x, y).then_some((*map, island))
         }) else {
             refuse(
@@ -632,6 +635,7 @@ fn handle_dig(
 fn tick_dig(
     time: Res<Time>,
     dev: Res<DevItems>,
+    world: Res<ServerWorldMap>,
     mut connection_manager: ResMut<ConnectionManager>,
     mut metrics: ResMut<Metrics>,
     mut ships: Query<&mut ServerShip>,
@@ -663,7 +667,10 @@ fn tick_dig(
         if ship.hold.remove_instance(dig.map).is_none() {
             continue; // o mapa saiu do porão no meio do caminho
         }
-        let island = HIDDEN_ISLANDS
+        let island = world
+            .0
+            .features()
+            .hidden_islands
             .iter()
             .find(|island| island.id == dig.island)
             .map(|island| island.name)
@@ -732,9 +739,9 @@ pub struct ServerSeaEvents {
 }
 
 impl ServerSeaEvents {
-    pub fn new(seed: u64) -> Self {
+    pub fn new(seed: u64, map: &WorldMap) -> Self {
         Self {
-            director: SeaEventDirector::new(seed),
+            director: SeaEventDirector::new(seed, map),
             forced: None,
             tide_node: None,
             broadcast_clock: 0.0,
@@ -743,12 +750,12 @@ impl ServerSeaEvents {
 
     /// Semente pelo relógio; `MARVYR_SEA_EVENT=kraken|fleet|tempest|tide`
     /// força um evento no primeiro tick (dev/playtest).
-    fn from_env() -> Self {
+    fn from_env(map: &WorldMap) -> Self {
         let seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)
             .unwrap_or(0);
-        let mut events = Self::new(seed);
+        let mut events = Self::new(seed, map);
         events.forced = std::env::var("MARVYR_SEA_EVENT")
             .ok()
             .and_then(|value| parse_event_kind(&value));
@@ -976,9 +983,11 @@ fn broadcast_sea_state(
     mut events: ResMut<ServerSeaEvents>,
     mut connection_manager: ResMut<ConnectionManager>,
     dev: Res<DevItems>,
+    world: Res<ServerWorldMap>,
     ships: Query<&ServerShip>,
     npcs: Query<&NpcShip>,
 ) {
+    let hidden = &world.0.features().hidden_islands;
     events.broadcast_clock += time.delta_secs();
     if events.broadcast_clock < 1.0 {
         return;
@@ -1023,7 +1032,7 @@ fn broadcast_sea_state(
             continue;
         };
         let (x, y) = (ship.motion.x, ship.motion.y);
-        let islands = HIDDEN_ISLANDS
+        let islands = hidden
             .iter()
             .filter(|island| island.in_sight(x, y))
             .map(|island| IslandState {
@@ -1041,13 +1050,13 @@ fn broadcast_sea_state(
             .items()
             .iter()
             .filter(|custody| custody.instance.definition == dev.treasure_map)
-            .map(|custody| {
-                let island = island_for_map(custody.instance.id.0.as_u128());
-                TreasureHint {
+            .filter_map(|custody| {
+                let island = island_for_map(hidden, custody.instance.id.0.as_u128())?;
+                Some(TreasureHint {
                     x: island.dig_x,
                     y: island.dig_y,
                     island: island.name.to_owned(),
-                }
+                })
             })
             .collect();
         let _ = connection_manager

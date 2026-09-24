@@ -48,28 +48,7 @@ impl SeaEventKind {
             Self::ContestedTide => 120.0,
         }
     }
-
-    /// Onde o evento pode acontecer: sempre fora de águas protegidas.
-    pub fn sites(self) -> &'static [(f32, f32)] {
-        match self {
-            Self::Tempest => &[(0.0, 500.0), (-700.0, 700.0), (700.0, 700.0)],
-            // Início da rota do comboio (a rota inteira é `FLEET_ROUTE`).
-            Self::TreasureFleet => &[FLEET_ROUTE[0]],
-            Self::Kraken => &[(0.0, 1700.0), (-900.0, 1100.0), (900.0, 1100.0)],
-            Self::ContestedTide => &[(0.0, 1300.0), (-500.0, 1100.0), (500.0, 1100.0)],
-        }
-    }
 }
-
-/// Rota do comboio do tesouro: cruza o mar sem lei ao sul, de oeste a
-/// leste, longe da proteção da coroa.
-pub const FLEET_ROUTE: [(f32, f32); 5] = [
-    (-1300.0, -760.0),
-    (-650.0, -720.0),
-    (0.0, -760.0),
-    (650.0, -720.0),
-    (1300.0, -760.0),
-];
 
 /// Evento em curso.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -96,6 +75,8 @@ const FIRST_EVENT: f32 = 180.0;
 
 #[derive(Debug, Clone)]
 pub struct SeaEventDirector {
+    /// Locais de cada tipo (na ordem de `SeaEventKind::ALL`), do mapa.
+    sites: [Vec<(f32, f32)>; 4],
     rng: u64,
     next_in: f32,
     next_id: u32,
@@ -103,8 +84,9 @@ pub struct SeaEventDirector {
 }
 
 impl SeaEventDirector {
-    pub fn new(seed: u64) -> Self {
+    pub fn new(seed: u64, map: &crate::map::WorldMap) -> Self {
         Self {
+            sites: SeaEventKind::ALL.map(|kind| map.features().event_sites(kind).to_vec()),
             rng: seed ^ 0x9E37_79B9_7F4A_7C15,
             next_in: FIRST_EVENT,
             next_id: 1,
@@ -147,8 +129,10 @@ impl SeaEventDirector {
     }
 
     fn start(&mut self, kind: SeaEventKind) -> SeaEvent {
-        let sites = kind.sites();
-        let (x, y) = sites[(self.next_u64() % sites.len() as u64) as usize];
+        // `ALL` segue a ordem de declaração do enum.
+        let roll = self.next_u64();
+        let sites = &self.sites[kind as usize];
+        let (x, y) = sites[(roll % sites.len() as u64) as usize];
         let id = self.next_id;
         self.next_id += 1;
         SeaEvent {
@@ -184,7 +168,7 @@ mod tests {
 
     #[test]
     fn one_event_at_a_time_with_a_breather_between() {
-        let mut director = SeaEventDirector::new(42);
+        let mut director = SeaEventDirector::new(42, &WorldMap::vertical_slice());
         assert!(director.step(FIRST_EVENT - 1.0).is_empty());
         let started = director.step(2.0);
         let DirectorChange::Started(event) = started[0] else {
@@ -205,7 +189,7 @@ mod tests {
     #[test]
     fn same_seed_same_story() {
         let run = |seed| {
-            let mut director = SeaEventDirector::new(seed);
+            let mut director = SeaEventDirector::new(seed, &WorldMap::vertical_slice());
             (0..20_000)
                 .flat_map(|_| director.step(1.0))
                 .collect::<Vec<_>>()
@@ -218,14 +202,14 @@ mod tests {
     fn events_never_start_in_protected_waters_or_on_land() {
         let map = WorldMap::vertical_slice();
         for kind in SeaEventKind::ALL {
-            for &(x, y) in kind.sites() {
+            for &(x, y) in map.features().event_sites(kind) {
                 let zone = map.zone_at(x, y).unwrap();
                 assert_ne!(zone.tier, RiskTier::Protected, "{kind:?} em {x},{y}");
                 assert!(!map.is_land(x, y), "{kind:?} em terra {x},{y}");
             }
         }
         let map = map.with_hidden_islands();
-        for leg in FLEET_ROUTE.windows(2) {
+        for leg in map.features().fleet_route.windows(2) {
             let ((ax, ay), (bx, by)) = (leg[0], leg[1]);
             for step in 0..=20 {
                 let t = step as f32 / 20.0;
@@ -240,7 +224,7 @@ mod tests {
 
     #[test]
     fn forced_event_is_active() {
-        let mut director = SeaEventDirector::new(1);
+        let mut director = SeaEventDirector::new(1, &WorldMap::vertical_slice());
         let event = director.force(SeaEventKind::Kraken);
         assert_eq!(director.active(), Some(&event));
     }
