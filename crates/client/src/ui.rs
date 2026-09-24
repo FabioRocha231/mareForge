@@ -56,9 +56,36 @@ pub fn panel(node: Node) -> impl Bundle {
     )
 }
 
+/// A fonte pixel do HUD só tem ASCII: acentos e pontuação tipográfica
+/// (inclusive os que chegam do servidor) viram equivalentes legíveis.
+pub fn fold(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for c in value.chars() {
+        match c {
+            'á' | 'à' | 'â' | 'ã' | 'ä' => out.push('a'),
+            'Á' | 'À' | 'Â' | 'Ã' | 'Ä' => out.push('A'),
+            'é' | 'è' | 'ê' | 'ë' => out.push('e'),
+            'É' | 'È' | 'Ê' | 'Ë' => out.push('E'),
+            'í' | 'ì' | 'î' | 'ï' => out.push('i'),
+            'Í' | 'Ì' | 'Î' | 'Ï' => out.push('I'),
+            'ó' | 'ò' | 'ô' | 'õ' | 'ö' => out.push('o'),
+            'Ó' | 'Ò' | 'Ô' | 'Õ' | 'Ö' => out.push('O'),
+            'ú' | 'ù' | 'û' | 'ü' => out.push('u'),
+            'Ú' | 'Ù' | 'Û' | 'Ü' => out.push('U'),
+            'ç' => out.push('c'),
+            'Ç' => out.push('C'),
+            '·' | '•' => out.push('*'),
+            '—' | '–' => out.push('-'),
+            '…' => out.push_str("..."),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
 pub fn text(value: impl Into<String>, size: f32, color: Color) -> impl Bundle {
     (
-        Text::new(value),
+        Text::new(fold(&value.into())),
         TextFont {
             font_size: size,
             ..default()
@@ -205,5 +232,17 @@ mod tests {
         assert_eq!(bar_width(0.25), Val::Percent(25.0));
         assert_eq!(bar_width(1.7), Val::Percent(100.0));
         assert_eq!(bar_width(-1.0), Val::Percent(0.0));
+    }
+}
+
+#[cfg(test)]
+mod fold_tests {
+    #[test]
+    fn fold_keeps_ascii_and_strips_accents() {
+        assert_eq!(
+            super::fold("Capitão · Reparo concluído — ok…"),
+            "Capitao * Reparo concluido - ok..."
+        );
+        assert_eq!(super::fold("MUNICAO [C]"), "MUNICAO [C]");
     }
 }

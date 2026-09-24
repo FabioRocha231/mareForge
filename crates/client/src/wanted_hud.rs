@@ -121,6 +121,7 @@ fn update_feed(
     mut commands: Commands,
     mut world_events: EventReader<ClientReceiveMessage<WorldEvent>>,
     mut dock_results: EventReader<ClientReceiveMessage<DockResult>>,
+    mut actions: EventReader<ClientReceiveMessage<marvyr_protocol::ActionResult>>,
     feed: Query<(Entity, Option<&Children>), With<KillFeed>>,
 ) {
     let mut lines: Vec<(String, Color)> = world_events
@@ -139,6 +140,16 @@ fn update_feed(
     {
         lines.push((result.reason.clone(), ui::DANGER));
     }
+    // MV-061: veredito de reparo, abordagem, escavação e contratação.
+    lines.extend(actions.read().map(|event| {
+        let result = event.message();
+        let color = if result.success {
+            ui::OK_GREEN
+        } else {
+            ui::AMBER
+        };
+        (result.reason.clone(), color)
+    }));
     if lines.is_empty() {
         return;
     }

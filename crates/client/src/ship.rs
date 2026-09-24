@@ -142,6 +142,14 @@ fn ship_look(kind: ShipKind, faction: Faction) -> ShipLook {
             sail_color: 1,
             ..base
         },
+        // MV-061: o Kraken é casco escuro sem mastro — os tentáculos são
+        // desenhados por cima (`seafaring::draw_sea_marks`).
+        Faction::Monster => ShipLook {
+            hull_color: 0,
+            sail_color: 5,
+            masts: &[],
+            ..base
+        },
     }
 }
 
@@ -150,7 +158,7 @@ fn ship_look(kind: ShipKind, faction: Faction) -> ShipLook {
 /// branca nos mercadores e nos demais jogadores.
 fn flag_color(faction: Faction, mine: bool) -> usize {
     match faction {
-        Faction::Pirate => 4,
+        Faction::Pirate | Faction::Monster => 4,
         Faction::Navy => 3,
         Faction::Merchant => 5,
         Faction::Player if mine => 2,
@@ -827,6 +835,11 @@ mod tests {
             ammo: Default::default(),
             faction: Faction::Player,
             notoriety_tier: TIER_PROCURADO,
+            rudder_hp: 100.0,
+            crew: 0,
+            crew_max: 0,
+            repairing: false,
+            dig_progress: 0.0,
         };
         let ship = world
             .spawn((

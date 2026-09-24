@@ -10,6 +10,8 @@ name = "marvyr_playtest"
 path = "src/main.rs"
 
 [dependencies]
-libc = "0.2"
 marvyr-client = { path = "../../client" }
 marvyr-server = { path = "../../server" }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

@@ -457,6 +457,11 @@ mod tests {
             ammo: marvyr_domain_combat::Ammo::Round,
             faction: marvyr_protocol::Faction::Player,
             notoriety_tier: 0,
+            rudder_hp: 100.0,
+            crew: 0,
+            crew_max: 0,
+            repairing: false,
+            dig_progress: 0.0,
         }
     }
 
