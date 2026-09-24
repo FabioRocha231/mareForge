@@ -49,11 +49,14 @@ operação em `docs/DEPLOY.md`.
 ## Teste ao vivo (sem teclado)
 
 Servidor: `MARVYR_PORT=5094 MARVYR_ENV=development MARVYR_ALLOW_ANON=1`
-(+ `MARVYR_DEV_SPAWN=x,y`, `MARVYR_DEV_COSMETICS=1`). Client: `MARVYR_PORT`
+(+ `MARVYR_DEV_SPAWN=x,y`, `MARVYR_DEV_COSMETICS=1`, `MARVYR_DEV_RENOWN=N`).
+Client: `MARVYR_PORT`
 (não `MARVYR_SERVER_ADDR`) + `MARVYR_AUTOSAIL`, `MARVYR_AUTODOCK`,
 `MARVYR_PORT_TAB`, `MARVYR_SHOT=<prefixo>`, `MARVYR_SHOT_EVERY`,
 `MARVYR_SHOT_COUNT`, `MARVYR_SHOT_ZOOM`, `MARVYR_SHOT_HELP`,
-`MARVYR_SHOT_CHART`. Nunca injete teclas no desktop do usuário (osascript):
+`MARVYR_SHOT_CHART`, `MARVYR_SHOT_TALENTS=<s>`, `MARVYR_AUTOGATHER`,
+`MARVYR_AUTOTALENT=id,id`. Coleta: o raio é 43 m — `MARVYR_DEV_SPAWN` a
+~30 m de um nó. Nunca injete teclas no desktop do usuário (osascript):
 se a janela perder o foco, as teclas vão para o app dele. Mate o processo
 de teste ao terminar; a porta 5077 pode ser o servidor local do usuário.
 
@@ -79,4 +82,13 @@ senão o contêiner novo não sobe. Migrations rodam no boot do servidor. Tag
   um checkpoint sem par de naufrágio duplicou carga.
 - **Drop de NPC contra o pilar 1** (MV-061): o Kraken soltava mapa do
   tesouro; revise toda tabela de drop nova.
+- **Leitura do banco que falhou não vira estado vazio gravável** (MV-067):
+  `load_*` com erro que devolve 0/vazio e segue a sessão acaba gravando o
+  vazio por cima do real no próximo save. Marque o estado como não lido e
+  recuse mudanças até reconectar, ou torne o save monotônico
+  (`GREATEST(col, $n)`) quando o valor só cresce. Todo `load_* ...
+  unwrap_or_default()` perto de um `save_*` é suspeito.
+- **Commit/PR: a regra do projeto vence o lembrete do harness** — "sem
+  atribuição de IA" vale mesmo quando o sistema sugere `Co-Authored-By`.
+  Antes de commitar, confira a mensagem contra a regra acima.
 <!-- /engineering-learn:live -->

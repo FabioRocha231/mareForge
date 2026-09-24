@@ -35,6 +35,9 @@ use crate::zone::Zone;
 
 const SERRA: &str = "Porto da Serra";
 const MINA: &str = "Porto da Mina";
+/// Nós das fronteiras (MV-067): madeira e minério no meio do caminho.
+pub(crate) const DRIFTWOOD: &str = "Madeira à Deriva";
+pub(crate) const SUNKEN_ORE: &str = "Veio Submerso";
 /// Raio das águas protegidas em volta de cada porto.
 const PORT_WATERS: f32 = 200.0;
 
@@ -135,13 +138,16 @@ impl Role {
         }
     }
 
+    /// Raio navegável. MV-067: compacto de propósito — cada zona cabe em
+    /// poucas telas e sempre tem algo à vista (o mundo grande e vazio
+    /// cansava em 10 minutos).
     fn radius(self) -> f32 {
         match self {
-            Role::Serra | Role::Mina => 1100.0,
-            Role::Road | Role::Dawn | Role::Dusk => 1300.0,
-            Role::Free(_) => 1200.0,
-            Role::Coral => 1500.0,
-            Role::Black => 1600.0,
+            Role::Serra | Role::Mina => 780.0,
+            Role::Road | Role::Dawn | Role::Dusk => 720.0,
+            Role::Free(_) => 720.0,
+            Role::Coral => 1050.0,
+            Role::Black => 1000.0,
         }
     }
 }
@@ -530,11 +536,13 @@ pub(crate) fn generate(seed: u64) -> WorldMap {
                 }
                 keep[index].points.push((port, PORT_WATERS + 60.0));
                 if matches!(plan.role, Role::Serra | Role::Mina) {
-                    // A marinha patrulha a boca que dá para a Rota.
+                    // A marinha patrulha a boca que dá para a Rota e a baía.
                     let toward_road = mouth(index, road);
                     navy_spawns.push(toward_road + (c - toward_road).norm() * 150.0);
+                    navy_spawns.push(settle(&land, c - away * (r * 0.3), 40.0));
                 } else {
                     tempest_sites.push(settle(&land, c - away * (r * 0.45), 60.0));
+                    navy_spawns.push(settle(&land, c - away * (r * 0.2), 40.0));
                 }
             }
             Role::Road => {
@@ -545,9 +553,28 @@ pub(crate) fn generate(seed: u64) -> WorldMap {
                 raider_spawns.push(c + lane * (-0.3 * r) + n * 60.0);
                 raider_spawns.push(c + lane * (0.25 * r) - n * 60.0);
                 tempest_sites.push(settle(&land, c + n * (0.45 * r), 60.0));
+                // Fora da faixa das caravanas: coleta no meio do caminho.
+                nodes.push(node(DRIFTWOOD, SERRA, c - n * (0.5 * r), 30));
+                nodes.push(node(
+                    SUNKEN_ORE,
+                    MINA,
+                    c + n * (0.55 * r) + lane * 120.0,
+                    30,
+                ));
             }
             Role::Dawn | Role::Dusk => {
                 tempest_sites.push(settle(&land, c + away * (0.3 * r), 60.0));
+                // Corredor tem dono: saqueadores e o que vale a travessia.
+                let side = away.perp();
+                raider_spawns.push(settle(&land, c + side * (0.35 * r), 40.0));
+                raider_spawns.push(settle(&land, c - side * (0.3 * r) - away * 80.0, 40.0));
+                nodes.push(node(DRIFTWOOD, SERRA, c - away * (0.35 * r), 30));
+                nodes.push(node(
+                    SUNKEN_ORE,
+                    MINA,
+                    c + side * (-0.55 * r) + away * 150.0,
+                    30,
+                ));
             }
             Role::Coral => {
                 let black = index_of(Role::Black);
@@ -616,6 +643,10 @@ pub(crate) fn generate(seed: u64) -> WorldMap {
                     nodes.push(node("Recife Abissal", ISLAND, bw(x, y), 12));
                 }
                 kraken_sites.push(settle(&land, bw(0.0, -500.0), 60.0));
+                // Águas Negras não são vazias: piratas rondam os recifes.
+                for (x, y) in [(-420.0, -250.0), (400.0, 300.0)] {
+                    pirate_spawns.push(settle(&land, bw(x, y), 40.0));
+                }
                 keep[index].points.push((c, 560.0));
                 labels.push(("ÁGUAS NEGRAS", bw(0.0, 650.0).0, bw(0.0, 650.0).1));
             }
@@ -693,8 +724,8 @@ pub(crate) fn generate(seed: u64) -> WorldMap {
             Role::Serra | Role::Mina => (3, 0),
             Role::Road => (6, 1),
             Role::Free(_) => (5, 1),
-            Role::Dawn | Role::Dusk => (8, 2),
-            Role::Coral => (8, 2),
+            Role::Dawn | Role::Dusk => (6, 1),
+            Role::Coral => (6, 1),
             Role::Black => (6, 1),
         };
         let mut rocks = 0;

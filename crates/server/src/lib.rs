@@ -1,6 +1,7 @@
 pub mod aoi;
 pub mod cosmetics;
 pub mod crafting;
+pub mod flotsam;
 pub mod guild;
 pub mod loadout;
 pub mod market;
@@ -11,10 +12,12 @@ pub mod persist;
 mod playtest;
 pub mod plugin;
 pub mod portals;
+pub mod renown;
 pub mod reputation;
 pub mod seafaring;
 pub mod session;
 pub mod sets;
+pub mod talents;
 pub mod weather;
 
 pub use plugin::ServerPlugin;

@@ -24,8 +24,8 @@ pub enum ContractKind {
         from: String,
         to: String,
     },
-    /// Afunde `kills` navios NPC.
-    Hunt { kills: u32 },
+    /// Afunde `kills` navios NPC hostis dentro da zona `zone` (MV-067).
+    Hunt { kills: u32, zone: String },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -46,17 +46,30 @@ impl Contract {
                 from,
                 to,
             } => format!("Entrega: {quantity}x {item} de {from} para {to}"),
-            ContractKind::Hunt { kills } => format!("Caca: afunde {kills} navio(s) pirata(s)"),
+            ContractKind::Hunt { kills, zone } => {
+                format!("Caçada: afunde {kills} navio(s) hostil(is) em {zone}")
+            }
         }
     }
 
     pub fn target(&self) -> u32 {
         match self.kind {
             ContractKind::Delivery { quantity, .. } => quantity,
-            ContractKind::Hunt { kills } => kills,
+            ContractKind::Hunt { kills, .. } => kills,
         }
     }
 }
+
+/// Zona com NPC hostil onde uma Caçada pode mandar o capitão. `lawless`
+/// paga mais: é onde ele pode perder o navio para outro jogador.
+#[derive(Debug, Clone, Copy)]
+pub struct HuntingGround<'a> {
+    pub name: &'a str,
+    pub lawless: bool,
+}
+
+/// Bônus da Caçada em zona sem lei (×1.6 por abate).
+const LAWLESS_HUNT_BONUS: f64 = 1.6;
 
 /// Um porto para o gerador: nome e posição (bônus de distância).
 #[derive(Debug, Clone, Copy)]
@@ -75,27 +88,43 @@ fn next(state: &mut u64) -> u64 {
 }
 
 /// Gera as ofertas do porto `here`. Mesmo seed → mesmas ofertas (testes).
-/// `first_id` é o primeiro id livre; ids crescem de 1 em 1.
+/// `first_id` é o primeiro id livre; ids crescem de 1 em 1. A primeira
+/// oferta é sempre Caçada (quando há onde caçar): todo quadro tem luta.
 pub fn generate_offers(
     here: &PortSite,
     ports: &[PortSite],
+    grounds: &[HuntingGround],
     seed: u64,
     first_id: u32,
 ) -> Vec<Contract> {
     let mut state = seed | 1;
     let destinations: Vec<&PortSite> = ports.iter().filter(|port| port.name != here.name).collect();
+    // ponytail: sem destino nem zona de caça o porto fica sem quadro.
     (0..OFFERS_PER_PORT)
-        .map(|index| {
+        .filter_map(|index| {
             let id = first_id + index as u32;
             let roll = next(&mut state);
-            if destinations.is_empty() || roll.is_multiple_of(3) {
-                let kills = 1 + (next(&mut state) % 3) as u32;
-                return Contract {
-                    id,
-                    kind: ContractKind::Hunt { kills },
-                    reward: HUNT_REWARD_PER_KILL * u64::from(kills),
-                    duration_secs: HUNT_DURATION_SECS,
+            let wants_hunt = index == 0 || destinations.is_empty() || roll.is_multiple_of(3);
+            if wants_hunt && !grounds.is_empty() {
+                let ground = grounds[(next(&mut state) % grounds.len() as u64) as usize];
+                let kills = 2 + (next(&mut state) % 3) as u32;
+                let per_kill = if ground.lawless {
+                    (HUNT_REWARD_PER_KILL as f64 * LAWLESS_HUNT_BONUS) as u64
+                } else {
+                    HUNT_REWARD_PER_KILL
                 };
+                return Some(Contract {
+                    id,
+                    kind: ContractKind::Hunt {
+                        kills,
+                        zone: ground.name.to_owned(),
+                    },
+                    reward: per_kill * u64::from(kills),
+                    duration_secs: HUNT_DURATION_SECS,
+                });
+            }
+            if destinations.is_empty() {
+                return None;
             }
             let to = destinations[(next(&mut state) % destinations.len() as u64) as usize];
             let (item, base) =
@@ -103,7 +132,7 @@ pub fn generate_offers(
             let quantity = (DELIVERY_LOT_VALUE / base).clamp(1, 30) as u32;
             let value = guild_value(to.name, item).expect("item vem da tabela da guilda");
             let distance = ((to.x - here.x).hypot(to.y - here.y)) as f64;
-            Contract {
+            Some(Contract {
                 id,
                 kind: ContractKind::Delivery {
                     item: item.to_owned(),
@@ -114,7 +143,7 @@ pub fn generate_offers(
                 reward: (value * f64::from(quantity) * 1.5 + distance * DISTANCE_BONUS_PER_UNIT)
                     .round() as u64,
                 duration_secs: DELIVERY_DURATION_SECS,
-            }
+            })
         })
         .collect()
 }
@@ -165,14 +194,15 @@ impl ActiveContract {
         now_secs >= self.deadline_secs
     }
 
-    /// Conta um abate; `true` quando a Caça fica completa.
-    pub fn record_kill(&mut self) -> bool {
-        match self.contract.kind {
-            ContractKind::Hunt { kills } => {
+    /// Conta um abate feito na zona `sunk_in`; só vale o da zona da Caçada.
+    /// `true` quando a Caçada fica completa.
+    pub fn record_kill(&mut self, sunk_in: Option<&str>) -> bool {
+        match &self.contract.kind {
+            ContractKind::Hunt { kills, zone } if sunk_in == Some(zone.as_str()) => {
                 self.kills += 1;
-                self.kills >= kills
+                self.kills >= *kills
             }
-            ContractKind::Delivery { .. } => false,
+            _ => false,
         }
     }
 
@@ -234,11 +264,41 @@ mod tests {
         ]
     }
 
+    const GROUNDS: [HuntingGround<'static>; 2] = [
+        HuntingGround {
+            name: "Corredor do Alvorecer",
+            lawless: false,
+        },
+        HuntingGround {
+            name: "Mar Negro",
+            lawless: true,
+        },
+    ];
+
+    #[test]
+    fn every_board_leads_with_a_zone_hunt_paying_more_where_lawless() {
+        let ports = ports();
+        for seed in 0..50 {
+            let offers = generate_offers(&ports[0], &ports, &GROUNDS, seed, 0);
+            let ContractKind::Hunt { kills, zone } = &offers[0].kind else {
+                panic!("primeira oferta deveria ser Caçada");
+            };
+            let per_kill = offers[0].reward / u64::from(*kills);
+            let expected = if zone == "Mar Negro" { 240 } else { 150 };
+            assert_eq!(per_kill, expected, "{zone}");
+        }
+        // Sem zona de caça, o quadro é só de Entregas.
+        let offers = generate_offers(&ports[0], &ports, &[], 3, 0);
+        assert!(offers
+            .iter()
+            .all(|c| matches!(c.kind, ContractKind::Delivery { .. })));
+    }
+
     #[test]
     fn generator_is_deterministic_and_well_formed() {
         let ports = ports();
-        let a = generate_offers(&ports[0], &ports, 42, 10);
-        let b = generate_offers(&ports[0], &ports, 42, 10);
+        let a = generate_offers(&ports[0], &ports, &GROUNDS, 42, 10);
+        let b = generate_offers(&ports[0], &ports, &GROUNDS, 42, 10);
         assert_eq!(a, b);
         assert_eq!(a.len(), OFFERS_PER_PORT);
         assert_eq!(a.iter().map(|c| c.id).collect::<Vec<_>>(), vec![10, 11, 12]);
@@ -250,14 +310,14 @@ mod tests {
             }
         }
         // Seeds diferentes variam o quadro (em algum ponto de 20 tentativas).
-        assert!((0..20).any(|seed| generate_offers(&ports[0], &ports, seed, 10) != a));
+        assert!((0..20).any(|seed| generate_offers(&ports[0], &ports, &GROUNDS, seed, 10) != a));
     }
 
     #[test]
     fn delivery_reward_uses_destination_value_and_distance() {
         let ports = ports();
         let delivery = (0..200)
-            .flat_map(|seed| generate_offers(&ports[0], &ports, seed, 0))
+            .flat_map(|seed| generate_offers(&ports[0], &ports, &GROUNDS, seed, 0))
             .find(|c| matches!(&c.kind, ContractKind::Delivery { item, .. } if item == "Madeira"))
             .expect("alguma seed gera entrega de Madeira");
         // 25 Madeira × 16g (Mina paga 1.6x) × 1.5 + 1200 × 0.1 = 720.
@@ -268,7 +328,7 @@ mod tests {
     #[test]
     fn single_port_only_offers_hunts() {
         let ports = ports();
-        let offers = generate_offers(&ports[0], &ports[..1], 7, 0);
+        let offers = generate_offers(&ports[0], &ports[..1], &GROUNDS, 7, 0);
         assert!(offers
             .iter()
             .all(|c| matches!(c.kind, ContractKind::Hunt { .. })));
@@ -278,7 +338,10 @@ mod tests {
     fn active_contract_expires_counts_kills_and_checks_delivery() {
         let hunt = Contract {
             id: 1,
-            kind: ContractKind::Hunt { kills: 2 },
+            kind: ContractKind::Hunt {
+                kills: 2,
+                zone: String::from("Mar Negro"),
+            },
             reward: 300,
             duration_secs: 60.0,
         };
@@ -286,8 +349,12 @@ mod tests {
         assert_eq!(active.remaining_secs(130.0), 30.0);
         assert!(!active.expired(159.0));
         assert!(active.expired(160.0));
-        assert!(!active.record_kill());
-        assert!(active.record_kill());
+        // Abate fora da zona da Caçada não conta.
+        assert!(!active.record_kill(Some("Baía da Serra")));
+        assert!(!active.record_kill(None));
+        assert_eq!(active.progress(), 0);
+        assert!(!active.record_kill(Some("Mar Negro")));
+        assert!(active.record_kill(Some("Mar Negro")));
 
         let (a, b, local) = (
             ItemInstanceId::new(),

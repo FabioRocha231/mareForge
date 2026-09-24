@@ -36,7 +36,8 @@ pub struct NodeIdCounter(pub u32);
 fn resource_of_node(name: &str, region: &str, dev: &DevItems) -> Option<ItemDefinitionId> {
     match name {
         // MV-066: portos livres têm madeira e minério na mesma baía.
-        "Mata Costeira" => return Some(dev.timber),
+        "Mata Costeira" | "Madeira à Deriva" => return Some(dev.timber),
+        "Veio Submerso" => return Some(dev.ore),
         "Jazida Costeira" => return Some(dev.ore),
         "Recife Abissal" => return Some(dev.abyssal_pearl),
         "Coração da Cerração" => return Some(dev.fog_essence),
@@ -121,6 +122,8 @@ pub fn nodes_snapshot(nodes: &Query<&ServerNode>, catalog: &ItemCatalog) -> Node
 
 /// Coleta (PRD MF-019): perto do node, com estoque e espaço de porão. O
 /// servidor corta o pedido ao que couber — nada se perde no mar.
+// System Bevy: params são injeção de dependência, não assinatura.
+#[allow(clippy::too_many_arguments)]
 pub fn handle_gather(
     mut gather_events: EventReader<ServerReceiveMessage<GatherNode>>,
     mut connection_manager: ResMut<ConnectionManager>,
@@ -129,6 +132,8 @@ pub fn handle_gather(
     mut metrics: ResMut<crate::net::Metrics>,
     mut ships: Query<&mut ServerShip>,
     mut nodes: Query<&mut ServerNode>,
+    mut renown: EventWriter<crate::renown::RenownEarned>,
+    talents: Res<crate::talents::CaptainTalents>,
 ) {
     for event in gather_events.read() {
         let client_id = event.from();
@@ -225,13 +230,27 @@ pub fn handle_gather(
         }
 
         let taken = server_node.node.take(amount);
+        // Rosa dos Ventos: coletor treinado tira um pouco a mais (cabe no porão).
+        let extra = talents
+            .bonus(ship.character)
+            .gather_extra(taken)
+            .min(affordable - taken);
         ship.hold
             .insert(
                 &dev.catalog,
-                ItemInstance::new_resource(ItemInstanceId::new(), server_node.node.resource, taken),
+                ItemInstance::new_resource(
+                    ItemInstanceId::new(),
+                    server_node.node.resource,
+                    taken + extra,
+                ),
             )
             .expect("cabe: o espaço foi conferido acima");
-        metrics.items_gathered += u64::from(taken);
+        metrics.items_gathered += u64::from(taken + extra);
+        renown.send(crate::renown::RenownEarned {
+            character: ship.character,
+            amount: taken * marvyr_domain_economy::renown::PER_GATHERED_UNIT,
+            reason: "coleta",
+        });
         if server_node.node.is_depleted() {
             server_node.respawn_at =
                 Some(Instant::now() + Duration::from_secs_f32(policy.0.respawn_secs));
@@ -248,7 +267,7 @@ pub fn handle_gather(
             &GatherResult {
                 node_id: node_num,
                 success: true,
-                gathered: taken,
+                gathered: taken + extra,
                 reason: String::new(),
             },
         );
@@ -264,7 +283,7 @@ pub fn handle_gather(
         info!(
             ship_id = ship.ship_id,
             node_num,
-            gathered = taken,
+            gathered = taken + extra,
             resource = %definition.display_name,
             "recursos coletados"
         );

@@ -328,6 +328,7 @@ fn page_lines(page: usize) -> Vec<Line> {
             // Só teclado: o controle não tem botão sobrando para a carta.
             Custom("M", "—", "Carta náutica: o que você já navegou"),
             Custom("O", "—", "Ligar e desligar a música"),
+            Custom("I", "—", "Rosa dos Ventos: talentos ganhos com Renome"),
             Prose("O vento manda. De popa ou de través o navio corre; contra o vento mal sai do lugar. A rosa no canto direito mostra de onde ele sopra e como está o seu pano."),
         ],
         1 => vec![

@@ -9,6 +9,7 @@ pub mod motion;
 pub mod presence;
 pub mod sailing;
 pub mod stats;
+pub mod talents;
 pub mod weather;
 
 pub use components::{EquippedComponent, EquippedComponents};

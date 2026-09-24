@@ -277,6 +277,7 @@ pub fn handle_craft(
     mut market: ResMut<crate::market::ServerMarket>,
     mut ship_ids: ResMut<crate::net::ShipIdCounter>,
     mut ships: Query<(Entity, &mut ServerShip)>,
+    mut renown: EventWriter<crate::renown::RenownEarned>,
 ) {
     for event in craft_events.read() {
         let client_id = event.from();
@@ -323,6 +324,11 @@ pub fn handle_craft(
                         output = %name,
                         "equipamento fabricado no storage do porto"
                     );
+                    renown.send(crate::renown::RenownEarned {
+                        character,
+                        amount: marvyr_domain_economy::renown::PER_CRAFT,
+                        reason: "fabricação",
+                    });
                     send_craft_result(&mut connection_manager, client_id, recipe_num, Ok(()));
                 }
                 Err(error) => {
@@ -359,6 +365,14 @@ pub fn handle_craft(
                 &mut ship,
                 region,
             );
+            if built.is_ok() {
+                // Casco novo vale como quatro fabricações.
+                renown.send(crate::renown::RenownEarned {
+                    character,
+                    amount: 4 * marvyr_domain_economy::renown::PER_CRAFT,
+                    reason: "navio construído",
+                });
+            }
             send_craft_result(&mut connection_manager, client_id, recipe_num, built);
             continue;
         }

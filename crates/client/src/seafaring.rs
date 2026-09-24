@@ -338,9 +338,11 @@ pub fn sea_status_line(state: &ShipState) -> String {
     line
 }
 
-#[allow(clippy::type_complexity)]
+// System Bevy: params são injeção de dependência, não assinatura.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn update_sea_hud(
     my_ship: Res<MyShip>,
+    world: Option<Res<crate::world::ClientWorld>>,
     events: Res<SeaEvents>,
     marks: Res<TreasureMarks>,
     visuals: Query<&ShipVisual>,
@@ -361,7 +363,13 @@ fn update_sea_hud(
     let Some(mine) = my_state(&my_ship, &visuals) else {
         return;
     };
-    let here = Vec2::new(mine.x, mine.y);
+    // Distância e rumo no mapa náutico: um evento em outra zona fica a
+    // quantos portões de viagem, não a quanto no plano do mundo.
+    let on_chart = |x: f32, y: f32| {
+        let (cx, cy) = world.as_ref().map_or((x, y), |w| w.0.chart_position(x, y));
+        Vec2::new(cx, cy)
+    };
+    let here = on_chart(mine.x, mine.y);
     let status = sea_status_line(mine);
     for mut text in &mut texts.p0() {
         if text.0 != status {
@@ -369,7 +377,7 @@ fn update_sea_hud(
         }
     }
     let where_is = |x: f32, y: f32| {
-        let there = Vec2::new(x, y);
+        let there = on_chart(x, y);
         format!(
             "{} {}",
             distance_label(here.distance(there)),

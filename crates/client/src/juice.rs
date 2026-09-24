@@ -224,6 +224,20 @@ struct DamageNumber {
 
 const DAMAGE_NUMBER_SECS: f32 = 0.8;
 
+/// Texto que sobe e some sobre o mundo (dano, Renome ganho).
+pub fn spawn_float_text(commands: &mut Commands, at: Vec2, text: String, color: Color) {
+    commands.spawn((
+        Text2d::new(text),
+        TextFont {
+            font_size: 22.0,
+            ..default()
+        },
+        TextColor(color),
+        Transform::from_translation((at + Vec2::new(0.0, 24.0)).extend(layers::LABELS)),
+        DamageNumber { age: 0.0, color },
+    ));
+}
+
 fn spawn_damage_numbers(mut commands: Commands, mut events: EventReader<SeaEvent>) {
     for event in events.read() {
         let SeaEvent::HullHit {
@@ -237,16 +251,7 @@ fn spawn_damage_numbers(mut commands: Commands, mut events: EventReader<SeaEvent
         } else {
             Color::WHITE
         };
-        commands.spawn((
-            Text2d::new(format!("-{damage}")),
-            TextFont {
-                font_size: 22.0,
-                ..default()
-            },
-            TextColor(color),
-            Transform::from_translation((at + Vec2::new(0.0, 24.0)).extend(layers::LABELS)),
-            DamageNumber { age: 0.0, color },
-        ));
+        spawn_float_text(&mut commands, at, format!("-{damage}"), color);
     }
 }
 

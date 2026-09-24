@@ -35,6 +35,11 @@ use crate::reputation::{notoriety_gain, Offense, Reputation};
 /// tentáculos (m). O monstro não tem canhão: precisa encostar.
 const KRAKEN_BITE: u32 = 22;
 const KRAKEN_REACH: f32 = 42.0;
+
+/// Alcance máximo de canhão de NPC: o do casco inicial do jogador.
+fn npc_max_range(dev_ships: &DevShips) -> f32 {
+    dev_ships.merchant.base_weapon_range
+}
 /// Segundos entre dois golpes do Kraken.
 const KRAKEN_BITE_SECS: f32 = 1.6;
 /// Distância lateral (m) da escolta ao galeão.
@@ -94,6 +99,17 @@ impl NpcRole {
             Self::Pirate | Self::Kraken => ShipKind::Corsair,
             Self::Navy | Self::Escort | Self::TreasureGalleon => ShipKind::Patrol,
             Self::Caravan { .. } => ShipKind::SmallMerchant,
+        }
+    }
+
+    /// Renome de quem afunda (MV-067): quanto mais perigoso, mais rende.
+    pub fn renown(self) -> u32 {
+        match self {
+            Self::Caravan { .. } => 20,
+            Self::Pirate | Self::Navy => 35,
+            Self::Escort => 50,
+            Self::TreasureGalleon => 150,
+            Self::Kraken => 250,
         }
     }
 
@@ -216,7 +232,8 @@ impl NpcSpawnConfig {
     pub fn for_map(map: &WorldMap) -> Self {
         let features = map.features();
         Self {
-            count: 3,
+            // MV-067: um pirata por ponto do mapa (zonas sem lei inteiras).
+            count: features.pirate_spawns.len(),
             // Águas da Ilha do Coral Negro: lawless e longe dos portos.
             spawn_positions: features.pirate_spawns.clone(),
             respawn_after_secs: 30.0,
@@ -406,12 +423,15 @@ pub(crate) fn build_npc(
     let ship_id = next_npc_id(ids);
     let kind = role.kind();
     let definition = dev_ships.definition(kind).clone();
-    let stats = compute_ship_stats(
+    let mut stats = compute_ship_stats(
         &definition,
         &EquippedComponents::default(),
         &ItemCatalog::default(),
     )
     .expect("stats de navio sem equipamento não podem falhar");
+    // MV-067: NPC nunca atira mais longe que o navio inicial do jogador —
+    // quem é atingido sempre consegue revidar (o Kraken morde de perto).
+    stats.weapon_range = stats.weapon_range.min(npc_max_range(dev_ships));
     let max_hp = stats.max_hp;
     let cargo_capacity = stats.cargo_capacity;
     let position = config.home(role, position);
@@ -845,12 +865,13 @@ pub fn simulate_npcs(
     mut metrics: ResMut<crate::net::Metrics>,
     mut npc_respawns: ResMut<NpcRespawnQueue>,
     mut reputation: ResMut<Reputation>,
-    (mut boardings, mut wreck_ids, mut live_wrecks, dev, time): (
+    (mut boardings, mut wreck_ids, mut live_wrecks, dev, time, mut renown): (
         ResMut<crate::seafaring::NpcBoardings>,
         ResMut<crate::net::WreckIdCounter>,
         ResMut<crate::net::LiveWreckRecords>,
         Res<DevItems>,
         Res<Time>,
+        EventWriter<crate::renown::RenownEarned>,
     ),
 ) {
     let player_positions: HashMap<u32, (f32, f32)> = ships
@@ -1030,11 +1051,27 @@ pub fn simulate_npcs(
                     gold
                 }
                 _ if bounty_gold > 0 => {
-                    award_npc_bounty(&mut market, &mut metrics, killer, npc_ship_id, bounty_gold);
+                    let sunk_in = map
+                        .0
+                        .area_at(position.0, position.1)
+                        .map(|index| map.0.features().areas[index].name);
+                    award_npc_bounty(
+                        &mut market,
+                        &mut metrics,
+                        killer,
+                        npc_ship_id,
+                        bounty_gold,
+                        sunk_in,
+                    );
                     bounty_gold
                 }
                 _ => 0,
             };
+            renown.send(crate::renown::RenownEarned {
+                character: killer,
+                amount: role.renown(),
+                reason: "navio afundado",
+            });
             crate::market::send_wallet(&mut connection_manager, &market, &viewers, killer);
             if let Some(client) = client_of(killer) {
                 let text = match role {
@@ -1181,9 +1218,10 @@ pub(crate) fn award_npc_bounty(
     killer: CharacterId,
     npc_ship_id: u32,
     bounty_gold: u64,
+    sunk_in: Option<&'static str>,
 ) -> WalletUpdated {
     market.credit(killer, Money(bounty_gold));
-    market.npc_kills.push(killer);
+    market.npc_kills.push((killer, sunk_in));
     market.ledger.record(
         LedgerKind::NpcBounty,
         Money(bounty_gold),
@@ -1736,7 +1774,7 @@ mod tests {
         let killer = market.character("killer");
         let mut metrics = crate::net::Metrics::default();
 
-        let wallet = award_npc_bounty(&mut market, &mut metrics, killer, 7, 50);
+        let wallet = award_npc_bounty(&mut market, &mut metrics, killer, 7, 50, None);
 
         assert_eq!(wallet.gold, market.balance(killer).0);
         assert!(market
