@@ -1,16 +1,18 @@
-//! Playtest session recorder (MF-055).
+//! Session recorder (MF-055, MV-061).
 //!
-//! Observabilidade de desenvolvimento, não economia autoritativa: em uma
-//! execução `--playtest`, identifica a sessão por um UUID e grava um resumo
-//! JSON em `playtest-results/` quando o processo encerra de forma ordenada
-//! (SIGTERM/SIGINT). Nada aqui toca no estado persistido do jogo.
+//! Observabilidade, não economia autoritativa: toda execução do servidor
+//! identifica a sessão por um UUID e grava um resumo JSON em
+//! `MARVYR_REPORT_DIR` (default `playtest-results/`) quando o processo
+//! encerra de forma ordenada (SIGTERM/SIGINT): `session-<id>.json` e uma
+//! cópia `session-summary.json` com a última sessão. Nada aqui toca no
+//! estado persistido do jogo.
 
 use std::time::Instant;
 
 use bevy::app::{App, AppExit, TerminalCtrlCHandlerPlugin};
 use bevy::ecs::event::EventReader;
 use bevy::prelude::{IntoSystemConfigs, Query, Res, Resource, Update};
-use marvyr_domain_economy::Ledger;
+use marvyr_domain_economy::{Ledger, LedgerKind};
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -29,6 +31,9 @@ struct PlaytestBoot(Instant);
 /// (SmallMerchant=0, Patrol=1, Corsair=2).
 #[derive(Serialize)]
 struct PlaytestReport {
+    version: &'static str,
+    build: &'static str,
+    protocol: u16,
     session_duration: f64,
     players_seen: usize,
     trips: u64,
@@ -46,6 +51,16 @@ struct PlaytestReport {
     gold_burned: u64,
     market_volume: u64,
     npc_bounty_gold_minted: u64,
+    /// MV-061: ouro por origem do ledger — quanto da economia é sustentado
+    /// por faucet NPC (bounty, guilda, contrato, caravana) vs. jogadores.
+    economy_by_source: std::collections::BTreeMap<String, u64>,
+    cargo_value_departed: u64,
+    cargo_value_arrived: u64,
+    cargo_value_sunk: u64,
+    ships_destroyed: u64,
+    boardings_won: u64,
+    treasures_dug: u64,
+    sea_events_started: u64,
 }
 
 /// Monta o resumo a partir do `Metrics` e do `Ledger` já existentes. Não
@@ -84,10 +99,11 @@ fn build_report<'a>(
     };
 
     PlaytestReport {
+        version: marvyr_protocol::VERSION_LABEL,
+        build: marvyr_protocol::BUILD_SHA,
+        protocol: marvyr_protocol::PROTOCOL_VERSION,
         session_duration,
-        // TODO(MF-055): a contagem de jogadores distintos não existe na
-        // telemetria atual; manter zero sem instrumentar gameplay novo.
-        players_seen: 0,
+        players_seen: metrics.unique_players.len(),
         trips: metrics.trip_count,
         completed_routes,
         average_trip_duration,
@@ -103,20 +119,33 @@ fn build_report<'a>(
         gold_burned: ledger.burned().0,
         market_volume: ledger.market_volume().0,
         npc_bounty_gold_minted: metrics.npc_bounty_gold_minted,
+        economy_by_source: LedgerKind::ALL
+            .iter()
+            .map(|kind| (format!("{kind:?}"), ledger.total(*kind).0))
+            .collect(),
+        cargo_value_departed: metrics.cargo_value_departed,
+        cargo_value_arrived: metrics.cargo_value_arrived,
+        cargo_value_sunk: metrics.cargo_value_sunk,
+        ships_destroyed: metrics.ships_destroyed,
+        boardings_won: metrics.boardings_won,
+        treasures_dug: metrics.treasures_dug,
+        sea_events_started: metrics.sea_events_started,
     }
 }
 
-/// Grava o resumo em `playtest-results/session-{id}.json`.
+/// Grava o resumo em `<dir>/session-{id}.json` e `<dir>/session-summary.json`.
 fn write_report(report: &PlaytestReport, session_id: Uuid) -> std::io::Result<()> {
-    std::fs::create_dir_all("playtest-results")?;
-    let path = format!("playtest-results/session-{session_id}.json");
+    let dir = std::env::var_os("MARVYR_REPORT_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("playtest-results"));
+    std::fs::create_dir_all(&dir)?;
     let json = serde_json::to_string_pretty(report)
         .map_err(|error| std::io::Error::other(error.to_string()))?;
-    std::fs::write(path, json)
+    std::fs::write(dir.join(format!("session-{session_id}.json")), &json)?;
+    std::fs::write(dir.join("session-summary.json"), json)
 }
 
-/// Instala os recursos e o dump no encerramento. Chamado apenas no modo
-/// `--playtest`, então o caminho normal nunca cria pasta nem arquivo.
+/// Instala os recursos, o handler de SIGTERM e o dump no encerramento.
 pub(crate) fn install(app: &mut App) {
     install_sigterm_handler();
     app.insert_resource(PlaytestSessionId(Uuid::new_v4()));
@@ -153,7 +182,9 @@ fn dump_on_exit(
 }
 
 /// SIGTERM roteado para o mesmo flag do Ctrl+C, para que o encerramento
-/// ordenado dispare o dump antes do processo sair.
+/// ordenado (docker stop, Dokploy redeploy) persista e grave o resumo antes
+/// do processo sair.
+#[cfg(unix)]
 fn install_sigterm_handler() {
     let handler: extern "C" fn(libc::c_int) = handle_sigterm;
     // SAFETY: assinatura e semântica de `libc::signal` para um handler global
@@ -164,6 +195,11 @@ fn install_sigterm_handler() {
     }
 }
 
+/// Windows não tem SIGTERM: Ctrl+C (TerminalCtrlCHandlerPlugin) cobre.
+#[cfg(not(unix))]
+fn install_sigterm_handler() {}
+
+#[cfg(unix)]
 extern "C" fn handle_sigterm(_sig: libc::c_int) {
     TerminalCtrlCHandlerPlugin::gracefully_exit();
 }

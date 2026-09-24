@@ -243,6 +243,7 @@ fn ship_record_roundtrips_through_postgres() {
         // MF-049: testa o roundtrip da presença. Navio do teste estava
         // fora do porto no momento da persistência — restaura igual.
         presence: marvyr_domain_ships::VesselPresence::AtSea,
+        crew: 7,
     };
 
     store.save_ship(&record).expect("save_ship");

@@ -50,6 +50,8 @@ pub struct ShipRecord {
     /// (não tentamos reconstruir duração anterior — sem dado persistido
     /// para isso). `Docked` mantém `trip_started_at = None`.
     pub presence: VesselPresence,
+    /// MV-061: marujos a bordo (tripulação é propriedade embarcada).
+    pub crew: u16,
 }
 
 /// Registro persistido de um wreck (MF-027 cont., PRD §67): apenas os
@@ -438,24 +440,28 @@ impl StateStore for PostgresStateStore {
             let mut tx = self.pool.begin().await.map_err(|error| error.to_string())?;
 
             for (token, character) in &snapshot.identities {
-                let email = format!("char-{}@local.dev", character.0.simple());
+                // Conta real (`account:<uuid>`, criada pelo marvyr-auth) ou
+                // conta-sombra do token anônimo de dev (id = personagem).
+                let account = crate::market::account_of_identity(token).unwrap_or(character.0);
+                let email = format!("char-{}@local.dev", account.simple());
                 sqlx::query(
                     "INSERT INTO accounts (id, email, password_hash) VALUES ($1, $2, '') \
                      ON CONFLICT (id) DO NOTHING",
                 )
-                .bind(character.0)
+                .bind(account)
                 .bind(&email)
                 .execute(&mut *tx)
                 .await
                 .map_err(|error| error.to_string())?;
                 sqlx::query(
                     "INSERT INTO characters (id, account_id, name, region_id, last_port_region_id) \
-                     VALUES ($1, $1, $2, $3, $3) ON CONFLICT (id) DO UPDATE SET \
+                     VALUES ($1, $4, $2, $3, $3) ON CONFLICT (id) DO UPDATE SET \
                      name = EXCLUDED.name, last_seen_at = now()",
                 )
                 .bind(character.0)
                 .bind(token)
                 .bind(Uuid::nil())
+                .bind(account)
                 .execute(&mut *tx)
                 .await
                 .map_err(|error| error.to_string())?;
@@ -477,10 +483,16 @@ impl StateStore for PostgresStateStore {
 
             // Estado mutável é substituído inteiro dentro da transação;
             // storage/escrow/orders nunca ficam pela metade.
-            sqlx::query("DELETE FROM item_instances")
-                .execute(&mut *tx)
-                .await
-                .map_err(|error| error.to_string())?;
+            // Só storage/escrow pertencem a este snapshot: carga de navio,
+            // equipamento instalado e baús de wreck têm dono próprio
+            // (`save_ship`/wrecks) e não podem sumir num save de mercado.
+            sqlx::query(
+                "DELETE FROM item_instances \
+                 WHERE location ? 'PortStorage' OR location ? 'MarketEscrow'",
+            )
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| error.to_string())?;
             sqlx::query("DELETE FROM market_orders")
                 .execute(&mut *tx)
                 .await
@@ -547,10 +559,11 @@ impl StateStore for PostgresStateStore {
 
     fn load_ship(&self, character: CharacterId) -> Result<Option<ShipRecord>, String> {
         self.runtime.block_on(async {
-            let Some((id, kind, hp, x, y, heading, presence)) =
-                sqlx::query_as::<_, (Uuid, String, i32, f64, f64, f64, String)>(
-                    "SELECT id, ship_kind, current_hp, position_x, position_y, heading, presence \
-                 FROM ship_instances WHERE character_id = $1 LIMIT 1",
+            let Some((id, kind, hp, x, y, heading, presence, crew)) =
+                sqlx::query_as::<_, (Uuid, String, i32, f64, f64, f64, String, i32)>(
+                    "SELECT id, ship_kind, current_hp, position_x, position_y, heading, presence, \
+                 crew FROM ship_instances WHERE character_id = $1 \
+                 ORDER BY updated_at DESC LIMIT 1",
                 )
                 .bind(character.0)
                 .fetch_optional(&self.pool)
@@ -612,6 +625,7 @@ impl StateStore for PostgresStateStore {
                 cargo,
                 equipped,
                 presence,
+                crew: crew.clamp(0, i32::from(u16::MAX)) as u16,
             }))
         })
     }
@@ -625,12 +639,12 @@ impl StateStore for PostgresStateStore {
                 "INSERT INTO ship_instances \
                  (id, character_id, definition_id, ship_kind, equipped_components, \
                   current_hp, current_region_id, position_x, position_y, heading, \
-                  presence) \
-                 VALUES ($1, $2, $3, $4, '{}'::jsonb, $5, $3, $6, $7, $8, $9) \
+                  presence, crew) \
+                 VALUES ($1, $2, $3, $4, '{}'::jsonb, $5, $3, $6, $7, $8, $9, $10) \
                  ON CONFLICT (id) DO UPDATE SET current_hp = EXCLUDED.current_hp, \
                  position_x = EXCLUDED.position_x, position_y = EXCLUDED.position_y, \
                  heading = EXCLUDED.heading, presence = EXCLUDED.presence, \
-                 updated_at = now()",
+                 crew = EXCLUDED.crew, updated_at = now()",
             )
             .bind(record.ship_instance.0)
             .bind(record.character.0)
@@ -641,18 +655,44 @@ impl StateStore for PostgresStateStore {
             .bind(record.y as f64)
             .bind(record.heading as f64)
             .bind(presence)
+            .bind(i32::from(record.crew))
             .execute(&mut *tx)
             .await
             .map_err(|error| error.to_string())?;
 
-            // A carga embarcada substitui inteira (itens do navio somem e
-            // renascem do estado atual — dentro da mesma transação).
-            sqlx::query("DELETE FROM item_instances WHERE location ->> 'ShipCargo' = $1")
-                .bind(record.ship_instance.0.to_string())
+            // Um personagem tem UM navio vivo: cascos antigos (afundados
+            // ou substituídos por construção) saem junto com o que tinham a
+            // bordo — senão o restore escolheria um casco qualquer.
+            let stale: Vec<(Uuid,)> = sqlx::query_as(
+                "SELECT id FROM ship_instances WHERE character_id = $1 AND id <> $2",
+            )
+            .bind(record.character.0)
+            .bind(record.ship_instance.0)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|error| error.to_string())?;
+            for (ship,) in stale
+                .iter()
+                .chain(std::iter::once(&(record.ship_instance.0,)))
+            {
+                // A carga e o equipamento substituem inteiros (itens do
+                // navio somem e renascem do estado atual — mesma transação).
+                sqlx::query(
+                    "DELETE FROM item_instances WHERE location ->> 'ShipCargo' = $1 \
+                     OR location -> 'Equipped' ->> 'ship' = $1",
+                )
+                .bind(ship.to_string())
                 .execute(&mut *tx)
                 .await
                 .map_err(|error| error.to_string())?;
-            for custody in &record.cargo {
+            }
+            sqlx::query("DELETE FROM ship_instances WHERE character_id = $1 AND id <> $2")
+                .bind(record.character.0)
+                .bind(record.ship_instance.0)
+                .execute(&mut *tx)
+                .await
+                .map_err(|error| error.to_string())?;
+            for custody in record.cargo.iter().chain(&record.equipped) {
                 Self::insert_custody(&mut tx, record.character, custody)
                     .await
                     .map_err(|error| error.to_string())?;
@@ -761,6 +801,7 @@ impl std::str::FromStr for StoredLedgerKind {
             "guildpurchase" => Ok(Self(LedgerKind::GuildPurchase)),
             "contractreward" => Ok(Self(LedgerKind::ContractReward)),
             "caravanplunder" => Ok(Self(LedgerKind::CaravanPlunder)),
+            "crewwage" => Ok(Self(LedgerKind::CrewWage)),
             "bountyclaim" => Ok(Self(LedgerKind::BountyClaim)),
             _ => Err(()),
         }

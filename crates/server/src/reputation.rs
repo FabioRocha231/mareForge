@@ -311,9 +311,10 @@ pub fn track_player_hits(
     ships: Query<&ServerShip>,
     mut reputation: ResMut<Reputation>,
 ) {
-    for (_, target_ship_id, _, attacker_ship_id, _) in &impacts.0 {
+    for impact in &impacts.0 {
         let find = |id: u32| ships.iter().find(|ship| ship.ship_id == id);
-        let (Some(attacker), Some(victim)) = (find(*attacker_ship_id), find(*target_ship_id))
+        let (Some(attacker), Some(victim)) =
+            (find(impact.attacker_ship_id), find(impact.target_ship_id))
         else {
             continue;
         };

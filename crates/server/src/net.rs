@@ -147,6 +147,8 @@ pub struct DevItems {
     pub black_hull: ItemDefinitionId,
     pub fog_sails: ItemDefinitionId,
     pub abyssal_cannons: ItemDefinitionId,
+    /// MV-061: mapa do tesouro (item de missão; aponta para uma ilha oculta).
+    pub treasure_map: ItemDefinitionId,
 }
 
 /// Recurso raro (sem slot) para o catálogo dev.
@@ -182,7 +184,7 @@ fn equipment_item(
 }
 
 impl DevItems {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let timber = ItemDefinitionId::stable("Madeira");
         let ore = ItemDefinitionId::stable("Minério");
         let coral = ItemDefinitionId::stable("Coral Negro");
@@ -330,6 +332,16 @@ impl DevItems {
         ] {
             register(definition);
         }
+        let treasure_map = ItemDefinitionId::stable("Mapa do Tesouro");
+        register(ItemDefinition {
+            id: treasure_map,
+            kind: ItemKind::Quest,
+            equipment: None,
+            max_stack: 1,
+            base_weight: 1,
+            tags: SmallVec::new(),
+            display_name: String::from("Mapa do Tesouro"),
+        });
         Self {
             catalog,
             timber,
@@ -344,6 +356,7 @@ impl DevItems {
             black_hull,
             fog_sails,
             abyssal_cannons,
+            treasure_map,
         }
     }
 }
@@ -433,7 +446,11 @@ impl Plugin for ServerNetPlugin {
                     transport,
                     ..default()
                 },
-                config: NetcodeConfig::default(),
+                config: NetcodeConfig::default()
+                    .with_protocol_id(marvyr_protocol::NETCODE_PROTOCOL_ID)
+                    .with_key(marvyr_protocol::NETCODE_KEY)
+                    // Wi-Fi ruim não pode derrubar o capitão em 3s.
+                    .with_client_timeout_secs(10),
             })
             .collect::<Vec<_>>();
         app.add_plugins(ServerPlugins::new(ServerConfig {
@@ -442,6 +459,9 @@ impl Plugin for ServerNetPlugin {
             ..default()
         }));
         app.add_plugins(bevy::state::app::StatesPlugin);
+        app.init_resource::<crate::session::AuthConfig>();
+        app.init_resource::<crate::session::PendingKicks>();
+        app.init_resource::<crate::session::IntentBudget>();
         app.init_resource::<CombatTuning>();
         app.init_resource::<ShipIdCounter>();
         app.init_resource::<crate::npc::NpcIdCounter>();
@@ -452,7 +472,9 @@ impl Plugin for ServerNetPlugin {
         app.init_resource::<WreckIdCounter>();
         app.insert_resource(ServerLootPolicy(LootPolicy::default()));
         app.insert_resource(ServerWreckPolicy(WreckPolicy::default()));
-        app.insert_resource(ServerWorldMap(WorldMap::vertical_slice()));
+        app.insert_resource(ServerWorldMap(
+            WorldMap::vertical_slice().with_hidden_islands(),
+        ));
         app.insert_resource(ServerRiskPolicy(RiskPolicy::default()));
         app.insert_resource(ServerGatherPolicy(GatheringPolicy::default()));
         app.insert_resource(ServerDockPolicy::default());
@@ -461,6 +483,7 @@ impl Plugin for ServerNetPlugin {
         app.init_resource::<crate::nodes::NodeIdCounter>();
         app.init_resource::<LiveWreckRecords>();
         app.init_resource::<CombatImpacts>();
+        app.init_resource::<DeferredImpacts>();
         app.init_resource::<PendingShipDestructions>();
         let economy = crate::market::ServerEconomyConfig::default();
         app.insert_resource(crate::market::ServerPriceIndex(MarketPriceIndex::new(
@@ -485,7 +508,10 @@ impl Plugin for ServerNetPlugin {
             mode: ChannelMode::UnorderedUnreliable,
             ..default()
         });
+        // Handshake PRIMEIRO (ids de rede 0 e 1, congelados desde o v15):
+        // client de outra versão ainda decodifica a recusa.
         app.register_message::<ClientHello>(ChannelDirection::ClientToServer);
+        app.register_message::<ServerWelcome>(ChannelDirection::ServerToClient);
         app.register_message::<ShipInput>(ChannelDirection::ClientToServer);
         app.register_message::<Dock>(ChannelDirection::ClientToServer);
         app.register_message::<Undock>(ChannelDirection::ClientToServer);
@@ -501,7 +527,6 @@ impl Plugin for ServerNetPlugin {
         app.register_message::<CreateSellOrder>(ChannelDirection::ClientToServer);
         app.register_message::<CancelSellOrder>(ChannelDirection::ClientToServer);
         app.register_message::<BuySellOrder>(ChannelDirection::ClientToServer);
-        app.register_message::<ServerWelcome>(ChannelDirection::ServerToClient);
         app.register_message::<AssignShip>(ChannelDirection::ServerToClient);
         app.register_message::<DockResult>(ChannelDirection::ServerToClient);
         app.register_message::<LoadoutSnapshot>(ChannelDirection::ServerToClient);
@@ -532,8 +557,18 @@ impl Plugin for ServerNetPlugin {
         app.add_plugins(crate::guild::GuildPlugin);
         app.register_message::<marvyr_protocol::WeatherUpdate>(ChannelDirection::ServerToClient);
         crate::weather::install(app);
+        crate::seafaring::install(app);
         app.register_message::<marvyr_protocol::ReputationUpdate>(ChannelDirection::ServerToClient);
         app.register_message::<marvyr_protocol::WorldEvent>(ChannelDirection::ServerToClient);
+        // v15 (MV-061): combate profundo, tripulação, eventos e tesouro.
+        app.register_message::<marvyr_protocol::SetRepair>(ChannelDirection::ClientToServer);
+        app.register_message::<marvyr_protocol::BoardShip>(ChannelDirection::ClientToServer);
+        app.register_message::<marvyr_protocol::HireCrew>(ChannelDirection::ClientToServer);
+        app.register_message::<marvyr_protocol::DigTreasure>(ChannelDirection::ClientToServer);
+        app.register_message::<marvyr_protocol::ActionResult>(ChannelDirection::ServerToClient);
+        app.register_message::<marvyr_protocol::SeaEventsUpdate>(ChannelDirection::ServerToClient);
+        app.register_message::<marvyr_protocol::TreasureHints>(ChannelDirection::ServerToClient);
+        app.register_message::<marvyr_protocol::IslandsInSight>(ChannelDirection::ServerToClient);
         app.add_systems(Startup, start_server);
         app.add_systems(Startup, crate::nodes::spawn_dev_nodes.after(start_server));
         app.add_systems(Startup, crate::npc::setup_npcs.after(start_server));
@@ -560,6 +595,8 @@ impl Plugin for ServerNetPlugin {
         app.add_systems(
             FixedUpdate,
             (
+                crate::session::police_intents,
+                crate::session::kick_rejected,
                 handle_connections,
                 handle_hello,
                 handle_input,
@@ -614,6 +651,11 @@ impl Plugin for ServerNetPlugin {
                 .chain()
                 .in_set(SimulationSet::Persistence),
         );
+        app.add_systems(
+            FixedUpdate,
+            persist_ships_periodically.in_set(SimulationSet::Persistence),
+        );
+        app.add_systems(Last, persist_ships_on_exit);
     }
 }
 
@@ -662,6 +704,8 @@ pub struct ServerShip {
     pub sail_hp: f32,
     /// MF-059: munição carregada (tecla C).
     pub ammo: Ammo,
+    /// MV-061: leme, tripulação, reparo, escavação e abordagem.
+    pub sea: crate::seafaring::SeaCondition,
 }
 
 /// Dono desconectado; o navio fica no mar por [`DISCONNECT_GRACE_SECS`],
@@ -718,8 +762,28 @@ pub struct LiveWreckRecords(pub Vec<crate::persist::WreckRecord>);
 ///
 /// Tupla: (entidade do projétil, alvo ship_id, dano, dono do projétil ship_id).
 #[derive(Resource, Default)]
-/// (projétil, alvo, dano ao casco, dono do projétil, dano bruto ao pano).
-pub struct CombatImpacts(pub Vec<(Entity, u32, u32, u32, f32)>);
+pub struct CombatImpacts(pub Vec<Impact>);
+
+/// Um golpe num navio de jogador, a aplicar no set `Destruction`.
+#[derive(Debug, Clone, Copy)]
+pub struct Impact {
+    /// Projétil a despachar (`None` = golpe sem bala: kraken, abordagem).
+    pub projectile: Option<Entity>,
+    pub target_ship_id: u32,
+    pub hull_damage: u32,
+    pub attacker_ship_id: u32,
+    /// Dano bruto ao pano.
+    pub sail_damage: f32,
+    /// Ponto do impacto (decide proa/meio/popa — MV-061).
+    pub at: (f32, f32),
+    /// Abordagem vencida: o navio rende inteiro (MV-061).
+    pub boarded: bool,
+}
+
+/// Golpes sem projétil gerados fora do set `Combat` (kraken, abordagem):
+/// sobrevivem ao `clear` do `simulate_combat` e entram no próximo dano.
+#[derive(Resource, Default)]
+pub struct DeferredImpacts(pub Vec<Impact>);
 
 /// Naufrágio decidido em `apply_combat_damage` (MF-054): só marca e despawna
 /// o navio. `resolve_destructions` materializa wreck + mensagem;
@@ -737,6 +801,8 @@ pub struct PendingShipDestruction {
     pub cargo: Vec<ItemInstance>,
     pub audience: Vec<ClientId>,
     pub exclusive_looter: Option<CharacterId>,
+    /// MV-061: rendido por abordagem — a carga passa inteira ao wreck.
+    pub boarded: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -809,6 +875,14 @@ pub struct Metrics {
     pub cargo_value_unpriced_items: u64,
     /// MF-052: cobertura agregada; 0/0 é reportada como 100%.
     pub cargo_value_coverage_pct: f32,
+    /// MV-061: personagens distintos que entraram na sessão.
+    pub unique_players: HashSet<CharacterId>,
+    /// MV-061: abordagens que renderam o navio alvo.
+    pub boardings_won: u64,
+    /// MV-061: tesouros desenterrados.
+    pub treasures_dug: u64,
+    /// MV-061: eventos de mundo iniciados.
+    pub sea_events_started: u64,
 }
 
 pub enum TripOutcome {
@@ -999,6 +1073,7 @@ pub(crate) fn spawn_ship_for(
         restored_trip_started_at: None,
         sail_hp: SAIL_HP_MAX,
         ammo: Ammo::Round,
+        sea: crate::seafaring::SeaCondition::fresh(marvyr_domain_ships::SKELETON_CREW),
     },));
     ship_id
 }
@@ -1016,6 +1091,7 @@ pub(crate) fn restore_ship_from_record(
     map: &WorldMap,
     record: crate::persist::ShipRecord,
     now: f32,
+    client_id: Option<ClientId>,
 ) -> u32 {
     let ship_id = ship_ids.0;
     ship_ids.0 += 1;
@@ -1059,7 +1135,7 @@ pub(crate) fn restore_ship_from_record(
     };
     commands.spawn((ServerShip {
         ship_id,
-        client_id: None,
+        client_id,
         character: record.character,
         ship_instance: record.ship_instance,
         kind: record.kind,
@@ -1085,6 +1161,11 @@ pub(crate) fn restore_ship_from_record(
         restored_trip_started_at,
         sail_hp: SAIL_HP_MAX,
         ammo: Ammo::Round,
+        sea: crate::seafaring::SeaCondition::fresh(
+            record
+                .crew
+                .min(marvyr_domain_ships::crew_capacity(record.kind)),
+        ),
     },));
     ship_id
 }
@@ -1135,10 +1216,32 @@ fn handle_connections(
     }
 }
 
-/// Handshake (ADR-0011) + identidade persistente (MF-035). O token do
-/// `ClientHello` resolve o CharacterId; a sessão pode ser nova, mas a
-/// carteira, o storage, as orders e o navio (na janela de graça ou
-/// persistido no store) são do personagem.
+/// Recusa um hello: `ServerWelcome` com motivo e kick agendado (o motivo
+/// precisa sair antes da desconexão).
+fn reject_hello(
+    connection_manager: &mut ConnectionManager,
+    kicks: &mut crate::session::PendingKicks,
+    client_id: ClientId,
+    now: f32,
+    reason: &str,
+) {
+    let _ = connection_manager
+        .send_message::<ReliableChannel, _>(client_id, &ServerWelcome::rejected(reason));
+    kicks.schedule(client_id, now);
+}
+
+/// Texto da recusa por versão: o client mostra o seu próprio número junto.
+pub fn protocol_mismatch_reason(client_protocol: u16) -> String {
+    format!(
+        "Esta versão do Marvyr está desatualizada. Atualize o jogo pelo itch.io. \
+         (client: protocolo {client_protocol}, servidor: protocolo {PROTOCOL_VERSION})"
+    )
+}
+
+/// Handshake (ADR-0011) + identidade (MF-035, MV-061). O JWT do
+/// `ClientHello` resolve a conta e o personagem; a sessão pode ser nova, mas
+/// a carteira, o storage, as orders e o navio (na janela de graça ou
+/// persistido no store) são do personagem. Toda recusa tem motivo e kick.
 // System Bevy: params são injeção de dependência, não assinatura.
 #[allow(clippy::too_many_arguments)]
 fn handle_hello(
@@ -1155,7 +1258,13 @@ fn handle_hello(
     nodes: Query<&crate::nodes::ServerNode>,
     mut ship_ids: ResMut<ShipIdCounter>,
     time: Res<Time>,
+    (auth, mut kicks, mut metrics): (
+        Res<crate::session::AuthConfig>,
+        ResMut<crate::session::PendingKicks>,
+        ResMut<Metrics>,
+    ),
 ) {
+    let now = time.elapsed_secs();
     let mut handled_clients = HashSet::new();
     for event in hello_events.read() {
         let client_id = event.from();
@@ -1172,38 +1281,79 @@ fn handle_hello(
                 expected = PROTOCOL_VERSION,
                 "rejeitando client com protocolo incompatível"
             );
-            let _ = connection_manager.send_message::<ReliableChannel, _>(
+            reject_hello(
+                &mut connection_manager,
+                &mut kicks,
                 client_id,
-                &ServerWelcome {
-                    protocol_version: PROTOCOL_VERSION,
-                    accepted: false,
-                },
+                now,
+                &protocol_mismatch_reason(hello.protocol_version),
             );
             continue;
         }
-        // Fail-closed (§69): hello sem token não vira identidade anônima.
-        let token = hello.identity.trim();
-        if token.is_empty() {
-            warn!(client = ?client_id, "hello sem identidade; recusado");
-            let _ = connection_manager.send_message::<ReliableChannel, _>(
-                client_id,
-                &ServerWelcome {
-                    protocol_version: PROTOCOL_VERSION,
-                    accepted: false,
-                },
-            );
-            continue;
-        }
-        let character = market.character(token);
+        // Fail-closed (§69): hello sem sessão válida não vira identidade.
+        let identity = match crate::session::resolve_identity(&hello.identity, &auth) {
+            Ok(identity) => identity,
+            Err(reason) => {
+                warn!(client = ?client_id, reason, "hello recusado");
+                reject_hello(&mut connection_manager, &mut kicks, client_id, now, reason);
+                continue;
+            }
+        };
+        // Personagem já existente não cunha o bootstrap antes de passar
+        // pelas travas de lotação e de sessão dupla.
+        let known = market.known_character(&identity.key);
 
         // Reassumir um navio vivo nesta sessão? (hello duplicado)
-        if let Some((_, ship)) = ships
+        if let Some(character) = known {
+            if let Some((_, ship)) = ships
+                .iter()
+                .find(|(_, ship)| ship.character == character && ship.client_id == Some(client_id))
+            {
+                info!(ship_id = ship.ship_id, "hello duplicado ignorado");
+                continue;
+            }
+        }
+        let online = ships
             .iter()
-            .find(|(_, ship)| ship.character == character && ship.client_id == Some(client_id))
-        {
-            info!(ship_id = ship.ship_id, "hello duplicado ignorado");
+            .filter(|(_, ship)| ship.client_id.is_some())
+            .count();
+        if online >= auth.max_clients {
+            warn!(client = ?client_id, online, "servidor cheio; hello recusado");
+            reject_hello(
+                &mut connection_manager,
+                &mut kicks,
+                client_id,
+                now,
+                crate::session::REASON_FULL,
+            );
             continue;
         }
+        // Personagem já conectado por OUTRA sessão: recusa explícita.
+        if let Some(character) = known {
+            if ships
+                .iter()
+                .any(|(_, ship)| ship.character == character && ship.client_id.is_some())
+            {
+                warn!(client = ?client_id, "personagem já em mar em outra sessão; recusado");
+                reject_hello(
+                    &mut connection_manager,
+                    &mut kicks,
+                    client_id,
+                    now,
+                    crate::session::REASON_ALREADY_AT_SEA,
+                );
+                continue;
+            }
+        }
+        let character = market.character(&identity.key);
+        metrics.unique_players.insert(character);
+        info!(
+            client = ?client_id,
+            captain = %identity.display_name,
+            character = ?character,
+            "identidade resolvida"
+        );
+
         // Reassumir o navio em janela de graça (reconnect, MF-035).
         if let Some((entity, mut ship)) = ships
             .iter_mut()
@@ -1214,13 +1364,8 @@ fn handle_hello(
             let ship_id = ship.ship_id;
             let reclaimed_kind = ship.kind;
             let position = (ship.motion.x, ship.motion.y);
-            let _ = connection_manager.send_message::<ReliableChannel, _>(
-                client_id,
-                &ServerWelcome {
-                    protocol_version: PROTOCOL_VERSION,
-                    accepted: true,
-                },
-            );
+            let _ = connection_manager
+                .send_message::<ReliableChannel, _>(client_id, &ServerWelcome::accepted());
             let _ = connection_manager.send_message::<ReliableChannel, _>(
                 client_id,
                 &AssignShip {
@@ -1254,11 +1399,6 @@ fn handle_hello(
             info!(ship_id, "sessão reassumida dentro da janela de graça");
             continue;
         }
-        // Personagem já conectado por OUTRA sessão: recusa explícita.
-        if ships.iter().any(|(_, ship)| ship.character == character) {
-            warn!(client = ?client_id, "personagem já em mar; hello ignorado");
-            continue;
-        }
 
         // Navio novo: restaura o persistido (pós-janela, MF-034/035) ou
         // nasce na doca da Serra.
@@ -1281,7 +1421,8 @@ fn handle_hello(
                     // MF-049: passamos o instante atual para que o restore
                     // normalize a medição operacional quando o navio volta
                     // AtSea.
-                    time.elapsed_secs(),
+                    now,
+                    Some(client_id),
                 );
                 info!(
                     ship_id,
@@ -1309,13 +1450,8 @@ fn handle_hello(
                 )
             }
         };
-        let _ = connection_manager.send_message::<ReliableChannel, _>(
-            client_id,
-            &ServerWelcome {
-                protocol_version: PROTOCOL_VERSION,
-                accepted: true,
-            },
-        );
+        let _ = connection_manager
+            .send_message::<ReliableChannel, _>(client_id, &ServerWelcome::accepted());
         let _ = connection_manager.send_message::<ReliableChannel, _>(
             client_id,
             &AssignShip {
@@ -1344,7 +1480,7 @@ fn handle_hello(
             &dev.catalog,
             &restored_equipped,
         );
-        info!(client = ?client_id, ship_id, "navio autoritativo criado");
+        info!(client = ?client_id, ship_id, "navio atribuído");
     }
 }
 
@@ -1401,7 +1537,7 @@ fn handle_input(
             if ship.client_id == Some(client_id) {
                 let incoming = *event.message();
                 if ship.input != incoming {
-                    info!(
+                    tracing::debug!(
                         ship_id = ship.ship_id,
                         throttle = incoming.throttle,
                         turn = incoming.turn,
@@ -1419,6 +1555,7 @@ fn handle_input(
 /// server-authoritative a partir do estado real do navio. A zona do atirador
 /// é a primeira porta (MF-017): de águas protegidas os canhões ficam frios —
 /// e de fora do mapa, fail-closed (§69).
+#[allow(clippy::too_many_arguments)]
 fn handle_fire(
     mut commands: Commands,
     mut fire_events: EventReader<ServerReceiveMessage<FireBroadside>>,
@@ -1427,7 +1564,17 @@ fn handle_fire(
     risk: Res<ServerRiskPolicy>,
     mut projectile_ids: ResMut<ProjectileIdCounter>,
     mut ships: Query<&mut ServerShip>,
+    npcs: Query<&NpcShip>,
 ) {
+    // MV-061: alvos possíveis para a correção de pontaria dentro do arco.
+    let hulls: Vec<(u32, (f32, f32))> = ships
+        .iter()
+        .map(|ship| (ship.ship_id, (ship.motion.x, ship.motion.y)))
+        .chain(
+            npcs.iter()
+                .map(|npc| (npc.ship_id, (npc.motion.x, npc.motion.y))),
+        )
+        .collect();
     for event in fire_events.read() {
         let client_id = event.from();
         let side = event.message().side;
@@ -1462,7 +1609,13 @@ fn handle_fire(
                 continue;
             }
         }
-        if !ship.battery.try_fire(side, tuning.cooldown_secs) {
+        // MV-061: canhão sem gente carrega devagar.
+        let reload = tuning.cooldown_secs
+            * marvyr_domain_ships::reload_multiplier(
+                ship.sea.crew,
+                marvyr_domain_ships::crew_capacity(ship.kind),
+            );
+        if !ship.battery.try_fire(side, reload) {
             continue; // recarregando: clique ignorado, sem spam de projétil
         }
         let projectile_id = projectile_ids.0;
@@ -1475,7 +1628,19 @@ fn handle_fire(
             range: ship.stats.weapon_range,
             muzzle_offset: tuning.muzzle_offset,
         });
-        let salvo = Projectile::broadside_salvo(
+        let targets: Vec<(f32, f32)> = hulls
+            .iter()
+            .filter(|(id, _)| *id != ship.ship_id)
+            .map(|(_, at)| *at)
+            .collect();
+        let aim = marvyr_domain_combat::arc_aim(
+            ship.motion.heading,
+            side,
+            (ship.motion.x, ship.motion.y),
+            &targets,
+            weapon.range,
+        );
+        let mut salvo = Projectile::broadside_salvo(
             projectile_id,
             ship.ship_id,
             side,
@@ -1488,11 +1653,15 @@ fn handle_fire(
             tuning.salvo_spacing,
             ammo,
         );
+        for ball in &mut salvo {
+            ball.rotate(aim);
+        }
         info!(
             ship_id = ship.ship_id,
             ?side,
             ?ammo,
             projectile_id,
+            aim,
             "broadside disparada"
         );
         commands.spawn_batch(salvo.into_iter().map(|p| (ServerProjectile(p),)));
@@ -1693,6 +1862,7 @@ fn simulate_movement(
             tuning,
             battery,
             sail_hp,
+            sea,
             ..
         } = ship.as_mut();
         if matches!(presence, VesselPresence::Docked(_)) {
@@ -1711,7 +1881,9 @@ fn simulate_movement(
             MotionInput {
                 throttle: input.throttle.clamp(0.0, 1.0)
                     * marvyr_domain_ships::sail_speed_multiplier(*sail_hp),
-                turn: input.turn,
+                // MV-061: leme avariado governa menos.
+                turn: input.turn.clamp(-1.0, 1.0)
+                    * marvyr_domain_ships::rudder_turn_multiplier(sea.rudder_hp),
             },
             wind,
             tuning,
@@ -1815,13 +1987,15 @@ fn simulate_combat(
                 continue;
             }
             if projectile.0.hit_ship(*x, *y, tuning.hit_radius) {
-                impacts.0.push((
-                    projectile_entity,
-                    *ship_id,
-                    projectile.0.damage,
-                    projectile.0.owner_ship_id,
-                    projectile.0.sail_damage,
-                ));
+                impacts.0.push(Impact {
+                    projectile: Some(projectile_entity),
+                    target_ship_id: *ship_id,
+                    hull_damage: projectile.0.damage,
+                    attacker_ship_id: projectile.0.owner_ship_id,
+                    sail_damage: projectile.0.sail_damage,
+                    at: (projectile.0.x, projectile.0.y),
+                    boarded: false,
+                });
                 break; // um projétil atinge um navio só
             }
         }
@@ -1830,7 +2004,9 @@ fn simulate_combat(
 
 /// Aplica dano e decide naufrágios (MF-013). Marca as destruições em
 /// `PendingShipDestructions` e despawna projétil + casco; a materialização
-/// de wreck/mensagem/respawn fica nos próximos sistemas.
+/// de wreck/mensagem/respawn fica nos próximos sistemas. MV-061: golpe na
+/// popa avaria o leme, golpe no casco mata marujo e trava o reparo, e a
+/// abordagem vencida rende o navio.
 #[allow(clippy::too_many_arguments)]
 fn apply_combat_damage(
     mut commands: Commands,
@@ -1839,15 +2015,29 @@ fn apply_combat_damage(
     risk_policy: Res<ServerRiskPolicy>,
     time: Res<Time>,
     mut impacts: ResMut<CombatImpacts>,
+    mut deferred: ResMut<DeferredImpacts>,
     mut pending: ResMut<PendingShipDestructions>,
     mut ships: Query<(Entity, &mut ServerShip)>,
     (npcs, reputation): (Query<&NpcShip>, Res<crate::reputation::Reputation>),
 ) {
     pending.0.clear();
-    let impacts = std::mem::take(&mut impacts.0);
+    let mut all = std::mem::take(&mut impacts.0);
+    all.append(&mut deferred.0);
+    let now = time.elapsed_secs();
 
-    for (projectile_entity, target_ship_id, damage, killer_ship_id, sail_damage) in impacts {
-        commands.entity(projectile_entity).despawn();
+    for impact in all {
+        let Impact {
+            projectile,
+            target_ship_id,
+            hull_damage: damage,
+            attacker_ship_id: killer_ship_id,
+            sail_damage,
+            at,
+            boarded,
+        } = impact;
+        if let Some(projectile_entity) = projectile {
+            commands.entity(projectile_entity).despawn();
+        }
 
         // §72 pvp_engagements: projétil entre players. Calculado ANTES do
         // borrow mutável do alvo — só lê `client_id`, não precisa do resto.
@@ -1901,8 +2091,17 @@ fn apply_combat_damage(
                 );
                 continue;
             }
+            // Abordagem vencida: o casco é tomado, não afundado a tiro.
+            let damage = if boarded { ship.hp } else { damage };
             // MF-059: parte do golpe vai ao pano (proporcional ao casco).
             ship.sail_hp = (ship.sail_hp - sail_points(sail_damage, ship.stats.max_hp)).max(0.0);
+            let zone = marvyr_domain_combat::hit_zone(
+                (ship.motion.x, ship.motion.y),
+                ship.motion.heading,
+                at,
+            );
+            let max_hp = ship.stats.max_hp;
+            crate::seafaring::take_hit(&mut ship.sea, damage, max_hp, zone, now);
             match apply_damage(ship.hp, damage) {
                 DamageOutcome::Survived { remaining_hp } => {
                     ship.hp = remaining_hp;
@@ -1911,6 +2110,8 @@ fn apply_combat_damage(
                         damage,
                         hp = remaining_hp,
                         sail_hp = ship.sail_hp,
+                        rudder_hp = ship.sea.rudder_hp,
+                        crew = ship.sea.crew,
                         "impacto no casco"
                     );
                     None
@@ -1924,14 +2125,9 @@ fn apply_combat_damage(
                         metrics.ship_losses_by_kind[ship.kind as usize] += 1;
                         // MF-049: trip termina em Sunk de player ship.
                         // Próxima trip começa no próximo Undock.
-                        finalize_trip(
-                            &mut ship,
-                            &mut metrics,
-                            time.elapsed_secs(),
-                            TripOutcome::Sunk,
-                        );
+                        finalize_trip(&mut ship, &mut metrics, now, TripOutcome::Sunk);
                     }
-                    info!(ship_id = target_ship_id, damage, "SHIP DESTROYED");
+                    info!(ship_id = target_ship_id, damage, boarded, "SHIP DESTROYED");
                     // Full loot (§22-§25): casco é perda total; parte da carga
                     // e do EQUIPAMENTO INSTALADO (MF-039) sobrevive e vira
                     // wreck. Equipar nunca criou proteção.
@@ -2001,6 +2197,7 @@ fn apply_combat_damage(
             cargo,
             audience,
             exclusive_looter,
+            boarded,
         });
 
         commands.entity(entity).despawn();
@@ -2029,12 +2226,17 @@ fn resolve_destructions(
         );
 
         let event = DestructionEventId::new();
-        let outcome = resolve_ship_destruction(
-            event,
-            &destruction.equipment,
-            &destruction.cargo,
-            &loot_policy.0,
-        );
+        // MV-061: navio rendido não afunda — a carga passa inteira.
+        let policy = if destruction.boarded {
+            LootPolicy {
+                cargo_survival_rate: 1.0,
+                ..loot_policy.0
+            }
+        } else {
+            loot_policy.0
+        };
+        let outcome =
+            resolve_ship_destruction(event, &destruction.equipment, &destruction.cargo, &policy);
         metrics.items_destroyed += outcome.destroyed_items.len() as u64;
         info!(
             ship_id = destruction.target_ship_id,
@@ -2165,6 +2367,11 @@ fn to_ship_state(ship: &ServerShip, catalog: &ItemCatalog) -> ShipState {
         faction: marvyr_protocol::Faction::Player,
         // Preenchido em `send_snapshots` a partir da `Reputation`.
         notoriety_tier: 0,
+        rudder_hp: ship.sea.rudder_hp,
+        crew: ship.sea.crew,
+        crew_max: marvyr_domain_ships::crew_capacity(ship.kind),
+        repairing: ship.sea.repairing,
+        dig_progress: ship.sea.dig_progress(),
     }
 }
 
@@ -2341,21 +2548,7 @@ fn expire_ship_grace(
             continue;
         }
         if let Some(store) = store.0.as_ref() {
-            let record = crate::persist::ShipRecord {
-                ship_instance: ship.ship_instance,
-                character: ship.character,
-                kind: ship.kind,
-                hp: ship.hp,
-                x: ship.motion.x,
-                y: ship.motion.y,
-                heading: ship.motion.heading,
-                cargo: ship.hold.items().to_vec(),
-                equipped: ship.loadout.items().cloned().collect(),
-                // MF-049: persiste a presença atual; o restore usa isso
-                // para zerar ou iniciar a medição de trip.
-                presence: ship.presence,
-            };
-            match store.save_ship(&record) {
+            match store.save_ship(&ship_record(ship)) {
                 Ok(()) => info!(
                     ship_id = ship.ship_id,
                     x = ship.motion.x,
@@ -2375,6 +2568,82 @@ fn expire_ship_grace(
             "janela de graça expirou; navio deixou o mar"
         );
     }
+}
+
+/// Registro persistível do estado atual de um navio de jogador.
+pub(crate) fn ship_record(ship: &ServerShip) -> crate::persist::ShipRecord {
+    crate::persist::ShipRecord {
+        ship_instance: ship.ship_instance,
+        character: ship.character,
+        kind: ship.kind,
+        hp: ship.hp,
+        x: ship.motion.x,
+        y: ship.motion.y,
+        heading: ship.motion.heading,
+        cargo: ship.hold.items().to_vec(),
+        equipped: ship.loadout.items().cloned().collect(),
+        // MF-049: persiste a presença atual; o restore usa isso
+        // para zerar ou iniciar a medição de trip.
+        presence: ship.presence,
+        crew: ship.sea.crew,
+    }
+}
+
+/// Intervalo do checkpoint de navios em mar (crash do processo perde no
+/// máximo isso de posição/carga — o ouro e o storage persistem por
+/// operação no mercado).
+const SHIP_CHECKPOINT_SECS: f32 = 30.0;
+
+fn save_ships<'a>(
+    store: &crate::persist::StoreHandle,
+    ships: impl Iterator<Item = &'a ServerShip>,
+) -> usize {
+    let Some(store) = store.0.as_ref() else {
+        return 0;
+    };
+    let mut saved = 0;
+    for ship in ships {
+        match store.save_ship(&ship_record(ship)) {
+            Ok(()) => saved += 1,
+            Err(error) => {
+                warn!(error = %error, ship_id = ship.ship_id, "checkpoint de navio falhou")
+            }
+        }
+    }
+    saved
+}
+
+/// MV-061: checkpoint periódico — restart/crash não devolve o capitão a
+/// um navio de meia hora atrás.
+fn persist_ships_periodically(
+    time: Res<Time>,
+    store: Res<crate::persist::StoreHandle>,
+    ships: Query<&ServerShip>,
+    mut timer: Local<f32>,
+) {
+    *timer += time.delta_secs();
+    if *timer < SHIP_CHECKPOINT_SECS {
+        return;
+    }
+    *timer = 0.0;
+    let saved = save_ships(&store, ships.iter());
+    if saved > 0 {
+        tracing::debug!(saved, "checkpoint de navios");
+    }
+}
+
+/// MV-061: encerramento gracioso (SIGTERM/Ctrl+C) persiste todo navio no
+/// mar antes do processo sair — deploy não custa a carga de ninguém.
+fn persist_ships_on_exit(
+    mut exits: EventReader<AppExit>,
+    store: Res<crate::persist::StoreHandle>,
+    ships: Query<&ServerShip>,
+) {
+    if exits.read().next().is_none() {
+        return;
+    }
+    let saved = save_ships(&store, ships.iter());
+    info!(saved, "servidor encerrando: navios persistidos");
 }
 
 /// Wrecks expirados somem do mar (PRD §26: 5 minutos; tuning no recurso).
@@ -2824,6 +3093,7 @@ mod tests {
             restored_trip_started_at: None,
             sail_hp: SAIL_HP_MAX,
             ammo: Ammo::Round,
+            sea: crate::seafaring::SeaCondition::fresh(4),
         };
 
         let state = to_ship_state(&ship, &ItemCatalog::default());

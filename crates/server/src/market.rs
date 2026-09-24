@@ -190,6 +190,11 @@ impl ServerMarket {
         }
     }
 
+    /// Personagem já conhecido para a identidade, sem cunhar nada.
+    pub fn known_character(&self, identity_token: &str) -> Option<CharacterId> {
+        self.identities.get(identity_token).copied()
+    }
+
     /// Identidade persistente do jogador (MF-035), cunhando o bootstrap dev
     /// no primeiro toque (§48). O token vem do client e é o ÚNICO vínculo
     /// duradouro — conexão nenhuma é dona de nada.
@@ -1303,6 +1308,21 @@ pub fn save_state(
         Ok(()) => info!("estado econômico persistido"),
         Err(error) => warn!(error = %error, "falha ao persistir estado econômico"),
     }
+}
+
+/// Chave de identidade de uma conta autenticada pelo `marvyr-auth`. É o que
+/// vai para `characters.name` — nunca o JWT (que é credencial).
+pub fn account_identity(account: uuid::Uuid) -> String {
+    format!("{ACCOUNT_PREFIX}{account}")
+}
+
+const ACCOUNT_PREFIX: &str = "account:";
+
+/// Conta dona de uma chave de identidade (`None` = token anônimo de dev).
+pub fn account_of_identity(identity: &str) -> Option<uuid::Uuid> {
+    identity
+        .strip_prefix(ACCOUNT_PREFIX)
+        .and_then(|raw| uuid::Uuid::parse_str(raw).ok())
 }
 
 #[cfg(test)]

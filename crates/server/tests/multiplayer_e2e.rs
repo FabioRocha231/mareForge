@@ -15,7 +15,7 @@ use lightyear::prelude::client::{
     IoConfig as ClientIoConfig, NetConfig, NetcodeConfig as ClientNetcodeConfig,
 };
 use lightyear::prelude::server::ServerTransport;
-use lightyear::prelude::{ClientReceiveMessage, Key};
+use lightyear::prelude::ClientReceiveMessage;
 use lightyear::transport::LOCAL_SOCKET;
 use marvyr_client::net::{
     ClientIdentity, ClientNetOverride, ClientNetPlugin, ReliableChannel, ShipInputOverride,
@@ -88,7 +88,7 @@ fn record_welcome(
     mut recorded: ResMut<Recorded>,
 ) {
     for event in events.read() {
-        recorded.welcome = Some(*event.message());
+        recorded.welcome = Some(event.message().clone());
     }
 }
 
@@ -137,6 +137,10 @@ struct Harness {
 
 impl Harness {
     fn new() -> Self {
+        Self::with_identities("multiplayer-token-a", "multiplayer-token-b")
+    }
+
+    fn with_identities(identity_a: &str, identity_b: &str) -> Self {
         let (a_to_server, a_from_client) = crossbeam_channel::unbounded();
         let (a_to_client, a_from_server) = crossbeam_channel::unbounded();
         let (b_to_server, b_from_client) = crossbeam_channel::unbounded();
@@ -178,8 +182,8 @@ impl Harness {
             marvyr_domain_ships::Weather::new(1).with_wind_direction(std::f32::consts::FRAC_PI_2),
         ));
 
-        let mut client_a = build_client(client_a_config, "multiplayer-token-a");
-        let mut client_b = build_client(client_b_config, "multiplayer-token-b");
+        let mut client_a = build_client(client_a_config, identity_a);
+        let mut client_b = build_client(client_b_config, identity_b);
 
         server_app.finish();
         server_app.cleanup();
@@ -242,13 +246,7 @@ impl Harness {
             harness.recorded_a().assign.is_some() && harness.recorded_b().assign.is_some()
         });
         assert!(ready, "both clients should receive AssignShip");
-        assert_eq!(
-            self.recorded_a().welcome,
-            Some(ServerWelcome {
-                protocol_version: marvyr_protocol::PROTOCOL_VERSION,
-                accepted: true,
-            })
-        );
+        assert_eq!(self.recorded_a().welcome, Some(ServerWelcome::accepted()));
         assert!(!self.recorded_a().wallets.is_empty());
     }
 
@@ -270,6 +268,14 @@ impl Harness {
             throttle: 0.0,
             turn: 0.0,
         });
+    }
+
+    fn send_a<M: lightyear::prelude::Message>(&mut self, message: &M) {
+        self.client_a
+            .world_mut()
+            .resource_mut::<ClientConnectionManager>()
+            .send_message::<ReliableChannel, _>(message)
+            .expect("client can queue message");
     }
 
     fn send_fire_a(&mut self, side: BroadsideSide) {
@@ -325,8 +331,8 @@ fn client_net_config(
         auth: Authentication::Manual {
             server_addr: LOCAL_SOCKET,
             client_id,
-            private_key: Key::default(),
-            protocol_id: 0,
+            private_key: marvyr_protocol::NETCODE_KEY,
+            protocol_id: marvyr_protocol::NETCODE_PROTOCOL_ID,
         },
         config: ClientNetcodeConfig::default(),
         io: ClientIoConfig::from_transport(ClientTransport::LocalChannel {
@@ -507,4 +513,230 @@ fn multiplayer_full_scenario_a_b_fire_damage() {
             .any(|message| message.ship_id == b_id)
     });
     assert!(destroyed, "full scenario should observe ShipDestroyed");
+}
+
+fn with_ship(app: &mut App, ship_id: u32, change: impl FnOnce(&mut ServerShip)) {
+    let world = app.world_mut();
+    let mut query = world.query::<&mut ServerShip>();
+    if let Some(mut ship) = query.iter_mut(world).find(|ship| ship.ship_id == ship_id) {
+        change(&mut ship);
+    }
+}
+
+fn read_ship<T>(app: &mut App, ship_id: u32, read: impl FnOnce(&ServerShip) -> T) -> Option<T> {
+    let world = app.world_mut();
+    let mut query = world.query::<&ServerShip>();
+    query
+        .iter(world)
+        .find(|ship| ship.ship_id == ship_id)
+        .map(read)
+}
+
+fn dev_items(app: &App) -> &marvyr_server::net::DevItems {
+    app.world().resource::<marvyr_server::net::DevItems>()
+}
+
+fn quantity_of(ship: &ServerShip, item: marvyr_shared::ids::ItemDefinitionId) -> u32 {
+    ship.hold
+        .items()
+        .iter()
+        .filter(|custody| custody.instance.definition == item)
+        .map(|custody| custody.instance.quantity)
+        .sum()
+}
+
+/// MV-061: hello sem sessão recebe o MOTIVO e não ganha navio.
+#[test]
+fn hello_without_session_is_rejected_with_reason() {
+    let mut harness = Harness::with_identities("multiplayer-token-a", "   ");
+    let rejected = harness.run_until(300, |harness| harness.recorded_b().welcome.is_some());
+    assert!(rejected, "B deveria receber ServerWelcome");
+    let welcome = harness.recorded_b().welcome.clone().unwrap();
+    assert!(!welcome.accepted);
+    assert_eq!(welcome.reason, marvyr_server::session::REASON_NO_SESSION);
+    harness.run_frames(30);
+    assert!(
+        harness.recorded_b().assign.is_none(),
+        "recusado não ganha navio"
+    );
+    assert!(harness.recorded_a().assign.is_some(), "A entra normalmente");
+}
+
+/// MV-061: navio avariado e colado é tomado por abordagem; a carga passa
+/// INTEIRA para o wreck (sem a perda do afundamento a tiro).
+#[test]
+fn boarding_captures_a_crippled_ship_with_all_its_cargo() {
+    let mut harness = Harness::new();
+    harness.wait_for_handshake();
+    let (a_id, b_id) = harness.ship_ids();
+    harness.prepare_ships(a_id, b_id);
+    set_ship_position(&mut harness.server_app, b_id, 280.0, 0.0, 0.0);
+    let timber = dev_items(&harness.server_app).timber;
+    let cargo_before = read_ship(&mut harness.server_app, b_id, |ship| {
+        quantity_of(ship, timber)
+    })
+    .expect("B existe");
+    assert!(cargo_before > 0, "merchant nasce com carga de dev");
+
+    let mut captured = false;
+    for _ in 0..8 {
+        with_ship(&mut harness.server_app, a_id, |ship| {
+            ship.sea.crew = 8;
+            ship.sea.board_cooldown = 0.0;
+        });
+        with_ship(&mut harness.server_app, b_id, |ship| {
+            ship.hp = 5;
+            ship.sea.crew = 0;
+        });
+        harness.send_a(&marvyr_protocol::BoardShip {
+            target_ship_id: b_id,
+        });
+        captured = harness.run_until(30, |harness| {
+            harness
+                .recorded_b()
+                .destroyed
+                .iter()
+                .any(|message| message.ship_id == b_id)
+        });
+        if captured {
+            break;
+        }
+    }
+    assert!(captured, "abordagem com 8 contra 0 deveria render o navio");
+    harness.run_frames(5);
+    let world = harness.server_app.world_mut();
+    let mut wrecks = world.query::<&marvyr_server::net::ServerWreck>();
+    let in_wreck: u32 = wrecks
+        .iter(world)
+        .flat_map(|wreck| wreck.chest.items().to_vec())
+        .filter(|custody| custody.instance.definition == timber)
+        .map(|custody| custody.instance.quantity)
+        .sum();
+    assert_eq!(
+        in_wreck, cargo_before,
+        "carga do navio rendido passa inteira"
+    );
+}
+
+/// MV-061: tripulação no reparo, parada e fora de combate, troca Madeira
+/// do porão por casco.
+#[test]
+fn repair_at_sea_spends_timber_to_restore_hull() {
+    let mut harness = Harness::new();
+    harness.wait_for_handshake();
+    let (a_id, _) = harness.ship_ids();
+    let timber = dev_items(&harness.server_app).timber;
+    let (max_hp, timber_before) = read_ship(&mut harness.server_app, a_id, |ship| {
+        (ship.stats.max_hp, quantity_of(ship, timber))
+    })
+    .unwrap();
+    set_ship_hp(&mut harness.server_app, a_id, max_hp / 2);
+    let damaged = harness.run_until(60, |harness| {
+        harness
+            .recorded_a()
+            .latest_ship(a_id)
+            .is_some_and(|ship| ship.hp == max_hp / 2)
+    });
+    assert!(damaged, "snapshot deveria mostrar o casco avariado");
+    harness.send_a(&marvyr_protocol::SetRepair { active: true });
+    let repaired = harness.run_until(200, |harness| {
+        harness
+            .recorded_a()
+            .latest_ship(a_id)
+            .is_some_and(|ship| ship.hp > max_hp / 2)
+    });
+    assert!(repaired, "casco deveria subir com o reparo");
+    let timber_after = read_ship(&mut harness.server_app, a_id, |ship| {
+        quantity_of(ship, timber)
+    })
+    .unwrap();
+    assert!(timber_after < timber_before, "reparo consome Madeira");
+}
+
+/// MV-061: mapa do tesouro + parado no X = recurso bruto no porão.
+#[test]
+fn digging_at_the_map_spot_trades_the_map_for_treasure() {
+    let mut harness = Harness::new();
+    harness.wait_for_handshake();
+    let (a_id, _) = harness.ship_ids();
+    let (map_item, pearl) = {
+        let dev = dev_items(&harness.server_app);
+        (dev.treasure_map, dev.abyssal_pearl)
+    };
+    let map_id = marvyr_shared::ids::ItemInstanceId(uuid::Uuid::from_u128(0));
+    let island = marvyr_domain_world::treasure::island_for_map(0);
+    {
+        let catalog = dev_items(&harness.server_app).catalog.clone();
+        with_ship(&mut harness.server_app, a_id, |ship| {
+            ship.hold
+                .insert(
+                    &catalog,
+                    marvyr_domain_items::ItemInstance::new_resource(map_id, map_item, 1),
+                )
+                .expect("mapa cabe");
+        });
+    }
+    set_ship_position(
+        &mut harness.server_app,
+        a_id,
+        island.dig_x,
+        island.dig_y,
+        0.0,
+    );
+    harness.run_frames(3);
+    harness.send_a(&marvyr_protocol::DigTreasure);
+    let dug = harness.run_until(400, |harness| {
+        let server = &harness.server_app;
+        let world = server.world();
+        world
+            .iter_entities()
+            .filter_map(|entity| entity.get::<ServerShip>())
+            .any(|ship| ship.ship_id == a_id && quantity_of(ship, pearl) > 0)
+    });
+    assert!(dug, "8 s cavando deveriam render pérolas");
+    let still_has_map = read_ship(&mut harness.server_app, a_id, |ship| {
+        quantity_of(ship, map_item)
+    })
+    .unwrap();
+    assert_eq!(still_has_map, 0, "o mapa é consumido");
+}
+
+fn count_npcs(app: &mut App, role: marvyr_server::npc::NpcRole) -> usize {
+    let world = app.world_mut();
+    let mut query = world.query::<&marvyr_server::npc::NpcShip>();
+    query.iter(world).filter(|npc| npc.role == role).count()
+}
+
+/// MV-061: o diretor de eventos materializa o Kraken e a Frota do Tesouro
+/// (galeão + duas escoltas); trocar de evento recolhe o anterior.
+#[test]
+fn sea_events_spawn_kraken_and_treasure_fleet() {
+    use marvyr_server::npc::NpcRole;
+    let mut harness = Harness::new();
+    harness.wait_for_handshake();
+    harness
+        .server_app
+        .world_mut()
+        .resource_mut::<marvyr_server::seafaring::ServerSeaEvents>()
+        .force(marvyr_domain_world::SeaEventKind::Kraken);
+    harness.run_frames(3);
+    assert_eq!(count_npcs(&mut harness.server_app, NpcRole::Kraken), 1);
+
+    harness
+        .server_app
+        .world_mut()
+        .resource_mut::<marvyr_server::seafaring::ServerSeaEvents>()
+        .force(marvyr_domain_world::SeaEventKind::TreasureFleet);
+    harness.run_frames(3);
+    assert_eq!(count_npcs(&mut harness.server_app, NpcRole::Kraken), 0);
+    assert_eq!(
+        count_npcs(&mut harness.server_app, NpcRole::TreasureGalleon),
+        1
+    );
+    assert_eq!(count_npcs(&mut harness.server_app, NpcRole::Escort), 2);
+    let metrics = harness
+        .server_app
+        .world()
+        .resource::<marvyr_server::net::Metrics>();
+    assert_eq!(metrics.sea_events_started, 2);
 }

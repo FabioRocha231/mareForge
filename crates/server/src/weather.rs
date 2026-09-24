@@ -26,6 +26,8 @@ const STORM_BOUNDS: WeatherBounds = WeatherBounds {
     max_y: 1500.0,
 };
 const BROADCAST_EVERY_SECS: f32 = 1.0;
+/// Casco perdido por segundo no olho da Tormenta.
+const TEMPEST_HULL_PER_SEC: f32 = 1.5;
 
 pub fn install(app: &mut App) {
     app.insert_resource(ServerWeather(initial_weather()));
@@ -93,6 +95,8 @@ fn update_sails(
     for mut ship in &mut ships {
         if matches!(ship.presence, VesselPresence::Docked(_)) {
             ship.sail_hp = SAIL_HP_MAX;
+            // MV-061: o estaleiro do porto troca o leme junto com o pano.
+            ship.sea.rudder_hp = marvyr_domain_ships::RUDDER_HP_MAX;
             continue;
         }
         let (x, y) = (ship.motion.x, ship.motion.y);
@@ -103,6 +107,17 @@ fn update_sails(
         };
         let delta = (SAIL_REPAIR_PER_SEC - STORM_SAIL_DAMAGE_PER_SEC * storm) * dt;
         ship.sail_hp = (ship.sail_hp + delta).clamp(0.0, SAIL_HP_MAX);
+        // MV-061: a Tormenta racha o casco — enfraquece, nunca afunda
+        // sozinha (quem afunda é o corsário que esperava por isso).
+        let tempest = weather.0.tempest_influence(x, y);
+        if tempest > 0.0 {
+            ship.sea.tempest_wear += TEMPEST_HULL_PER_SEC * tempest * dt;
+            let wear = ship.sea.tempest_wear.floor();
+            if wear >= 1.0 {
+                ship.sea.tempest_wear -= wear;
+                ship.hp = ship.hp.saturating_sub(wear as u32).max(1);
+            }
+        }
     }
 }
 
@@ -140,6 +155,7 @@ pub(crate) fn weather_update(weather: &Weather) -> WeatherUpdate {
                 y: storm.y,
                 radius: storm.radius,
                 intensity: storm.intensity(),
+                tempest: storm.tempest,
             })
             .collect(),
     }

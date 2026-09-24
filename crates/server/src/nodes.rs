@@ -158,7 +158,11 @@ pub fn spawn_dev_nodes(
 }
 
 /// Face protocolar de um node: estado + nome do recurso via catálogo.
-fn node_state(node: &ResourceNode, num: u32, catalog: &ItemCatalog) -> Option<NodeState> {
+pub(crate) fn node_state(
+    node: &ResourceNode,
+    num: u32,
+    catalog: &ItemCatalog,
+) -> Option<NodeState> {
     let definition = catalog.get(node.resource)?;
     Some(NodeState {
         node_id: num,
@@ -289,6 +293,15 @@ pub fn handle_gather(
                 gathered: taken,
             },
         );
+        // MV-061: às vezes a rede traz um mapa do tesouro junto.
+        if crate::seafaring::maybe_find_map(&mut ship, &dev) {
+            crate::reputation::send_event(
+                &mut connection_manager,
+                &[client_id],
+                String::from("Um Mapa do Tesouro veio na rede! Veja o X na carta."),
+                marvyr_protocol::WorldEventKind::Bounty,
+            );
+        }
         info!(
             ship_id = ship.ship_id,
             node_num,
