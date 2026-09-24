@@ -160,7 +160,8 @@ pub struct ServerMarket {
     store: Option<std::sync::Arc<dyn crate::persist::StateStore>>,
     /// Abates de NPC do tick (killer), drenados pelos contratos de Caça.
     /// Transitório: não entra no snapshot.
-    pub(crate) npc_kills: Vec<CharacterId>,
+    /// Abates de NPC ainda não contados nas Caçadas: (quem, zona onde afundou).
+    pub(crate) npc_kills: Vec<(CharacterId, Option<&'static str>)>,
 }
 
 impl Default for ServerMarket {

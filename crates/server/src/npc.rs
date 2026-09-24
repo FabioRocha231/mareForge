@@ -1051,7 +1051,18 @@ pub fn simulate_npcs(
                     gold
                 }
                 _ if bounty_gold > 0 => {
-                    award_npc_bounty(&mut market, &mut metrics, killer, npc_ship_id, bounty_gold);
+                    let sunk_in = map
+                        .0
+                        .area_at(position.0, position.1)
+                        .map(|index| map.0.features().areas[index].name);
+                    award_npc_bounty(
+                        &mut market,
+                        &mut metrics,
+                        killer,
+                        npc_ship_id,
+                        bounty_gold,
+                        sunk_in,
+                    );
                     bounty_gold
                 }
                 _ => 0,
@@ -1207,9 +1218,10 @@ pub(crate) fn award_npc_bounty(
     killer: CharacterId,
     npc_ship_id: u32,
     bounty_gold: u64,
+    sunk_in: Option<&'static str>,
 ) -> WalletUpdated {
     market.credit(killer, Money(bounty_gold));
-    market.npc_kills.push(killer);
+    market.npc_kills.push((killer, sunk_in));
     market.ledger.record(
         LedgerKind::NpcBounty,
         Money(bounty_gold),
@@ -1762,7 +1774,7 @@ mod tests {
         let killer = market.character("killer");
         let mut metrics = crate::net::Metrics::default();
 
-        let wallet = award_npc_bounty(&mut market, &mut metrics, killer, 7, 50);
+        let wallet = award_npc_bounty(&mut market, &mut metrics, killer, 7, 50, None);
 
         assert_eq!(wallet.gold, market.balance(killer).0);
         assert!(market

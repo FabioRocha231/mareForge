@@ -15,11 +15,12 @@ use lightyear::prelude::*;
 use marvyr_domain_economy::contract::OFFERS_PER_PORT;
 use marvyr_domain_economy::guild::GUILD_BASE_VALUES;
 use marvyr_domain_economy::{
-    generate_offers, ActiveContract, Contract, ContractKind, GuildBook, LedgerKind, Money, PortSite,
+    generate_offers, ActiveContract, Contract, ContractKind, GuildBook, HuntingGround, LedgerKind,
+    Money, PortSite,
 };
 use marvyr_domain_items::ItemCatalog;
 use marvyr_domain_ships::VesselPresence;
-use marvyr_domain_world::WorldMap;
+use marvyr_domain_world::{RiskTier, WorldMap};
 use marvyr_protocol::{
     AbandonContract, AcceptContract, ContractLine, ContractResult, ContractsSnapshot,
     GuildPriceLine, GuildPrices, PortStorageSnapshot, SellToGuild,
@@ -88,6 +89,27 @@ fn port_sites(map: &WorldMap) -> Vec<(RegionId, PortSite<'static>)> {
         .collect()
 }
 
+/// Zonas com pirata ou saqueador: onde as Caçadas mandam o capitão.
+fn hunting_grounds(map: &WorldMap) -> Vec<HuntingGround<'static>> {
+    let features = map.features();
+    features
+        .areas
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| {
+            features
+                .pirate_spawns
+                .iter()
+                .chain(&features.raider_spawns)
+                .any(|&(x, y)| map.area_at(x, y) == Some(*index))
+        })
+        .map(|(_, area)| HuntingGround {
+            name: area.name,
+            lawless: area.tier == RiskTier::Lawless,
+        })
+        .collect()
+}
+
 impl ServerGuild {
     /// Renova as 3 ofertas de cada porto (as não aceitas somem).
     fn refresh_boards(&mut self, map: &WorldMap) {
@@ -100,12 +122,13 @@ impl ServerGuild {
         }
         let ports = port_sites(map);
         let sites: Vec<PortSite> = ports.iter().map(|(_, site)| *site).collect();
+        let grounds = hunting_grounds(map);
         for (region, site) in &ports {
             self.seed = self
                 .seed
                 .wrapping_mul(0x9E37_79B9_7F4A_7C15)
                 .wrapping_add(1);
-            let offers = generate_offers(site, &sites, self.seed, self.next_id);
+            let offers = generate_offers(site, &sites, &grounds, self.seed, self.next_id);
             self.next_id += offers.len() as u32;
             self.boards.insert(*region, offers);
         }
@@ -384,9 +407,9 @@ fn tick_contracts(
     };
     let mut completed: Vec<(CharacterId, Contract)> = Vec::new();
 
-    for killer in std::mem::take(&mut market.npc_kills) {
+    for (killer, sunk_in) in std::mem::take(&mut market.npc_kills) {
         if let Some(active) = guild.active.get_mut(&killer) {
-            if !active.expired(now) && active.record_kill() {
+            if !active.expired(now) && active.record_kill(sunk_in) {
                 let active = guild.active.remove(&killer).expect("checado acima");
                 guild.accepted_at.remove(&killer);
                 completed.push((killer, active.contract));
@@ -578,6 +601,28 @@ fn push_guild_state(
         if state.storage.as_ref() != Some(&storage) {
             let _ = connection_manager.send_message::<ReliableChannel, _>(client_id, &storage);
             state.storage = Some(storage);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hunts_go_where_hostiles_spawn_never_to_protected_bays() {
+        let map = WorldMap::from_seed(crate::net::DEFAULT_WORLD_SEED);
+        let grounds = hunting_grounds(&map);
+        assert!(grounds.len() >= 3, "{grounds:?}");
+        assert!(grounds.iter().any(|ground| ground.lawless));
+        for ground in &grounds {
+            let area = map
+                .features()
+                .areas
+                .iter()
+                .find(|area| area.name == ground.name)
+                .expect("zona existe");
+            assert_ne!(area.tier, RiskTier::Protected, "{}", ground.name);
         }
     }
 }
