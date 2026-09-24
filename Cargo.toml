@@ -12,6 +12,7 @@ members = [
     "crates/server",
     "crates/client",
     "crates/auth-token",
+    "crates/auth",
     "crates/tools/db-migrate",
     "crates/tools/marvyr-playtest",
 ]
