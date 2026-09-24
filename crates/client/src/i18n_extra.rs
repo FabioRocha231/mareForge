@@ -154,6 +154,14 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Cristal da Cerração", "Fog Crystal"),
     ("Casco de Cristal", "Crystal Hull"),
     ("Canhões de Cristal", "Crystal Cannons"),
+    // Carta náutica (MV-066)
+    ("Carta Náutica", "Nautical Chart"),
+    ("M fecha a carta", "M closes the chart"),
+    (
+        "Carta náutica: o que você já navegou",
+        "Nautical chart: everywhere you have sailed",
+    ),
+    ("Ligar e desligar a música", "Toggle the music"),
 ];
 
 #[cfg(test)]

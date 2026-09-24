@@ -2,7 +2,7 @@
 //! do snapshot em `juice.rs`) e tocam espacializados: pan estéreo pelo
 //! `SpatialListener` da câmera e volume com queda linear até silenciar a
 //! [`HEARING_RANGE`] metros. Ambiente (ondas, vento, rangido), UI (clique,
-//! moedas, sino de zona PvP) e música em loop (M liga/desliga).
+//! moedas, sino de zona PvP) e música em loop (N liga/desliga).
 
 use bevy::audio::{SpatialScale, Volume};
 use bevy::prelude::*;
@@ -54,7 +54,7 @@ struct Music;
 #[derive(Component)]
 struct WindLoop;
 
-/// Música ligada/desligada (tecla M).
+/// Música ligada/desligada (tecla N; M é a carta).
 #[derive(Resource)]
 pub struct MusicEnabled(pub bool);
 
@@ -230,8 +230,8 @@ fn toggle_music(
     mut enabled: ResMut<MusicEnabled>,
     music: Query<&AudioSink, With<Music>>,
 ) {
-    // Atracado há campos de texto no mercado: M é letra, não atalho.
-    if docked.0 || !keys.just_pressed(KeyCode::KeyM) {
+    // Atracado há campos de texto no mercado: N é letra, não atalho.
+    if docked.0 || !keys.just_pressed(KeyCode::KeyN) {
         return;
     }
     enabled.0 = !enabled.0;

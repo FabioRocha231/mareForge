@@ -695,8 +695,7 @@ mod tests {
     fn arena_layouts_vary_and_keep_every_point_of_interest_open() {
         let mut map = WorldMap::vertical_slice();
         let nodes = crate::features::instance_nodes();
-        for slot in 0..FOG_SLOTS.len() {
-            let (cx, cy) = FOG_SLOTS[slot];
+        for (slot, &(cx, cy)) in FOG_SLOTS.iter().enumerate() {
             for layout in 1..200u64 {
                 let arena = arena_layout(slot, layout);
                 assert_eq!(arena, arena_layout(slot, layout), "determinístico");
