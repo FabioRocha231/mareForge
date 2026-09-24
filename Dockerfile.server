@@ -12,8 +12,8 @@ COPY crates crates
 COPY migrations migrations
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
-    cargo build --release --locked -p marvyr-server \
-    && cp target/release/marvyr-server /usr/local/bin/marvyr-server
+    cargo build --release --locked -p marvyr-server -p marvyr-db-migrate \
+    && cp target/release/marvyr-server target/release/marvyr-db-migrate /usr/local/bin/
 
 FROM debian:bookworm-slim AS production
 RUN apt-get update \
@@ -24,6 +24,8 @@ RUN apt-get update \
     && mkdir -p /data/reports \
     && chown -R marvyr:marvyr /data
 COPY --from=builder --chown=root:root /usr/local/bin/marvyr-server /usr/local/bin/marvyr-server
+# Ferramenta de admin (migrations e concessão de cosméticos) via docker exec.
+COPY --from=builder --chown=root:root /usr/local/bin/marvyr-db-migrate /usr/local/bin/marvyr-db-migrate
 
 ENV MARVYR_PORT=5000 \
     MARVYR_ENV=production \

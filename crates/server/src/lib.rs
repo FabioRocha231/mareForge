@@ -1,4 +1,5 @@
 pub mod aoi;
+pub mod cosmetics;
 pub mod crafting;
 pub mod guild;
 pub mod loadout;

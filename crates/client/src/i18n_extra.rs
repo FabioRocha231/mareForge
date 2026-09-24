@@ -162,6 +162,22 @@ pub const TABLE: &[(&str, &str)] = &[
         "Nautical chart: everywhere you have sailed",
     ),
     ("Ligar e desligar a música", "Toggle the music"),
+    // Cosméticos (MV-066)
+    ("Velas Esmeralda", "Emerald Sails"),
+    ("Velas de Ouro", "Golden Sails"),
+    ("Velas Azul-Mar", "Sea-Blue Sails"),
+    ("Estandarte de Linho", "Linen Standard"),
+    ("Estandarte Esmeralda", "Emerald Standard"),
+    ("Usar {0}", "Wear {0}"),
+    ("Tirar {0}", "Remove {0}"),
+    ("velas cosméticas", "cosmetic sails"),
+    ("bandeira cosmética", "cosmetic flag"),
+    ("velas do casco", "hull sails"),
+    ("bandeira da casa", "house flag"),
+    (
+        "Visual: {0} · {1} — só aparência",
+        "Look: {0} · {1} — appearance only",
+    ),
 ];
 
 #[cfg(test)]

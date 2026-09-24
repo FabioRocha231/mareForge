@@ -12,11 +12,13 @@ use marvyr_domain_crafting::recipe::StationKind;
 use marvyr_domain_items::{
     EquipmentDefinition, EquipmentSlot, EquipmentStats, ItemDefinition, ItemKind,
 };
-use marvyr_domain_ships::{can_equip, ShipDefinition, ShipKind, SlotSpec};
+use marvyr_domain_ships::{
+    can_equip, cosmetic_by_code, CosmeticSlot, ShipDefinition, ShipKind, SlotSpec,
+};
 use marvyr_protocol::{
-    CraftItem, CraftResult, DockResult, EquipItem, ItemLine, LoadoutLine, LoadoutResult,
-    LoadoutSnapshot, MarketResult, PortStorageSnapshot, RecipeEntry, StorageDepositAll,
-    StorageLine, StorageWithdrawAll, Undock, UnequipItem,
+    CosmeticsSnapshot, CraftItem, CraftResult, DockResult, EquipItem, ItemLine, LoadoutLine,
+    LoadoutResult, LoadoutSnapshot, MarketResult, PortStorageSnapshot, RecipeEntry,
+    StorageDepositAll, StorageLine, StorageWithdrawAll, Undock, UnequipItem, WearCosmetic,
 };
 use marvyr_shared::ids::{ItemDefinitionId, ShipDefinitionId};
 
@@ -168,6 +170,11 @@ enum PortAction {
     Unequip(EquipmentSlot),
     Equip(ItemDefinitionId, EquipmentSlot, String),
     Craft(u32),
+    /// MV-066: vestir (`code` > 0) ou tirar (`code` 0) um cosmético.
+    Wear {
+        slot: u8,
+        code: u8,
+    },
     Undock,
 }
 
@@ -192,19 +199,71 @@ struct PortData<'w> {
     catalog: Res<'w, KnownCatalog>,
     ship_kind: Res<'w, KnownShipKind>,
     recipes: Res<'w, KnownRecipes>,
+    cosmetics: Res<'w, crate::net::MyCosmetics>,
 }
 
 impl PortData<'_> {
     fn actions(&self, tab: PortTab) -> Vec<PortAction> {
-        port_actions(
+        let mut actions = port_actions(
             tab,
             &self.loadout.0,
             &self.recipes.0,
             &self.storage.0,
             &self.catalog,
             self.ship_kind.0,
-        )
+        );
+        if let (PortTab::Loadout, Some(cosmetics)) = (tab, &self.cosmetics.0) {
+            // Antes do "Desatracar", que fecha a lista.
+            let undock = actions.pop();
+            actions.extend(cosmetic_actions(cosmetics));
+            actions.extend(undock);
+        }
+        actions
     }
+}
+
+/// Slot de rede do cosmético (0 vela, 1 bandeira).
+fn wire_slot(slot: CosmeticSlot) -> u8 {
+    match slot {
+        CosmeticSlot::Sail => 0,
+        CosmeticSlot::Flag => 1,
+    }
+}
+
+/// Vestir o que o capitão possui e não está usando; tirar o que está.
+fn cosmetic_actions(cosmetics: &CosmeticsSnapshot) -> Vec<PortAction> {
+    let mut actions: Vec<PortAction> = cosmetics
+        .owned
+        .iter()
+        .filter(|code| ![cosmetics.sail, cosmetics.flag].contains(code))
+        .filter_map(|&code| {
+            let cosmetic = cosmetic_by_code(code)?;
+            Some(PortAction::Wear {
+                slot: wire_slot(cosmetic.slot),
+                code,
+            })
+        })
+        .collect();
+    for (slot, worn) in [(0, cosmetics.sail), (1, cosmetics.flag)] {
+        if worn != 0 {
+            actions.push(PortAction::Wear { slot, code: 0 });
+        }
+    }
+    actions
+}
+
+/// Linha do visual atual (aba Equipamento).
+fn cosmetic_line(cosmetics: &CosmeticsSnapshot) -> String {
+    let name = |code: u8, default: &str| {
+        tr(cosmetic_by_code(code).map_or(default, |cosmetic| cosmetic.name))
+    };
+    trf(
+        "Visual: {0} · {1} — só aparência",
+        &[
+            &name(cosmetics.sail, "velas do casco"),
+            &name(cosmetics.flag, "bandeira da casa"),
+        ],
+    )
 }
 
 #[derive(SystemParam)]
@@ -521,26 +580,31 @@ fn recipes_for_station(recipes: &[RecipeEntry], dock: bool) -> Vec<&RecipeEntry>
 }
 
 fn send_port_action(connection_manager: &mut ConnectionManager, action: &PortAction) {
-    let _ = match action {
-        PortAction::DepositAll => {
-            connection_manager.send_message::<ReliableChannel, _>(&StorageDepositAll)
-        }
-        PortAction::WithdrawAll => {
-            connection_manager.send_message::<ReliableChannel, _>(&StorageWithdrawAll)
-        }
-        PortAction::Unequip(slot) => {
-            connection_manager.send_message::<ReliableChannel, _>(&UnequipItem { slot: *slot })
-        }
-        PortAction::Equip(_, _, _) => {
-            connection_manager.send_message::<ReliableChannel, _>(&equip_item_for(action).unwrap())
-        }
-        PortAction::Craft(recipe_id) => {
-            connection_manager.send_message::<ReliableChannel, _>(&CraftItem {
-                recipe_id: *recipe_id,
-            })
-        }
-        PortAction::Undock => connection_manager.send_message::<ReliableChannel, _>(&Undock),
-    };
+    let _ =
+        match action {
+            PortAction::DepositAll => {
+                connection_manager.send_message::<ReliableChannel, _>(&StorageDepositAll)
+            }
+            PortAction::WithdrawAll => {
+                connection_manager.send_message::<ReliableChannel, _>(&StorageWithdrawAll)
+            }
+            PortAction::Unequip(slot) => {
+                connection_manager.send_message::<ReliableChannel, _>(&UnequipItem { slot: *slot })
+            }
+            PortAction::Equip(_, _, _) => connection_manager
+                .send_message::<ReliableChannel, _>(&equip_item_for(action).unwrap()),
+            PortAction::Craft(recipe_id) => {
+                connection_manager.send_message::<ReliableChannel, _>(&CraftItem {
+                    recipe_id: *recipe_id,
+                })
+            }
+            PortAction::Wear { slot, code } => connection_manager
+                .send_message::<ReliableChannel, _>(&WearCosmetic {
+                    slot: *slot,
+                    code: *code,
+                }),
+            PortAction::Undock => connection_manager.send_message::<ReliableChannel, _>(&Undock),
+        };
 }
 
 fn equip_item_for(action: &PortAction) -> Option<EquipItem> {
@@ -657,6 +721,20 @@ fn action_label(action: &PortAction, recipes: &[RecipeEntry]) -> String {
                 .unwrap_or("receita");
             trf(verb, &[&tr(name)])
         }
+        PortAction::Wear { slot, code: 0 } => trf(
+            "Tirar {0}",
+            &[&tr(if *slot == 0 {
+                "velas cosméticas"
+            } else {
+                "bandeira cosmética"
+            })],
+        ),
+        PortAction::Wear { code, .. } => trf(
+            "Usar {0}",
+            &[&tr(
+                cosmetic_by_code(*code).map_or("?", |cosmetic| cosmetic.name)
+            )],
+        ),
         PortAction::Undock => tr("Desatracar"),
     }
 }
@@ -931,17 +1009,21 @@ fn update_port_screen(
                 .map(|visual| (visual.target.cargo_weight, visual.target.cargo_capacity))
         });
         let actions = data.actions(tab);
+        let mut info = info_lines(
+            tab,
+            cargo.map(|(weight, _)| weight),
+            cargo.map(|(_, capacity)| capacity),
+            &data.loadout.0,
+            &data.storage.0,
+            &data.catalog,
+            data.ship_kind.0,
+            &data.recipes.0,
+        );
+        if let (PortTab::Loadout, Some(cosmetics)) = (tab, &data.cosmetics.0) {
+            info.push(cosmetic_line(cosmetics));
+        }
         BodyView::Port {
-            info: info_lines(
-                tab,
-                cargo.map(|(weight, _)| weight),
-                cargo.map(|(_, capacity)| capacity),
-                &data.loadout.0,
-                &data.storage.0,
-                &data.catalog,
-                data.ship_kind.0,
-                &data.recipes.0,
-            ),
+            info,
             actions: actions
                 .iter()
                 .map(|action| action_label(action, &data.recipes.0))
@@ -1378,6 +1460,7 @@ mod tests {
         world.init_resource::<KnownCatalog>();
         world.init_resource::<KnownShipKind>();
         world.init_resource::<KnownRecipes>();
+        world.init_resource::<crate::net::MyCosmetics>();
         world.init_resource::<LoadoutFeedback>();
         world.init_resource::<CraftFeedback>();
         world.init_resource::<MarketFeedback>();
@@ -1533,5 +1616,37 @@ mod tests {
         assert!(!actions
             .iter()
             .any(|action| matches!(action, PortAction::Equip(_, _, _))));
+    }
+
+    #[test]
+    fn cosmetic_actions_offer_what_is_owned_and_remove_what_is_worn() {
+        let code = |id| marvyr_domain_ships::cosmetic_code(id).unwrap();
+        let (gold, azure, linen) = (code("sail-gold"), code("sail-azure"), code("flag-linen"));
+        let cosmetics = CosmeticsSnapshot {
+            owned: vec![gold, azure, linen],
+            sail: gold,
+            flag: 0,
+        };
+        assert_eq!(
+            cosmetic_actions(&cosmetics),
+            vec![
+                PortAction::Wear {
+                    slot: 0,
+                    code: azure
+                },
+                PortAction::Wear {
+                    slot: 1,
+                    code: linen
+                },
+                PortAction::Wear { slot: 0, code: 0 },
+            ]
+        );
+        assert!(cosmetic_line(&cosmetics).contains("Velas de Ouro"));
+        assert!(cosmetic_actions(&CosmeticsSnapshot {
+            owned: Vec::new(),
+            sail: 0,
+            flag: 0
+        })
+        .is_empty());
     }
 }

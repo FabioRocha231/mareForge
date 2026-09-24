@@ -71,6 +71,8 @@ fn ship_state(ship_id: u32, kind: ShipKind) -> ShipState {
         crew_max: 0,
         repairing: false,
         dig_progress: 0.0,
+        sail_cosmetic: 0,
+        flag_cosmetic: 0,
     }
 }
 
@@ -217,4 +219,56 @@ fn entities_absent_from_snapshot_decay_via_ttl() {
     assert_eq!(world.query::<&ShipVisual>().iter(world).count(), 0);
     assert_eq!(world.query::<&ProjectileVisual>().iter(world).count(), 0);
     assert_eq!(world.query::<&WreckVisual>().iter(world).count(), 0);
+}
+
+/// MV-066: o cosmético à mostra troca a cor da vela e da bandeira (e só).
+#[test]
+fn worn_cosmetics_paint_sails_and_flag() {
+    use marvyr_client::world::WavingFlag;
+    use marvyr_domain_ships::{cosmetic_by_code, cosmetic_code};
+    let sail = cosmetic_code("sail-gold").unwrap();
+    let flag = cosmetic_code("flag-linen").unwrap();
+    let mut app = visual_app();
+    send_world(
+        &mut app,
+        WorldSnapshot {
+            tick: 1,
+            ships: vec![ShipState {
+                sail_cosmetic: sail,
+                flag_cosmetic: flag,
+                ..ship_state(1, ShipKind::SmallMerchant)
+            }],
+            projectiles: Vec::new(),
+            wrecks: Vec::new(),
+        },
+    );
+    app.update();
+
+    let world: &mut World = app.world_mut();
+    let children: Vec<Entity> = world
+        .query::<&Children>()
+        .iter(world)
+        .flat_map(|children| children.iter().copied().collect::<Vec<_>>())
+        .collect();
+    let sail_color = usize::from(cosmetic_by_code(sail).unwrap().color);
+    let indices: Vec<usize> = children
+        .iter()
+        .filter_map(|child| world.get::<Sprite>(*child))
+        .filter_map(|sprite| sprite.texture_atlas.as_ref().map(|atlas| atlas.index))
+        .collect();
+    assert!(
+        [false, true]
+            .iter()
+            .any(|full| indices.contains(&parts::sail(HullSize::Medium, sail_color, *full))),
+        "vela dourada entre {indices:?}"
+    );
+    let flags: Vec<usize> = children
+        .iter()
+        .filter_map(|child| world.get::<WavingFlag>(*child))
+        .map(|waving| waving.color)
+        .collect();
+    assert_eq!(
+        flags,
+        vec![usize::from(cosmetic_by_code(flag).unwrap().color)]
+    );
 }

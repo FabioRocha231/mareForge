@@ -16,7 +16,7 @@ use std::time::Instant;
 use bevy::ecs::prelude::*;
 use bevy::prelude::*;
 use lightyear::prelude::ClientReceiveMessage;
-use marvyr_domain_ships::ShipKind;
+use marvyr_domain_ships::{cosmetic_by_code, CosmeticSlot, ShipKind};
 use marvyr_protocol::{Faction, ProjectileState, ShipState, WorldSnapshot, TIER_PROCURADO};
 
 use crate::assets::{deco, fort, layers, parts, GameAssets, HullSize};
@@ -61,6 +61,19 @@ pub struct ShipSail {
 
 #[derive(Component)]
 pub struct BowWave;
+
+/// Bandeira do navio: a cor da facção, a menos que o capitão use outra.
+#[derive(Component)]
+pub struct ShipFlag {
+    base: usize,
+}
+
+/// Cor do atlas vinda do cosmético à mostra (MV-066: só aparência).
+fn cosmetic_color(code: u8, slot: CosmeticSlot) -> Option<usize> {
+    cosmetic_by_code(code)
+        .filter(|cosmetic| cosmetic.slot == slot)
+        .map(|cosmetic| usize::from(cosmetic.color))
+}
 
 /// Casco afundando depois do `ShipDestroyed`: aderna, afunda e some.
 #[derive(Component, Default)]
@@ -252,7 +265,12 @@ fn spawn_ship(commands: &mut Commands, assets: &GameAssets, state: &ShipState, m
             ship.spawn((
                 part_sprite(
                     assets,
-                    parts::sail(look.hull, look.sail_color, sail_full(state)),
+                    parts::sail(
+                        look.hull,
+                        cosmetic_color(state.sail_cosmetic, CosmeticSlot::Sail)
+                            .unwrap_or(look.sail_color),
+                        sail_full(state),
+                    ),
                 ),
                 Transform::from_xyz(0.0, *mast_y - 2.0, z + 0.01),
                 ShipSail {
@@ -271,7 +289,9 @@ fn spawn_ship(commands: &mut Commands, assets: &GameAssets, state: &ShipState, m
             ));
         }
         let main_mast = main_mast.unwrap_or(0.0);
-        let flag_color = flag_color(state.faction, mine);
+        let base_flag = flag_color(state.faction, mine);
+        let flag_color =
+            cosmetic_color(state.flag_cosmetic, CosmeticSlot::Flag).unwrap_or(base_flag);
         ship.spawn((
             Sprite::from_atlas_image(
                 assets.fort.clone(),
@@ -285,6 +305,7 @@ fn spawn_ship(commands: &mut Commands, assets: &GameAssets, state: &ShipState, m
                 color: flag_color,
                 phase: state.ship_id as usize,
             },
+            ShipFlag { base: base_flag },
         ));
         // Onda de proa, um sprite por bordo (o outro espelhado).
         for flip in [false, true] {
@@ -367,6 +388,7 @@ pub fn animate_ship_parts(
     mut hulls: Query<(&ShipHull, &mut Sprite), (Without<ShipSail>, Without<BowWave>)>,
     mut sails: Query<(&ShipSail, &mut Sprite), (Without<ShipHull>, Without<BowWave>)>,
     mut waves: Query<&mut Sprite, (With<BowWave>, Without<ShipHull>, Without<ShipSail>)>,
+    mut flags: Query<(&ShipFlag, &mut WavingFlag)>,
 ) {
     let t = time.elapsed_secs();
     for (visual, children) in &ships {
@@ -379,10 +401,13 @@ pub fn animate_ship_parts(
                     parts::hull(hull.size, hull.color, damaged(state)),
                 );
             } else if let Ok((sail, mut sprite)) = sails.get_mut(*child) {
-                set_index(
-                    &mut sprite,
-                    parts::sail(sail.size, sail.color, sail_full(state)),
-                );
+                let color =
+                    cosmetic_color(state.sail_cosmetic, CosmeticSlot::Sail).unwrap_or(sail.color);
+                set_index(&mut sprite, parts::sail(sail.size, color, sail_full(state)));
+            } else if let Ok((flag, mut waving)) = flags.get_mut(*child) {
+                // Troca de visual no porto aparece sem recriar o navio.
+                waving.color =
+                    cosmetic_color(state.flag_cosmetic, CosmeticSlot::Flag).unwrap_or(flag.base);
             } else if let Ok(mut sprite) = waves.get_mut(*child) {
                 let frame = ((t * 7.0) as usize + state.ship_id as usize) % 3;
                 set_index(&mut sprite, parts::BOW_WAVE + frame);
@@ -855,6 +880,8 @@ mod tests {
             crew_max: 0,
             repairing: false,
             dig_progress: 0.0,
+            sail_cosmetic: 0,
+            flag_cosmetic: 0,
         };
         let ship = world
             .spawn((

@@ -64,7 +64,9 @@ use serde::{Deserialize, Serialize};
 /// v17: MV-065 — mundo procedural. `WorldSeed` (registrada no fim) chega
 ///      logo após o `ServerWelcome` aceito; o client monta o mesmo mapa.
 /// v18: MV-066 — zonas, arenas e cosméticos. `PortalsUpdate.arenas` traz a
-///      semente do miolo de cada cerração aberta.
+///      semente do miolo de cada cerração aberta. Cosméticos: `ShipState`
+///      ganha `sail_cosmetic`/`flag_cosmetic`, `CosmeticsSnapshot` e
+///      `WearCosmetic` (registradas no fim).
 pub const PROTOCOL_VERSION: u16 = 18;
 
 /// Rótulo de versão da build (`MARVYR_VERSION_LABEL` no build de release,
@@ -122,6 +124,24 @@ impl ClientHello {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorldSeed {
     pub seed: u64,
+}
+
+/// Cosméticos do capitão (v18, MV-066): o que ele possui e o que está
+/// usando, em códigos do catálogo (`0` = nenhum). Chega no handshake e a
+/// cada troca.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CosmeticsSnapshot {
+    pub owned: Vec<u8>,
+    pub sail: u8,
+    pub flag: u8,
+}
+
+/// Vestir um cosmético (v18): `slot` 0 = vela, 1 = bandeira; `code` 0 tira.
+/// Só atracado e só o que o capitão possui — o servidor decide.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WearCosmetic {
+    pub slot: u8,
+    pub code: u8,
 }
 
 /// Resposta do servidor. Conexão recusada (`accepted == false`) é encerrada
@@ -234,6 +254,12 @@ pub struct ShipState {
     /// v15: progresso da escavação de tesouro (0 = não está cavando).
     #[serde(default)]
     pub dig_progress: f32,
+    /// v18: cosméticos à mostra (código do catálogo `COSMETICS`; 0 = padrão
+    /// do casco). Só aparência — nenhum stat vem daqui.
+    #[serde(default)]
+    pub sail_cosmetic: u8,
+    #[serde(default)]
+    pub flag_cosmetic: u8,
 }
 
 fn full_sails() -> f32 {
@@ -883,6 +909,8 @@ mod tests {
             crew_max: 0,
             repairing: false,
             dig_progress: 0.0,
+            sail_cosmetic: 0,
+            flag_cosmetic: 0,
         };
         let bytes = bincode::serialize(&state).unwrap();
         let decoded = bincode::deserialize::<ShipState>(&bytes).unwrap();
@@ -921,6 +949,8 @@ mod tests {
                 crew_max: 0,
                 repairing: false,
                 dig_progress: 0.0,
+                sail_cosmetic: 0,
+                flag_cosmetic: 0,
             };
             let bytes = bincode::serialize(&state).unwrap();
             let decoded = bincode::deserialize::<ShipState>(&bytes).unwrap();
@@ -1067,6 +1097,8 @@ mod tests {
             crew_max: 0,
             repairing: false,
             dig_progress: 0.0,
+            sail_cosmetic: 0,
+            flag_cosmetic: 0,
         };
         let bytes = bincode::serialize(&full).expect("encode");
         // Trunca 8 bytes (dois f32): simula cliente novo lendo servidor antigo.
@@ -1142,6 +1174,8 @@ mod tests {
                     crew_max: 0,
                     repairing: false,
                     dig_progress: 0.0,
+                    sail_cosmetic: 0,
+                    flag_cosmetic: 0,
                 },
                 ShipState {
                     ship_id: 2,
@@ -1169,6 +1203,8 @@ mod tests {
                     crew_max: 0,
                     repairing: false,
                     dig_progress: 0.0,
+                    sail_cosmetic: 0,
+                    flag_cosmetic: 0,
                 },
             ],
             projectiles: vec![ProjectileState {

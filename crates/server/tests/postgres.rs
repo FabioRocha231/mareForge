@@ -414,3 +414,47 @@ fn wreck_snapshot_roundtrips_through_postgres() {
     assert_eq!(remaining.len(), 1);
     assert_eq!(remaining[0].wreck_num, 1);
 }
+
+#[test]
+fn cosmetics_roundtrip_through_postgres() {
+    let _guard = test_lock();
+    let Some((store, url)) = store_or_skip() else {
+        return;
+    };
+    reset_database(&url);
+
+    // O personagem nasce no save do mercado; a concessão vem da ferramenta
+    // de admin (aqui, o mesmo INSERT que ela faz).
+    let (snapshot, character) = sample_snapshot();
+    store
+        .save_market(&snapshot)
+        .expect("save_market cria o personagem");
+    assert_eq!(
+        store.load_cosmetics(character).expect("load sem concessão"),
+        marvyr_server::persist::CosmeticsRecord::default()
+    );
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime de teste");
+    runtime.block_on(async {
+        let pool = sqlx::PgPool::connect(&url).await.expect("pool");
+        sqlx::query(
+            "INSERT INTO character_cosmetics (character_id, cosmetic_id, granted_by) \
+             VALUES ($1, 'sail-gold', 'teste')",
+        )
+        .bind(character.0)
+        .execute(&pool)
+        .await
+        .expect("concessão");
+        pool.close().await;
+    });
+
+    store
+        .save_cosmetic_choice(character, Some("sail-gold"), None)
+        .expect("save_cosmetic_choice");
+    let record = store.load_cosmetics(character).expect("load_cosmetics");
+    assert_eq!(record.owned, vec![String::from("sail-gold")]);
+    assert_eq!(record.sail.as_deref(), Some("sail-gold"));
+    assert_eq!(record.flag, None);
+}

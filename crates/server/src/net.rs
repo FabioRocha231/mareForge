@@ -618,6 +618,7 @@ impl Plugin for ServerNetPlugin {
         app.register_message::<marvyr_protocol::WeatherUpdate>(ChannelDirection::ServerToClient);
         crate::weather::install(app);
         crate::seafaring::install(app);
+        crate::cosmetics::install(app);
         app.register_message::<marvyr_protocol::ReputationUpdate>(ChannelDirection::ServerToClient);
         app.register_message::<marvyr_protocol::WorldEvent>(ChannelDirection::ServerToClient);
         // v15 (MV-061): combate profundo, tripulação, eventos e tesouro.
@@ -635,6 +636,11 @@ impl Plugin for ServerNetPlugin {
         );
         // v17 (MV-065): SEMPRE no fim, espelhado no client.
         app.register_message::<marvyr_protocol::WorldSeed>(ChannelDirection::ServerToClient);
+        // v18 (MV-066): SEMPRE no fim, espelhado no client.
+        app.register_message::<marvyr_protocol::CosmeticsSnapshot>(
+            ChannelDirection::ServerToClient,
+        );
+        app.register_message::<marvyr_protocol::WearCosmetic>(ChannelDirection::ClientToServer);
         app.add_systems(Startup, start_server);
         app.add_systems(Startup, crate::nodes::spawn_dev_nodes.after(start_server));
         app.add_systems(Startup, crate::npc::setup_npcs.after(start_server));
@@ -2502,6 +2508,19 @@ fn to_ship_state(ship: &ServerShip, catalog: &ItemCatalog) -> ShipState {
         crew_max: marvyr_domain_ships::crew_capacity(ship.kind),
         repairing: ship.sea.repairing,
         dig_progress: ship.sea.dig_progress(),
+        // Preenchidos em `send_snapshots` (`dressed`), do `CaptainCosmetics`.
+        sail_cosmetic: 0,
+        flag_cosmetic: 0,
+    }
+}
+
+/// Veste o `ShipState` com o visual do capitão. Só aparência: nenhum campo
+/// de stat muda (ver `ship_state_populates_battery_cooldowns`).
+fn dressed(state: ShipState, worn: marvyr_domain_ships::ShipCosmetics) -> ShipState {
+    ShipState {
+        sail_cosmetic: worn.sail,
+        flag_cosmetic: worn.flag,
+        ..state
     }
 }
 
@@ -2521,6 +2540,7 @@ fn send_snapshots(
     projectiles: Query<(Entity, &mut ServerProjectile)>,
     wrecks: Query<&ServerWreck>,
     reputation: Res<crate::reputation::Reputation>,
+    cosmetics: Res<crate::cosmetics::CaptainCosmetics>,
 ) {
     if advance_snapshot_clock(&mut clock.accumulator, f64::from(time.delta_secs())) == 0 {
         return;
@@ -2537,9 +2557,14 @@ fn send_snapshots(
         .collect();
     let mut ship_states: Vec<ShipState> = ships
         .iter()
-        .map(|(_, ship)| ShipState {
-            notoriety_tier: reputation.tier(ship.character).wire(),
-            ..to_ship_state(ship, &dev.catalog)
+        .map(|(_, ship)| {
+            dressed(
+                ShipState {
+                    notoriety_tier: reputation.tier(ship.character).wire(),
+                    ..to_ship_state(ship, &dev.catalog)
+                },
+                cosmetics.worn(ship.character),
+            )
         })
         .collect();
     ship_states.extend(
@@ -3292,6 +3317,27 @@ mod tests {
         assert_eq!(state.starboard_cooldown_secs, 0.75);
         assert!(!state.is_npc);
         assert_eq!(state.cargo_capacity, expected_cargo_capacity);
+
+        // MV-066: coisa paga não dá poder — o navio vestido com o catálogo
+        // inteiro é o mesmo navio, stat por stat.
+        let worn = marvyr_domain_ships::ShipCosmetics {
+            sail: marvyr_domain_ships::cosmetic_code("sail-gold").unwrap(),
+            flag: marvyr_domain_ships::cosmetic_code("flag-emerald").unwrap(),
+        };
+        let fancy = dressed(state, worn);
+        assert_eq!(
+            (fancy.sail_cosmetic, fancy.flag_cosmetic),
+            (worn.sail, worn.flag)
+        );
+        assert_eq!(
+            ShipState {
+                sail_cosmetic: 0,
+                flag_cosmetic: 0,
+                ..fancy
+            },
+            state,
+            "cosmético só pode mudar os campos de aparência"
+        );
     }
 
     /// Simulação e snapshot não são a mesma cadência: há ticks de 30 Hz em

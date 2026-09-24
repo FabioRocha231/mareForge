@@ -1239,6 +1239,8 @@ pub(crate) fn to_npc_ship_state(npc: &NpcShip, catalog: &ItemCatalog) -> ShipSta
         crew_max: 0,
         repairing: false,
         dig_progress: 0.0,
+        sail_cosmetic: 0,
+        flag_cosmetic: 0,
     }
 }
 

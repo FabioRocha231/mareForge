@@ -469,6 +469,8 @@ mod tests {
             crew_max: 8,
             repairing: true,
             dig_progress: 0.5,
+            sail_cosmetic: 0,
+            flag_cosmetic: 0,
         }
     }
 

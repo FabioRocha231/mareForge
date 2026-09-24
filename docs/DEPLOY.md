@@ -114,6 +114,27 @@ as sessões: reinicie os dois serviços juntos.
   7 diários. Sem S3, faça `pg_dump` diário por cron para fora da VPS.
 - Teste a restauração ao menos uma vez antes de abrir o alpha.
 
+### Cosméticos (concessão pela administração)
+
+Velas e bandeiras são **só aparência** (nunca stats). Não há loja: a
+administração concede pelo nome de login do capitão, dentro do contêiner do
+servidor. O capitão vê o item no próximo login e escolhe na aba *Equipamento*
+do porto.
+
+```sh
+C=$(docker ps -qf name=marvyr-server)
+docker exec $C marvyr-db-migrate list-cosmetics            # catálogo
+docker exec $C sh -c 'marvyr-db-migrate --database-url "$MARVYR_DATABASE_URL" \
+  grant-cosmetic --captain NOME --cosmetic sail-gold --by admin'
+docker exec $C sh -c 'marvyr-db-migrate --database-url "$MARVYR_DATABASE_URL" \
+  list-cosmetics --captain NOME'
+docker exec $C sh -c 'marvyr-db-migrate --database-url "$MARVYR_DATABASE_URL" \
+  revoke-cosmetic --captain NOME --cosmetic sail-gold'
+```
+
+Em dev sem banco, `MARVYR_DEV_COSMETICS=1` libera o catálogo inteiro (ignorado
+com `MARVYR_ENV=production`).
+
 ## Operação
 
 ### Reinício ordenado
